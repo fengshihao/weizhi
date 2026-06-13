@@ -11,11 +11,19 @@ if(NOT EXISTS ${QUICKJS_DIR}/quickjs.h OR NOT EXISTS ${WAMR_ROOT_DIR}/build-scri
     message(FATAL_ERROR "缺少 third_party，先运行 scripts/fetch-deps.sh")
 endif()
 
-set(WAMR_BUILD_PLATFORM "darwin")
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(WAMR_BUILD_PLATFORM "darwin")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(WAMR_BUILD_PLATFORM "linux")
+else()
+    message(FATAL_ERROR "目前只支持 macOS 与 Linux（含 WSL），当前是 ${CMAKE_SYSTEM_NAME}")
+endif()
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)")
     set(WAMR_BUILD_TARGET "AARCH64")
-else()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)")
     set(WAMR_BUILD_TARGET "X86_64")
+else()
+    message(FATAL_ERROR "不支持的 CPU: ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 set(WAMR_BUILD_INTERP 1)
 set(WAMR_BUILD_FAST_INTERP 1)
@@ -30,7 +38,8 @@ set(WAMR_BUILD_LIB_PTHREAD 0)
 include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
 add_library(vmlib ${WAMR_RUNTIME_LIB_SOURCE})
-target_link_libraries(vmlib PUBLIC m dl pthread)
+find_package(Threads REQUIRED)
+target_link_libraries(vmlib PUBLIC m ${CMAKE_DL_LIBS} Threads::Threads)
 
 add_library(quickjs
     ${QUICKJS_DIR}/quickjs.c
