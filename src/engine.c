@@ -1,32 +1,17 @@
-#include "weizhi.h"
+#include "engine_internal.h"
 
 #include "wasm_export.h"
 
-#include "quickjs.h"
-
 #include <ctype.h>
 #include <limits.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#define ST_IDLE 0
-#define ST_RUNNING 1
-#define ST_CLOSED 2
 #define MAX_WASM_FILE_BYTES (16u * 1024u * 1024u)
 #define MAX_EXPORTS 64
 #define MAX_I32_PARAMS 8
-
-typedef struct WeizhiEngine Engine;
-
-typedef struct HostFn {
-    char *name;
-    WeizhiHostFn fn;
-    void *userdata;
-} HostFn;
 
 typedef struct PackInst {
     Engine *engine;
@@ -35,23 +20,6 @@ typedef struct PackInst {
     wasm_exec_env_t exec;
     uint8_t *bytes;
 } PackInst;
-
-struct WeizhiEngine {
-    JSRuntime *rt;
-    JSContext *ctx;
-    WeizhiLimits limits;
-    HostFn *hosts;
-    int host_count;
-    int pack_count;
-    char *pack_folder;
-    char *run_id;
-    WeizhiLogFn log_fn;
-    void *log_ud;
-    int seq;
-    int64_t deadline_ms;
-    pthread_t owner;
-    atomic_int state;
-};
 
 static JSClassID g_pack_class_id;
 static pthread_once_t g_class_once = PTHREAD_ONCE_INIT;
@@ -62,10 +30,18 @@ static void init_pack_class_id(void) {
     JS_NewClassID(&g_pack_class_id);
 }
 
-static int64_t now_ms(void) {
+int64_t weizhi_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+Engine *weizhi_from_ctx(JSContext *ctx) {
+    return JS_GetContextOpaque(ctx);
+}
+
+static int64_t now_ms(void) {
+    return weizhi_now_ms();
 }
 
 static int wamr_acquire(void) {
@@ -152,6 +128,14 @@ static void emit_log(Engine *engine, const char *event, const char *data_json) {
     }
     free(run_id);
     free(event_q);
+}
+
+char *weizhi_quote_json(const char *text) {
+    return quote_json(text);
+}
+
+void weizhi_emit_log(Engine *engine, const char *event, const char *data_json) {
+    emit_log(engine, event, data_json);
 }
 
 static int interrupt_cb(JSRuntime *rt, void *opaque) {
@@ -664,9 +648,16 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
         size_or_default(limits ? limits->wasm_heap_bytes : 0, WEIZHI_DEFAULT_WASM_HEAP_BYTES);
     engine->limits.wasm_max_linear_bytes =
         size_or_default(limits ? limits->wasm_max_linear_bytes : 0, WEIZHI_DEFAULT_WASM_MAX_LINEAR_BYTES);
+    engine->limits.fs_io_bytes = size_or_default(limits ? limits->fs_io_bytes : 0, WEIZHI_DEFAULT_FS_IO_BYTES);
     atomic_init(&engine->state, ST_IDLE);
+    engine->next_timer_id = 1;
+    engine->next_request_id = 1;
+    pthread_mutex_init(&engine->wake_mu, NULL);
+    pthread_cond_init(&engine->wake_cv, NULL);
     engine->rt = JS_NewRuntime();
     if (engine->rt == NULL) {
+        pthread_mutex_destroy(&engine->wake_mu);
+        pthread_cond_destroy(&engine->wake_cv);
         wamr_release();
         free(engine);
         return NULL;
@@ -677,6 +668,8 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
     engine->ctx = JS_NewContext(engine->rt);
     if (engine->ctx == NULL) {
         JS_FreeRuntime(engine->rt);
+        pthread_mutex_destroy(&engine->wake_mu);
+        pthread_cond_destroy(&engine->wake_cv);
         wamr_release();
         free(engine);
         return NULL;
@@ -688,6 +681,10 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
     JS_NewClass(engine->rt, g_pack_class_id, &class_def);
     install_builtin(engine, "loadPack", js_load_pack);
     install_builtin(engine, "loadScript", js_load_script);
+    if (weizhi_install_node_api(engine) != 0) {
+        weizhi_close(engine);
+        return NULL;
+    }
     return engine;
 }
 
@@ -700,6 +697,8 @@ int weizhi_close(WeizhiEngine *engine) {
     if (!atomic_compare_exchange_strong(&engine->state, &expected, ST_CLOSED)) {
         return -1;
     }
+    weizhi_timers_clear(engine);
+    weizhi_pending_clear(engine);
     JS_FreeContext(engine->ctx);
     JS_FreeRuntime(engine->rt);
     wamr_release();
@@ -708,7 +707,10 @@ int weizhi_close(WeizhiEngine *engine) {
     }
     free(engine->hosts);
     free(engine->pack_folder);
+    free(engine->fs_root);
     free(engine->run_id);
+    pthread_mutex_destroy(&engine->wake_mu);
+    pthread_cond_destroy(&engine->wake_cv);
     free(engine);
     return 0;
 }
@@ -724,7 +726,8 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     if (atomic_load(&engine->state) != ST_IDLE) {
         return -1;
     }
-    if (strcmp(name, "loadPack") == 0 || strcmp(name, "loadScript") == 0) {
+    if (strcmp(name, "loadPack") == 0 || strcmp(name, "loadScript") == 0 || strcmp(name, "require") == 0 ||
+        strcmp(name, "Buffer") == 0 || strcmp(name, "setTimeout") == 0 || strcmp(name, "clearTimeout") == 0) {
         return -1;
     }
     if (engine->host_count >= engine->limits.max_host_functions) {
@@ -837,6 +840,7 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
     JSValue value;
     char *source_q;
     char *data;
+    int eval_flags;
     memset(&result, 0, sizeof(result));
     if (engine == NULL || source == NULL) {
         return fail_immediately("没有可运行的脚本");
@@ -853,6 +857,7 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
         timeout_ms = WEIZHI_DEFAULT_TIMEOUT_MS;
     }
     engine->deadline_ms = timeout_ms > 0 ? started + timeout_ms : 0;
+    weizhi_timers_clear(engine);
     source_q = quote_json(source);
     if (source_q != NULL) {
         data = malloc(strlen(source_q) + 16);
@@ -863,35 +868,66 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
         }
         free(source_q);
     }
-    value = JS_Eval(engine->ctx, source, strlen(source), "<eval>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_DetectModule(source, strlen(source))) {
+        eval_flags = JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY;
+    } else {
+        eval_flags = JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_ASYNC;
+    }
+    value = JS_Eval(engine->ctx, source, strlen(source), "<eval>", eval_flags);
     if (JS_IsException(value)) {
         take_exception(engine, &result);
         result.ok = 0;
     } else {
-        JSValue json = JS_JSONStringify(engine->ctx, value, JS_UNDEFINED, JS_UNDEFINED);
-        JS_FreeValue(engine->ctx, value);
-        if (JS_IsException(json) || JS_IsUndefined(json)) {
-            if (JS_IsException(json)) {
+        if ((eval_flags & JS_EVAL_TYPE_MODULE) != 0) {
+            value = JS_EvalFunction(engine->ctx, value);
+            if (JS_IsException(value)) {
                 take_exception(engine, &result);
-            } else {
-                result.output_text = strdup("");
-                result.ok = 1;
-            }
-        } else {
-            const char *text = JS_ToCString(engine->ctx, json);
-            result.output_text = strdup(text != NULL ? text : "");
-            result.ok = 1;
-            if (text != NULL) {
-                JS_FreeCString(engine->ctx, text);
+                result.ok = 0;
+                goto done;
             }
         }
-        if (!JS_IsUndefined(json)) {
-            JS_FreeValue(engine->ctx, json);
+        value = weizhi_await_value(engine, value);
+        if (JS_IsException(value)) {
+            take_exception(engine, &result);
+            result.ok = 0;
+        } else {
+            /* ASYNC 脚本把完成值包在 { value } 里，避免与 Promise 本身混淆。 */
+            if ((eval_flags & JS_EVAL_FLAG_ASYNC) != 0 && JS_IsObject(value)) {
+                JSValue inner = JS_GetPropertyStr(engine->ctx, value, "value");
+                if (!JS_IsException(inner)) {
+                    JS_FreeValue(engine->ctx, value);
+                    value = inner;
+                }
+            }
+            {
+            JSValue json = JS_JSONStringify(engine->ctx, value, JS_UNDEFINED, JS_UNDEFINED);
+            JS_FreeValue(engine->ctx, value);
+            if (JS_IsException(json) || JS_IsUndefined(json)) {
+                if (JS_IsException(json)) {
+                    take_exception(engine, &result);
+                } else {
+                    result.output_text = strdup("");
+                    result.ok = 1;
+                }
+            } else {
+                const char *text = JS_ToCString(engine->ctx, json);
+                result.output_text = strdup(text != NULL ? text : "");
+                result.ok = 1;
+                if (text != NULL) {
+                    JS_FreeCString(engine->ctx, text);
+                }
+            }
+            if (!JS_IsUndefined(json)) {
+                JS_FreeValue(engine->ctx, json);
+            }
+            }
         }
     }
+done:
     result.duration_ms = (int)(now_ms() - started);
     emit_log(engine, "run_js_end", result.ok ? "{\"ok\":true}" : "{\"ok\":false}");
     engine->deadline_ms = 0;
+    weizhi_timers_clear(engine);
     atomic_store(&engine->state, ST_IDLE);
     return result;
 }
@@ -904,4 +940,287 @@ void weizhi_result_free(WeizhiResult *result) {
     free(result->error);
     free(result->error_location);
     memset(result, 0, sizeof(*result));
+}
+
+void weizhi_bytes_free(WeizhiBytes *bytes) {
+    if (bytes == NULL) {
+        return;
+    }
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->len = 0;
+}
+
+void weizhi_wake(Engine *engine) {
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_timers_clear(Engine *engine) {
+    int i;
+    for (i = 0; i < WEIZHI_MAX_TIMERS; i++) {
+        if (engine->timers[i].active) {
+            JS_FreeValue(engine->ctx, engine->timers[i].callback);
+            engine->timers[i].active = 0;
+            engine->timers[i].callback = JS_UNDEFINED;
+        }
+    }
+}
+
+void weizhi_pending_clear(Engine *engine) {
+    int i;
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        if (engine->pending[i].in_use) {
+            JS_FreeValue(engine->ctx, engine->pending[i].resolve);
+            JS_FreeValue(engine->ctx, engine->pending[i].reject);
+            weizhi_bytes_free(&engine->pending[i].out);
+            free(engine->pending[i].error);
+            memset(&engine->pending[i], 0, sizeof(engine->pending[i]));
+        }
+    }
+}
+
+int weizhi_fire_due_timers(Engine *engine) {
+    int i;
+    int fired = 0;
+    int64_t now = now_ms();
+    for (i = 0; i < WEIZHI_MAX_TIMERS; i++) {
+        WeizhiTimer *timer = &engine->timers[i];
+        JSValue ret;
+        if (!timer->active || timer->when_ms > now) {
+            continue;
+        }
+        timer->active = 0;
+        ret = JS_Call(engine->ctx, timer->callback, JS_UNDEFINED, 0, NULL);
+        JS_FreeValue(engine->ctx, timer->callback);
+        timer->callback = JS_UNDEFINED;
+        fired++;
+        if (JS_IsException(ret)) {
+            return -1;
+        }
+        JS_FreeValue(engine->ctx, ret);
+    }
+    return fired;
+}
+
+int weizhi_apply_completions(Engine *engine) {
+    int i;
+    int applied = 0;
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        JSValue arg;
+        JSValue ret;
+        if (!p->in_use || !p->completed) {
+            continue;
+        }
+        pthread_mutex_unlock(&engine->wake_mu);
+        if (p->ok) {
+            if (p->out.data != NULL) {
+                arg = weizhi_bytes_to_buffer(engine->ctx, p->out.data, p->out.len);
+            } else {
+                arg = JS_UNDEFINED;
+            }
+            ret = JS_Call(engine->ctx, p->resolve, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(engine->ctx, arg);
+        } else {
+            arg = JS_NewString(engine->ctx, p->error != NULL ? p->error : "异步操作失败");
+            ret = JS_Call(engine->ctx, p->reject, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(engine->ctx, arg);
+        }
+        JS_FreeValue(engine->ctx, p->resolve);
+        JS_FreeValue(engine->ctx, p->reject);
+        weizhi_bytes_free(&p->out);
+        free(p->error);
+        memset(p, 0, sizeof(*p));
+        applied++;
+        if (JS_IsException(ret)) {
+            return -1;
+        }
+        JS_FreeValue(engine->ctx, ret);
+        pthread_mutex_lock(&engine->wake_mu);
+    }
+    pthread_mutex_unlock(&engine->wake_mu);
+    return applied;
+}
+
+int64_t weizhi_pending_add(Engine *engine, JSValue resolve, JSValue reject) {
+    int i;
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        if (!engine->pending[i].in_use) {
+            engine->pending[i].in_use = 1;
+            engine->pending[i].completed = 0;
+            engine->pending[i].id = engine->next_request_id++;
+            engine->pending[i].resolve = resolve;
+            engine->pending[i].reject = reject;
+            return engine->pending[i].id;
+        }
+    }
+    JS_FreeValue(engine->ctx, resolve);
+    JS_FreeValue(engine->ctx, reject);
+    return -1;
+}
+
+JSValue weizhi_await_value(Engine *engine, JSValue value) {
+    for (;;) {
+        JSPromiseStateEnum state = JS_PromiseState(engine->ctx, value);
+        int err;
+        int fired;
+        int applied;
+        struct timespec ts;
+        int64_t wait_ms;
+        if ((int)state < 0) {
+            return value;
+        }
+        if (state == JS_PROMISE_FULFILLED) {
+            JSValue result = JS_PromiseResult(engine->ctx, value);
+            JS_FreeValue(engine->ctx, value);
+            return result;
+        }
+        if (state == JS_PROMISE_REJECTED) {
+            JSValue result = JS_PromiseResult(engine->ctx, value);
+            JS_FreeValue(engine->ctx, value);
+            return JS_Throw(engine->ctx, result);
+        }
+        if (engine->deadline_ms != 0 && now_ms() >= engine->deadline_ms) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_ThrowInternalError(engine->ctx, "interrupted");
+        }
+        for (;;) {
+            err = JS_ExecutePendingJob(engine->rt, NULL);
+            if (err < 0) {
+                JS_FreeValue(engine->ctx, value);
+                return JS_EXCEPTION;
+            }
+            if (err == 0) {
+                break;
+            }
+        }
+        fired = weizhi_fire_due_timers(engine);
+        if (fired < 0) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_EXCEPTION;
+        }
+        applied = weizhi_apply_completions(engine);
+        if (applied < 0) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_EXCEPTION;
+        }
+        if (fired > 0 || applied > 0 || JS_IsJobPending(engine->rt)) {
+            continue;
+        }
+        wait_ms = 5;
+        if (engine->deadline_ms != 0) {
+            int64_t left = engine->deadline_ms - now_ms();
+            if (left <= 0) {
+                JS_FreeValue(engine->ctx, value);
+                return JS_ThrowInternalError(engine->ctx, "interrupted");
+            }
+            if (left < wait_ms) {
+                wait_ms = left;
+            }
+        }
+        {
+            int i;
+            int64_t now = now_ms();
+            for (i = 0; i < WEIZHI_MAX_TIMERS; i++) {
+                if (engine->timers[i].active) {
+                    int64_t left = engine->timers[i].when_ms - now;
+                    if (left < wait_ms) {
+                        wait_ms = left < 0 ? 0 : left;
+                    }
+                }
+            }
+        }
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += (long)(wait_ms % 1000) * 1000000L;
+        ts.tv_sec += (time_t)(wait_ms / 1000);
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+        pthread_mutex_lock(&engine->wake_mu);
+        pthread_cond_timedwait(&engine->wake_cv, &engine->wake_mu, &ts);
+        pthread_mutex_unlock(&engine->wake_mu);
+    }
+}
+
+void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error) {
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (!p->in_use || p->id != request_id || p->completed) {
+            continue;
+        }
+        p->completed = 1;
+        p->ok = ok;
+        if (ok && out != NULL && out->data != NULL && out->len > 0) {
+            p->out.data = malloc(out->len);
+            if (p->out.data != NULL) {
+                memcpy(p->out.data, out->data, out->len);
+                p->out.len = out->len;
+            } else {
+                p->ok = 0;
+                p->error = strdup("内存不足");
+            }
+        } else if (!ok) {
+            p->error = strdup(error != NULL ? error : "异步操作失败");
+        }
+        break;
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder) {
+    char *copy;
+    if (engine == NULL || folder == NULL || folder[0] == '\0') {
+        return -1;
+    }
+    if (atomic_load(&engine->state) != ST_IDLE) {
+        return -1;
+    }
+    copy = strdup(folder);
+    if (copy == NULL) {
+        return -1;
+    }
+    free(engine->fs_root);
+    engine->fs_root = copy;
+    return 0;
+}
+
+void weizhi_set_vfs(WeizhiEngine *engine, WeizhiVfsSyncFn sync_fn, WeizhiVfsAsyncFn async_fn, void *userdata) {
+    if (engine == NULL) {
+        return;
+    }
+    engine->vfs_sync = sync_fn;
+    engine->vfs_async = async_fn;
+    engine->vfs_ud = userdata;
+}
+
+int weizhi_path_ok(const char *relpath) {
+    size_t i;
+    if (relpath == NULL || relpath[0] == '\0') {
+        return 0;
+    }
+    if (relpath[0] == '/' || relpath[0] == '\\') {
+        return 0;
+    }
+    if (strstr(relpath, "..") != NULL) {
+        return 0;
+    }
+    for (i = 0; relpath[i] != '\0'; i++) {
+        if (relpath[i] == '\\') {
+            return 0;
+        }
+    }
+    return 1;
 }

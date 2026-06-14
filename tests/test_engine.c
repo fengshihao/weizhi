@@ -442,6 +442,90 @@ static void test_load_script(void) {
     free(dir);
 }
 
+static void test_promise_await(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result = weizhi_run_js(engine, "await Promise.resolve(42)", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "await (async () => 1 + 2)()", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "3") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "await new Promise(r => setTimeout(() => r(7), 20))", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "7") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "await new Promise(() => {})", 100);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "时间") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+static void test_buffer_path_require(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result = weizhi_run_js(engine, "Buffer.from('hi').toString()", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"hi\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "path.join('a','b')", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"a/b\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "require('fs').existsSync", 1000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "require('child_process')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "不支持") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+static void test_fs_sync_and_promises(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    result = weizhi_run_js(engine, "fs.writeFileSync('a.txt','hello'); fs.readFileSync('a.txt').toString()", 2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"hello\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.writeFileSync('../x.txt','no')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && (strstr(result.error, "路径") != NULL || strstr(result.error, "越界") != NULL));
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                           "await fs.promises.writeFile('b.txt','world'); "
+                           "(await fs.promises.readFile('b.txt')).toString()",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"world\"") == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
+static void test_import_fs(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    result = weizhi_run_js(engine,
+                           "import fs from 'fs';\n"
+                           "fs.writeFileSync('i.txt','ok');\n",
+                           2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.readFileSync('i.txt').toString()", 1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"ok\"") == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
@@ -459,6 +543,10 @@ int main(void) {
     test_missing_and_illegal_pack();
     test_pack_memory_and_count();
     test_load_script();
+    test_promise_await();
+    test_buffer_path_require();
+    test_fs_sync_and_promises();
+    test_import_fs();
     if (g_failed != 0) {
         fprintf(stderr, "%d 个断言失败\n", g_failed);
         return 1;

@@ -77,9 +77,9 @@ add_library(quickjs
 target_include_directories(quickjs PUBLIC ${QUICKJS_DIR})
 target_compile_definitions(quickjs PUBLIC CONFIG_VERSION="2026-06-04")
 
-add_library(weizhi src/engine.c)
+add_library(weizhi src/engine.c src/node_api.c)
 target_include_directories(weizhi PUBLIC include)
-target_include_directories(weizhi PRIVATE ${WAMR_ROOT_DIR}/core/iwasm/include)
+target_include_directories(weizhi PRIVATE include src ${WAMR_ROOT_DIR}/core/iwasm/include)
 target_link_libraries(weizhi PUBLIC quickjs vmlib)
 target_compile_options(weizhi PRIVATE -Wall -Wextra)
 
