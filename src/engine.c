@@ -192,18 +192,18 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     long size;
     uint8_t *buf;
     if (file == NULL) {
-        *error = "找不到能力包";
+        *error = "pack not found";
         return NULL;
     }
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
-        *error = "找不到能力包";
+        *error = "pack not found";
         return NULL;
     }
     size = ftell(file);
     if (size < 0 || (size_t)size > MAX_WASM_FILE_BYTES) {
         fclose(file);
-        *error = "能力包文件太大";
+        *error = "pack file too large";
         return NULL;
     }
     rewind(file);
@@ -211,7 +211,7 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     if (buf == NULL || (size > 0 && fread(buf, 1, (size_t)size, file) != (size_t)size)) {
         free(buf);
         fclose(file);
-        *error = "找不到能力包";
+        *error = "pack not found";
         return NULL;
     }
     fclose(file);
@@ -239,7 +239,7 @@ static int wasm_linear_bytes(const uint8_t *buf, size_t len, uint64_t *bytes, co
     size_t offset = 8;
     *bytes = 0;
     if (len < 8 || memcmp(buf, "\0asm", 4) != 0) {
-        *error = "能力包不是合法的 wasm";
+        *error = "pack is not valid wasm";
         return -1;
     }
     while (offset < len) {
@@ -247,19 +247,19 @@ static int wasm_linear_bytes(const uint8_t *buf, size_t len, uint64_t *bytes, co
         uint32_t size = 0;
         size_t content;
         if (read_leb(buf, len, &offset, &id) != 0 || read_leb(buf, len, &offset, &size) != 0) {
-            *error = "能力包不是合法的 wasm";
+            *error = "pack is not valid wasm";
             return -1;
         }
         content = offset;
         if ((size_t)size > len - offset) {
-            *error = "能力包不是合法的 wasm";
+            *error = "pack is not valid wasm";
             return -1;
         }
         if (id == 5) {
             uint32_t count = 0;
             uint32_t i;
             if (read_leb(buf, len, &offset, &count) != 0) {
-                *error = "能力包不是合法的 wasm";
+                *error = "pack is not valid wasm";
                 return -1;
             }
             for (i = 0; i < count; i++) {
@@ -267,13 +267,13 @@ static int wasm_linear_bytes(const uint8_t *buf, size_t len, uint64_t *bytes, co
                 uint32_t min_pages = 0;
                 if (read_leb(buf, len, &offset, &flags) != 0 ||
                     read_leb(buf, len, &offset, &min_pages) != 0) {
-                    *error = "能力包不是合法的 wasm";
+                    *error = "pack is not valid wasm";
                     return -1;
                 }
                 if ((flags & 1u) != 0) {
                     uint32_t max_pages = 0;
                     if (read_leb(buf, len, &offset, &max_pages) != 0) {
-                        *error = "能力包不是合法的 wasm";
+                        *error = "pack is not valid wasm";
                         return -1;
                     }
                 }
@@ -322,21 +322,21 @@ static JSValue js_call_export(JSContext *ctx, JSValueConst this_val, int argc, J
     char error_buf[128];
     (void)this_val;
     if (pack == NULL || pack->inst == NULL) {
-        return JS_ThrowInternalError(ctx, "能力包已经释放");
+        return JS_ThrowInternalError(ctx, "pack already released");
     }
     memset(&exp, 0, sizeof(exp));
     wasm_runtime_get_export_type(pack->module, magic, &exp);
     if (exp.kind != WASM_IMPORT_EXPORT_KIND_FUNC || exp.name == NULL) {
-        return JS_ThrowTypeError(ctx, "这个导出不是函数");
+        return JS_ThrowTypeError(ctx, "this export is not a function");
     }
     func = wasm_runtime_lookup_function(pack->inst, exp.name);
     if (func == NULL) {
-        return JS_ThrowReferenceError(ctx, "找不到导出函数");
+        return JS_ThrowReferenceError(ctx, "export function not found");
     }
     param_count = wasm_func_get_param_count(func, pack->inst);
     result_count = wasm_func_get_result_count(func, pack->inst);
     if (param_count > MAX_I32_PARAMS || result_count > 1) {
-        return JS_ThrowTypeError(ctx, "这个函数的参数类型目前只支持少量整数");
+        return JS_ThrowTypeError(ctx, "this function only supports a few integer arguments");
     }
     if (param_count > 0) {
         wasm_func_get_param_types(func, pack->inst, param_kinds);
@@ -344,22 +344,22 @@ static JSValue js_call_export(JSContext *ctx, JSValueConst this_val, int argc, J
     if (result_count == 1) {
         wasm_func_get_result_types(func, pack->inst, result_kinds);
         if (result_kinds[0] != WASM_I32) {
-            return JS_ThrowTypeError(ctx, "这个函数的参数类型目前只支持整数");
+            return JS_ThrowTypeError(ctx, "this function only supports integer arguments");
         }
     }
     if ((uint32_t)argc < param_count) {
-        return JS_ThrowTypeError(ctx, "参数个数不够");
+        return JS_ThrowTypeError(ctx, "not enough arguments");
     }
     for (i = 0; i < param_count; i++) {
         int32_t value = 0;
         if (param_kinds[i] != WASM_I32 || JS_ToInt32(ctx, &value, argv[i]) != 0) {
-            return JS_ThrowTypeError(ctx, "这个函数的参数类型目前只支持整数");
+            return JS_ThrowTypeError(ctx, "this function only supports integer arguments");
         }
         cells[i] = (uint32_t)value;
     }
     if (!wasm_runtime_call_wasm(pack->exec, func, param_count, cells)) {
         const char *exception = wasm_runtime_get_exception(pack->inst);
-        snprintf(error_buf, sizeof(error_buf), "能力包执行失败%s%s",
+        snprintf(error_buf, sizeof(error_buf), "pack execution failed%s%s",
                  exception != NULL ? "：" : "", exception != NULL ? exception : "");
         wasm_runtime_clear_exception(pack->inst);
         return JS_ThrowInternalError(ctx, "%s", error_buf);
@@ -390,7 +390,7 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
     int32_t index;
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "能力包名字不合法");
+        return JS_ThrowTypeError(ctx, "invalid pack name");
     }
     name = JS_ToCString(ctx, argv[0]);
     if (name == NULL) {
@@ -398,25 +398,25 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     if (!valid_leaf_name(name)) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowTypeError(ctx, "能力包名字不合法");
+        return JS_ThrowTypeError(ctx, "invalid pack name");
     }
     if (engine->pack_folder == NULL) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "还没有设置能力包文件夹");
+        return JS_ThrowReferenceError(ctx, "pack folder not set");
     }
     if (engine->pack_count >= engine->limits.max_packs) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowRangeError(ctx, "同时装入的能力包太多");
+        return JS_ThrowRangeError(ctx, "too many packs loaded");
     }
     snprintf(wasm_file, sizeof(wasm_file), "%s.wasm", name);
     snprintf(aot_file, sizeof(aot_file), "%s.aot", name);
     if (resolve_under(engine->pack_folder, wasm_file, path, sizeof(path)) != 0) {
         if (resolve_under(engine->pack_folder, aot_file, path, sizeof(path)) == 0) {
             JS_FreeCString(ctx, name);
-            return JS_ThrowTypeError(ctx, "当前构建不能执行 aot 包");
+            return JS_ThrowTypeError(ctx, "this build cannot run aot packs");
         }
         JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "找不到能力包");
+        return JS_ThrowReferenceError(ctx, "pack not found");
     }
     bytes = read_file(path, &length, &error);
     if (bytes == NULL) {
@@ -431,14 +431,14 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (linear > engine->limits.wasm_max_linear_bytes) {
         free(bytes);
         JS_FreeCString(ctx, name);
-        return JS_ThrowRangeError(ctx, "能力包需要的内存超过了上限");
+        return JS_ThrowRangeError(ctx, "pack memory exceeds the limit");
     }
     wasm_error[0] = '\0';
     module = wasm_runtime_load(bytes, (uint32_t)length, wasm_error, sizeof(wasm_error));
     if (module == NULL) {
         free(bytes);
         JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "能力包无法装载：%s", wasm_error);
+        return JS_ThrowInternalError(ctx, "failed to load pack: %s", wasm_error);
     }
     inst = wasm_runtime_instantiate(module, (uint32_t)engine->limits.wasm_stack_bytes,
                                     (uint32_t)engine->limits.wasm_heap_bytes, wasm_error,
@@ -447,7 +447,7 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
         wasm_runtime_unload(module);
         free(bytes);
         JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "能力包无法启动：%s", wasm_error);
+        return JS_ThrowInternalError(ctx, "failed to start pack: %s", wasm_error);
     }
     exec = wasm_runtime_create_exec_env(inst, (uint32_t)engine->limits.wasm_stack_bytes);
     if (exec == NULL) {
@@ -455,7 +455,7 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
         wasm_runtime_unload(module);
         free(bytes);
         JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "能力包无法启动");
+        return JS_ThrowInternalError(ctx, "failed to start pack");
     }
     pack = calloc(1, sizeof(*pack));
     if (pack == NULL) {
@@ -520,7 +520,7 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
     JSValue value;
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "脚本名字不合法");
+        return JS_ThrowTypeError(ctx, "invalid script name");
     }
     name = JS_ToCString(ctx, argv[0]);
     if (name == NULL) {
@@ -528,20 +528,20 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     if (!valid_leaf_name(name) || strlen(name) < 4 || strcmp(name + strlen(name) - 3, ".js") != 0) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowTypeError(ctx, "脚本名字不合法");
+        return JS_ThrowTypeError(ctx, "invalid script name");
     }
     if (engine->pack_folder == NULL) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "还没有设置能力包文件夹");
+        return JS_ThrowReferenceError(ctx, "pack folder not set");
     }
     if (resolve_under(engine->pack_folder, name, path, sizeof(path)) != 0) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "找不到脚本");
+        return JS_ThrowReferenceError(ctx, "script not found");
     }
     bytes = read_file(path, &length, &error);
     if (bytes == NULL) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "%s", error != NULL ? error : "找不到脚本");
+        return JS_ThrowInternalError(ctx, "%s", error != NULL ? error : "script not found");
     }
     value = JS_Eval(ctx, (const char *)bytes, length, name, JS_EVAL_TYPE_GLOBAL);
     free(bytes);
@@ -568,7 +568,7 @@ static JSValue js_host_call(JSContext *ctx, JSValueConst this_val, int argc, JSV
     JSValue parsed;
     (void)this_val;
     if (magic < 0 || magic >= engine->host_count) {
-        return JS_ThrowReferenceError(ctx, "找不到这个功能");
+        return JS_ThrowReferenceError(ctx, "function not found");
     }
     host = &engine->hosts[magic];
     arg = argc > 0 ? argv[0] : JS_NULL;
@@ -797,15 +797,15 @@ static void take_exception(Engine *engine, WeizhiResult *result) {
         stack_text = JS_ToCString(engine->ctx, stack);
     }
     if (message != NULL && strstr(message, "interrupted") != NULL) {
-        result->error = strdup("脚本运行超过了时间限制");
+        result->error = strdup("script exceeded the timeout limit");
     } else if (message != NULL && strstr(message, "out of memory") != NULL) {
-        result->error = strdup("脚本使用的内存超过了上限");
+        result->error = strdup("script exceeded the memory limit");
     } else if (message != NULL && strstr(message, "stack") != NULL) {
-        result->error = strdup("脚本调用太深，超过了栈上限");
+        result->error = strdup("script call stack exceeded the limit");
     } else if (message != NULL) {
         result->error = strdup(message);
     } else {
-        result->error = strdup("脚本运行失败");
+        result->error = strdup("script failed");
     }
     if (stack_text != NULL) {
         result->error_location = strdup(stack_text);
@@ -843,13 +843,13 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
     int eval_flags;
     memset(&result, 0, sizeof(result));
     if (engine == NULL || source == NULL) {
-        return fail_immediately("没有可运行的脚本");
+        return fail_immediately("no script to run");
     }
     if (!atomic_compare_exchange_strong(&engine->state, &expected, ST_RUNNING)) {
         if (expected == ST_RUNNING && pthread_equal(engine->owner, pthread_self())) {
-            return fail_immediately("不能在脚本里面再次运行脚本");
+            return fail_immediately("cannot run a script again from inside a script");
         }
-        return fail_immediately("发动机正忙");
+        return fail_immediately("engine is busy");
     }
     engine->owner = pthread_self();
     started = now_ms();
@@ -891,7 +891,7 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
             take_exception(engine, &result);
             result.ok = 0;
         } else {
-            /* ASYNC 脚本把完成值包在 { value } 里，避免与 Promise 本身混淆。 */
+            /* ASYNC scripts wrap the settled value in { value } to avoid confusing it with the Promise itself. */
             if ((eval_flags & JS_EVAL_FLAG_ASYNC) != 0 && JS_IsObject(value)) {
                 JSValue inner = JS_GetPropertyStr(engine->ctx, value, "value");
                 if (!JS_IsException(inner)) {
@@ -1028,7 +1028,7 @@ int weizhi_apply_completions(Engine *engine) {
             ret = JS_Call(engine->ctx, p->resolve, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(engine->ctx, arg);
         } else {
-            arg = JS_NewString(engine->ctx, p->error != NULL ? p->error : "异步操作失败");
+            arg = JS_NewString(engine->ctx, p->error != NULL ? p->error : "async operation failed");
             ret = JS_Call(engine->ctx, p->reject, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(engine->ctx, arg);
         }
@@ -1169,10 +1169,10 @@ void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const Wei
                 p->out.len = out->len;
             } else {
                 p->ok = 0;
-                p->error = strdup("内存不足");
+                p->error = strdup("out of memory");
             }
         } else if (!ok) {
-            p->error = strdup(error != NULL ? error : "异步操作失败");
+            p->error = strdup(error != NULL ? error : "async operation failed");
         }
         break;
     }
@@ -1201,9 +1201,18 @@ void weizhi_set_vfs(WeizhiEngine *engine, WeizhiVfsSyncFn sync_fn, WeizhiVfsAsyn
     if (engine == NULL) {
         return;
     }
-    engine->vfs_sync = sync_fn;
-    engine->vfs_async = async_fn;
-    engine->vfs_ud = userdata;
+    if (sync_fn != NULL) {
+        engine->vfs_sync = sync_fn;
+        if (userdata != NULL) {
+            engine->vfs_ud = userdata;
+        }
+    }
+    if (async_fn != NULL) {
+        engine->vfs_async = async_fn;
+        if (userdata != NULL) {
+            engine->vfs_async_ud = userdata;
+        }
+    }
 }
 
 int weizhi_path_ok(const char *relpath) {

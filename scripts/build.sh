@@ -7,4 +7,4 @@ cd "$root/build"
 cmake ..
 jobs=$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 make -j"$jobs"
-echo "产物: $root/build/libweizhi.a  $root/build/weizhi_tests"
+echo "artifacts: $root/build/libweizhi.a  $root/build/weizhi_tests"

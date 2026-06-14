@@ -54,6 +54,7 @@ struct WeizhiEngine {
     WeizhiVfsSyncFn vfs_sync;
     WeizhiVfsAsyncFn vfs_async;
     void *vfs_ud;
+    void *vfs_async_ud;
     int seq;
     int64_t deadline_ms;
     pthread_t owner;
@@ -83,5 +84,8 @@ JSValue weizhi_await_value(Engine *engine, JSValue value);
 int64_t weizhi_pending_add(Engine *engine, JSValue resolve, JSValue reject);
 int weizhi_path_ok(const char *relpath);
 JSValue weizhi_bytes_to_buffer(JSContext *ctx, const unsigned char *bytes, size_t len);
+JSValue weizhi_throw_unsupported(JSContext *ctx, const char *what);
+JSValue weizhi_throw_bad_arg(JSContext *ctx, const char *api, const char *detail);
+JSValue weizhi_guard_module(JSContext *ctx, JSValue obj, const char *ns);
 
 #endif

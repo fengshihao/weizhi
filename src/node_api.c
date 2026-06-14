@@ -22,6 +22,55 @@ typedef struct AsyncJob {
     WeizhiBytes in;
 } AsyncJob;
 
+JSValue weizhi_throw_unsupported(JSContext *ctx, const char *what) {
+    return JS_ThrowReferenceError(ctx, "unsupported: %s", what ? what : "?");
+}
+
+JSValue weizhi_throw_bad_arg(JSContext *ctx, const char *api, const char *detail) {
+    return JS_ThrowTypeError(ctx, "bad argument: %s: %s", api ? api : "?", detail ? detail : "");
+}
+
+/* Throw "unsupported: ns.xxx" on missing members so agents do not only see undefined is not a function. */
+JSValue weizhi_guard_module(JSContext *ctx, JSValue obj, const char *ns) {
+    JSValue global;
+    JSValue ns_val;
+    JSValue wrapper;
+    JSValue result;
+    const char *code =
+        "(function(o, ns){\n"
+        "  return new Proxy(o, {\n"
+        "    get(t, p, r) {\n"
+        "      if (typeof p === 'symbol') return Reflect.get(t, p, r);\n"
+        "      if (Object.prototype.hasOwnProperty.call(t, p)) {\n"
+        "        var v = t[p];\n"
+        "        return typeof v === 'function' ? v.bind(t) : v;\n"
+        "      }\n"
+        "      throw new ReferenceError('unsupported: ' + ns + '.' + String(p));\n"
+        "    }\n"
+        "  });\n"
+        "})(__wz_guard_obj, __wz_guard_ns)";
+
+    global = JS_GetGlobalObject(ctx);
+    ns_val = JS_NewString(ctx, ns != NULL ? ns : "?");
+    JS_SetPropertyStr(ctx, global, "__wz_guard_obj", obj);
+    JS_SetPropertyStr(ctx, global, "__wz_guard_ns", ns_val);
+    wrapper = JS_Eval(ctx, code, strlen(code), "<guard>", JS_EVAL_TYPE_GLOBAL);
+    {
+        JSAtom a1 = JS_NewAtom(ctx, "__wz_guard_obj");
+        JSAtom a2 = JS_NewAtom(ctx, "__wz_guard_ns");
+        JS_DeleteProperty(ctx, global, a1, 0);
+        JS_DeleteProperty(ctx, global, a2, 0);
+        JS_FreeAtom(ctx, a1);
+        JS_FreeAtom(ctx, a2);
+    }
+    JS_FreeValue(ctx, global);
+    if (JS_IsException(wrapper)) {
+        return wrapper;
+    }
+    result = wrapper;
+    return result;
+}
+
 static void buffer_finalizer(JSRuntime *rt, JSValue val) {
     Engine *engine = JS_GetRuntimeOpaque(rt);
     BufferData *data;
@@ -40,7 +89,7 @@ static JSValue buffer_to_string(JSContext *ctx, JSValueConst this_val, int argc,
     BufferData *data = JS_GetOpaque(this_val, engine->buffer_class_id);
     const char *enc = "utf8";
     if (data == NULL) {
-        return JS_ThrowTypeError(ctx, "不是 Buffer");
+        return weizhi_throw_bad_arg(ctx, "Buffer#toString", "not a Buffer");
     }
     if (argc >= 1 && JS_IsString(argv[0])) {
         enc = JS_ToCString(ctx, argv[0]);
@@ -82,7 +131,7 @@ static JSValue buffer_to_string(JSContext *ctx, JSValueConst this_val, int argc,
     if (argc >= 1 && JS_IsString(argv[0])) {
         JS_FreeCString(ctx, enc);
     }
-    return JS_ThrowReferenceError(ctx, "不支持的编码");
+    return weizhi_throw_unsupported(ctx, "Buffer encoding (utf8/hex only)");
 }
 
 static JSValue make_buffer(JSContext *ctx, const uint8_t *bytes, size_t len) {
@@ -130,7 +179,7 @@ static JSValue js_buffer_from(JSContext *ctx, JSValueConst this_val, int argc, J
     const char *text;
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "Buffer.from 需要参数");
+        return weizhi_throw_bad_arg(ctx, "Buffer.from", "argument required");
     }
     if (JS_IsString(argv[0])) {
         text = JS_ToCStringLen(ctx, &len, argv[0]);
@@ -143,7 +192,7 @@ static JSValue js_buffer_from(JSContext *ctx, JSValueConst this_val, int argc, J
             return buf;
         }
     }
-    return JS_ThrowTypeError(ctx, "Buffer.from 目前只支持字符串");
+    return weizhi_throw_bad_arg(ctx, "Buffer.from", "only strings are supported");
 }
 
 static JSValue js_buffer_alloc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -152,7 +201,7 @@ static JSValue js_buffer_alloc(JSContext *ctx, JSValueConst this_val, int argc, 
     JSValue buf;
     (void)this_val;
     if (argc < 1 || JS_ToInt32(ctx, &size, argv[0]) || size < 0) {
-        return JS_ThrowRangeError(ctx, "Buffer.alloc 大小无效");
+        return weizhi_throw_bad_arg(ctx, "Buffer.alloc", "invalid size");
     }
     bytes = calloc((size_t)size, 1);
     if (bytes == NULL && size > 0) {
@@ -199,14 +248,14 @@ static JSValue js_path_join(JSContext *ctx, JSValueConst this_val, int argc, JSV
         if (used > 0 && out[used - 1] != '/') {
             if (used + 1 >= sizeof(out)) {
                 JS_FreeCString(ctx, part);
-                return JS_ThrowRangeError(ctx, "路径太长");
+                return JS_ThrowRangeError(ctx, "path too long");
             }
             out[used++] = '/';
             out[used] = '\0';
         }
         if (used + len >= sizeof(out)) {
             JS_FreeCString(ctx, part);
-            return JS_ThrowRangeError(ctx, "路径太长");
+            return JS_ThrowRangeError(ctx, "path too long");
         }
         memcpy(out + used, part, len + 1);
         used += len;
@@ -286,13 +335,18 @@ static JSValue js_path_extname(JSContext *ctx, JSValueConst this_val, int argc, 
 
 static JSValue make_path_module(JSContext *ctx) {
     JSValue mod = JS_NewObject(ctx);
+    JSValue guarded;
     JS_SetPropertyStr(ctx, mod, "join", JS_NewCFunction(ctx, js_path_join, "join", 2));
     JS_SetPropertyStr(ctx, mod, "basename", JS_NewCFunction(ctx, js_path_basename, "basename", 1));
     JS_SetPropertyStr(ctx, mod, "dirname", JS_NewCFunction(ctx, js_path_dirname, "dirname", 1));
     JS_SetPropertyStr(ctx, mod, "extname", JS_NewCFunction(ctx, js_path_extname, "extname", 1));
     JS_SetPropertyStr(ctx, mod, "sep", JS_NewString(ctx, "/"));
-    JS_SetPropertyStr(ctx, mod, "default", JS_DupValue(ctx, mod));
-    return mod;
+    guarded = weizhi_guard_module(ctx, mod, "path");
+    if (JS_IsException(guarded)) {
+        return guarded;
+    }
+    JS_SetPropertyStr(ctx, guarded, "default", JS_DupValue(ctx, guarded));
+    return guarded;
 }
 
 static JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -301,7 +355,7 @@ static JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, J
     int i;
     (void)this_val;
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
-        return JS_ThrowTypeError(ctx, "setTimeout 需要函数");
+        return weizhi_throw_bad_arg(ctx, "setTimeout", "first argument must be a function");
     }
     if (argc >= 2) {
         JS_ToInt32(ctx, &delay, argv[1]);
@@ -319,7 +373,7 @@ static JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, J
             return JS_NewInt32(ctx, engine->timers[i].id);
         }
     }
-    return JS_ThrowRangeError(ctx, "定时器太多");
+    return JS_ThrowRangeError(ctx, "too many timers");
 }
 
 static JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -347,37 +401,37 @@ static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_
     char file_real[PATH_MAX];
     size_t folder_len;
     if (engine->fs_root == NULL) {
-        *error = "没有设置工作区";
+        *error = "workspace not set";
         return -1;
     }
     if (!weizhi_path_ok(relpath)) {
-        *error = "路径不合法";
+        *error = "invalid path";
         return -1;
     }
     if (realpath(engine->fs_root, folder_real) == NULL) {
-        *error = "找不到工作区";
+        *error = "workspace not found";
         return -1;
     }
     snprintf(joined, sizeof(joined), "%s/%s", folder_real, relpath);
     if (realpath(joined, file_real) == NULL) {
-        /* 写新文件时父目录必须存在 */
+        /* Parent directory must exist when creating a new file */
         char parent[PATH_MAX];
         char *slash;
         snprintf(parent, sizeof(parent), "%s", joined);
         slash = strrchr(parent, '/');
         if (slash == NULL) {
-            *error = "路径不合法";
+            *error = "invalid path";
             return -1;
         }
         *slash = '\0';
         if (realpath(parent, file_real) == NULL) {
-            *error = "找不到路径";
+            *error = "path not found";
             return -1;
         }
         folder_len = strlen(folder_real);
         if (strncmp(file_real, folder_real, folder_len) != 0 ||
             (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-            *error = "路径越界";
+            *error = "path escape";
             return -1;
         }
         snprintf(out, out_len, "%s/%s", file_real, slash + 1);
@@ -386,7 +440,7 @@ static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_
     folder_len = strlen(folder_real);
     if (strncmp(file_real, folder_real, folder_len) != 0 ||
         (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-        *error = "路径越界";
+        *error = "path escape";
         return -1;
     }
     snprintf(out, out_len, "%s", file_real);
@@ -415,14 +469,14 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
         FILE *file = fopen(path, "rb");
         long size;
         if (file == NULL) {
-            snprintf(errbuf, errbuf_len, "找不到文件");
+            snprintf(errbuf, errbuf_len, "file not found");
             return -1;
         }
         fseek(file, 0, SEEK_END);
         size = ftell(file);
         if (size < 0 || (size_t)size > engine->limits.fs_io_bytes) {
             fclose(file);
-            snprintf(errbuf, errbuf_len, "文件太大");
+            snprintf(errbuf, errbuf_len, "file too large");
             return -1;
         }
         rewind(file);
@@ -432,7 +486,7 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
             free(out->data);
             out->data = NULL;
             fclose(file);
-            snprintf(errbuf, errbuf_len, "读取失败");
+            snprintf(errbuf, errbuf_len, "read failed");
             return -1;
         }
         fclose(file);
@@ -443,11 +497,11 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     case WEIZHI_VFS_APPEND: {
         FILE *file;
         if (in == NULL || (in->len > 0 && in->data == NULL)) {
-            snprintf(errbuf, errbuf_len, "没有可写数据");
+            snprintf(errbuf, errbuf_len, "no writable data");
             return -1;
         }
         if (in->len > engine->limits.fs_io_bytes) {
-            snprintf(errbuf, errbuf_len, "文件太大");
+            snprintf(errbuf, errbuf_len, "file too large");
             return -1;
         }
         file = fopen(path, op == WEIZHI_VFS_APPEND ? "ab" : "wb");
@@ -455,7 +509,7 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
             if (file != NULL) {
                 fclose(file);
             }
-            snprintf(errbuf, errbuf_len, "写入失败");
+            snprintf(errbuf, errbuf_len, "write failed");
             return -1;
         }
         fclose(file);
@@ -464,7 +518,7 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     case WEIZHI_VFS_EXISTS: {
         out->data = malloc(1);
         if (out->data == NULL) {
-            snprintf(errbuf, errbuf_len, "内存不足");
+            snprintf(errbuf, errbuf_len, "out of memory");
             return -1;
         }
         out->data[0] = access(path, F_OK) == 0 ? 1 : 0;
@@ -474,28 +528,28 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     case WEIZHI_VFS_UNLINK:
     case WEIZHI_VFS_RM:
         if (unlink(path) != 0) {
-            snprintf(errbuf, errbuf_len, "删除失败");
+            snprintf(errbuf, errbuf_len, "delete failed");
             return -1;
         }
         return 0;
     case WEIZHI_VFS_MKDIR:
         if (mkdir(path, 0755) != 0 && errno != EEXIST) {
-            snprintf(errbuf, errbuf_len, "创建目录失败");
+            snprintf(errbuf, errbuf_len, "mkdir failed");
             return -1;
         }
         return 0;
     case WEIZHI_VFS_RENAME:
         if (rename(path, path2) != 0) {
-            snprintf(errbuf, errbuf_len, "重命名失败");
+            snprintf(errbuf, errbuf_len, "rename failed");
             return -1;
         }
         return 0;
     case WEIZHI_VFS_STAT:
     case WEIZHI_VFS_READDIR:
-        snprintf(errbuf, errbuf_len, "不支持的操作");
+        snprintf(errbuf, errbuf_len, "unsupported operation");
         return -1;
     default:
-        snprintf(errbuf, errbuf_len, "不支持的操作");
+        snprintf(errbuf, errbuf_len, "unsupported operation");
         return -1;
     }
 }
@@ -632,7 +686,7 @@ static JSValue fs_sync_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val,
             if (relpath2) {
                 JS_FreeCString(ctx, relpath2);
             }
-            return JS_ThrowRangeError(ctx, "文件太大");
+            return JS_ThrowRangeError(ctx, "file too large");
         }
         if (rc != 0) {
             JS_FreeCString(ctx, relpath);
@@ -643,7 +697,8 @@ static JSValue fs_sync_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val,
         }
     }
     if (engine->vfs_sync != NULL) {
-        rc = engine->vfs_sync(op, relpath, relpath2, &in, &out, errbuf, sizeof(errbuf), engine->vfs_ud);
+        rc = engine->vfs_sync(op, relpath, relpath2, &in, &out, errbuf, sizeof(errbuf),
+                              engine->vfs_ud != NULL ? engine->vfs_ud : engine);
     } else {
         rc = default_vfs_sync(op, relpath, relpath2, &in, &out, errbuf, sizeof(errbuf), engine);
     }
@@ -673,7 +728,7 @@ static JSValue fs_sync_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val,
 static JSValue js_read_file_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "需要路径");
+        return weizhi_throw_bad_arg(ctx, "fs.readFileSync", "path required");
     }
     return fs_sync_op(ctx, WEIZHI_VFS_READ, argv[0], JS_UNDEFINED, JS_UNDEFINED, 0);
 }
@@ -681,7 +736,7 @@ static JSValue js_read_file_sync(JSContext *ctx, JSValueConst this_val, int argc
 static JSValue js_write_file_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "需要路径和数据");
+        return weizhi_throw_bad_arg(ctx, "fs.writeFileSync", "path and data required");
     }
     return fs_sync_op(ctx, WEIZHI_VFS_WRITE, argv[0], JS_UNDEFINED, argv[1], 1);
 }
@@ -689,7 +744,7 @@ static JSValue js_write_file_sync(JSContext *ctx, JSValueConst this_val, int arg
 static JSValue js_exists_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "需要路径");
+        return weizhi_throw_bad_arg(ctx, "fs.existsSync", "path required");
     }
     return fs_sync_op(ctx, WEIZHI_VFS_EXISTS, argv[0], JS_UNDEFINED, JS_UNDEFINED, 0);
 }
@@ -697,7 +752,7 @@ static JSValue js_exists_sync(JSContext *ctx, JSValueConst this_val, int argc, J
 static JSValue js_unlink_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "需要路径");
+        return weizhi_throw_bad_arg(ctx, "fs.unlinkSync", "path required");
     }
     return fs_sync_op(ctx, WEIZHI_VFS_UNLINK, argv[0], JS_UNDEFINED, JS_UNDEFINED, 0);
 }
@@ -730,7 +785,7 @@ static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val
             JS_FreeValue(ctx, funcs[1]);
             JS_FreeValue(ctx, promise);
             if (rc == -2) {
-                return JS_ThrowRangeError(ctx, "文件太大");
+                return JS_ThrowRangeError(ctx, "file too large");
             }
             return JS_EXCEPTION;
         }
@@ -740,17 +795,18 @@ static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val
         JS_FreeCString(ctx, relpath);
         weizhi_bytes_free(&in);
         JS_FreeValue(ctx, promise);
-        return JS_ThrowRangeError(ctx, "异步请求太多");
+        return JS_ThrowRangeError(ctx, "too many async requests");
     }
     if (engine->vfs_async != NULL) {
-        rc = engine->vfs_async(engine, id, op, relpath, NULL, &in, engine->vfs_ud);
+        void *ud = engine->vfs_async_ud != NULL ? engine->vfs_async_ud : engine->vfs_ud;
+        rc = engine->vfs_async(engine, id, op, relpath, NULL, &in, ud);
     } else {
         rc = default_vfs_async(engine, id, op, relpath, NULL, &in, engine);
     }
     JS_FreeCString(ctx, relpath);
     weizhi_bytes_free(&in);
     if (rc != 0) {
-        weizhi_complete(engine, id, 0, NULL, "无法启动异步读写");
+        weizhi_complete(engine, id, 0, NULL, "failed to start async I/O");
     }
     return promise;
 }
@@ -758,7 +814,7 @@ static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val
 static JSValue js_promises_read_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "需要路径");
+        return weizhi_throw_bad_arg(ctx, "fs.promises.readFile", "path required");
     }
     return fs_async_op(ctx, WEIZHI_VFS_READ, argv[0], JS_UNDEFINED, 0);
 }
@@ -766,7 +822,7 @@ static JSValue js_promises_read_file(JSContext *ctx, JSValueConst this_val, int 
 static JSValue js_promises_write_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 2) {
-        return JS_ThrowTypeError(ctx, "需要路径和数据");
+        return weizhi_throw_bad_arg(ctx, "fs.promises.writeFile", "path and data required");
     }
     return fs_async_op(ctx, WEIZHI_VFS_WRITE, argv[0], argv[1], 1);
 }
@@ -774,15 +830,26 @@ static JSValue js_promises_write_file(JSContext *ctx, JSValueConst this_val, int
 static JSValue make_fs_module(JSContext *ctx) {
     JSValue mod = JS_NewObject(ctx);
     JSValue promises = JS_NewObject(ctx);
+    JSValue guarded_promises;
+    JSValue guarded;
     JS_SetPropertyStr(ctx, mod, "readFileSync", JS_NewCFunction(ctx, js_read_file_sync, "readFileSync", 1));
     JS_SetPropertyStr(ctx, mod, "writeFileSync", JS_NewCFunction(ctx, js_write_file_sync, "writeFileSync", 2));
     JS_SetPropertyStr(ctx, mod, "existsSync", JS_NewCFunction(ctx, js_exists_sync, "existsSync", 1));
     JS_SetPropertyStr(ctx, mod, "unlinkSync", JS_NewCFunction(ctx, js_unlink_sync, "unlinkSync", 1));
     JS_SetPropertyStr(ctx, promises, "readFile", JS_NewCFunction(ctx, js_promises_read_file, "readFile", 1));
     JS_SetPropertyStr(ctx, promises, "writeFile", JS_NewCFunction(ctx, js_promises_write_file, "writeFile", 2));
-    JS_SetPropertyStr(ctx, mod, "promises", promises);
-    JS_SetPropertyStr(ctx, mod, "default", JS_DupValue(ctx, mod));
-    return mod;
+    guarded_promises = weizhi_guard_module(ctx, promises, "fs.promises");
+    if (JS_IsException(guarded_promises)) {
+        JS_FreeValue(ctx, mod);
+        return guarded_promises;
+    }
+    JS_SetPropertyStr(ctx, mod, "promises", guarded_promises);
+    guarded = weizhi_guard_module(ctx, mod, "fs");
+    if (JS_IsException(guarded)) {
+        return guarded;
+    }
+    JS_SetPropertyStr(ctx, guarded, "default", JS_DupValue(ctx, guarded));
+    return guarded;
 }
 
 static JSValue js_process_cwd(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -808,7 +875,7 @@ static JSValue make_process_object(JSContext *ctx) {
     JS_SetPropertyStr(ctx, mod, "version", JS_NewString(ctx, "v0.1.0-weizhi"));
     JS_SetPropertyStr(ctx, mod, "env", JS_NewObject(ctx));
     JS_SetPropertyStr(ctx, mod, "default", JS_DupValue(ctx, mod));
-    return mod;
+    return weizhi_guard_module(ctx, mod, "process");
 }
 
 static JSValue js_console_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -862,7 +929,7 @@ static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     const char *id;
     (void)this_val;
     if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "require 需要模块名");
+        return weizhi_throw_bad_arg(ctx, "require", "module name required");
     }
     id = JS_ToCString(ctx, argv[0]);
     if (id == NULL) {
@@ -885,9 +952,10 @@ static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         return make_process_object(ctx);
     }
     {
-        JSValue err = JS_ThrowReferenceError(ctx, "不支持: %s", id);
+        char msg[192];
+        snprintf(msg, sizeof(msg), "module \"%s\" (available: buffer, fs, path, process)", id);
         JS_FreeCString(ctx, id);
-        return err;
+        return weizhi_throw_unsupported(ctx, msg);
     }
 }
 
@@ -958,7 +1026,7 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
         }
         return m;
     }
-    JS_ThrowReferenceError(ctx, "不支持: %s", module_name);
+    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process)", module_name);
     return NULL;
 }
 

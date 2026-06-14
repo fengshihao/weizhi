@@ -21,7 +21,7 @@ pick_ndk() {
         return
     fi
     if [ -d "$sdk/ndk" ]; then
-        # 选版本号最大的已安装 NDK
+        # Prefer the highest installed NDK version
         latest=$(ls -1 "$sdk/ndk" | sort -V | tail -1)
         if [ -n "$latest" ] && [ -f "$sdk/ndk/$latest/build/cmake/android.toolchain.cmake" ]; then
             printf '%s\n' "$sdk/ndk/$latest"
@@ -32,14 +32,14 @@ pick_ndk() {
 }
 
 if ! ndk=$(pick_ndk); then
-    echo "找不到 Android NDK。请设置 ANDROID_NDK_HOME，或安装到 \$ANDROID_HOME/ndk/" >&2
+    echo "Android NDK not found. Set ANDROID_NDK_HOME, or install under \$ANDROID_HOME/ndk/" >&2
     exit 1
 fi
 
 case "$abi" in
     arm64-v8a|armeabi-v7a|x86_64|x86) ;;
     *)
-        echo "用法: $0 [arm64-v8a|armeabi-v7a|x86_64|x86]" >&2
+        echo "usage: $0 [arm64-v8a|armeabi-v7a|x86_64|x86]" >&2
         exit 1
         ;;
 esac
@@ -60,4 +60,8 @@ cmake --build . -- -j"$jobs"
 
 echo "NDK: $ndk"
 echo "ABI: $abi  API: $api"
-echo "产物: $out/libweizhi.a  $out/weizhi_tests"
+echo "artifacts: $out/libweizhi.a  $out/weizhi_tests"
+if [ -f "$out/libweizhijni.so" ]; then
+    echo "JNI:  $out/libweizhijni.so"
+fi
+echo "Java: $root/java/com/weizhi/WeizhiEngine.java"
