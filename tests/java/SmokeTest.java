@@ -33,7 +33,7 @@ public final class SmokeTest {
                 engine.runJs("fs.writeFileSync('big.txt','abcdefghijklmnopqrstuvwxyz')", 1000);
                 fail("expected fs size limit");
             } catch (RuntimeException e) {
-                if (e.getMessage() == null || !e.getMessage().contains("太大")) {
+                if (e.getMessage() == null || !e.getMessage().contains("too large")) {
                     throw e;
                 }
             }

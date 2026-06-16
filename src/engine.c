@@ -649,15 +649,21 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
     engine->limits.wasm_max_linear_bytes =
         size_or_default(limits ? limits->wasm_max_linear_bytes : 0, WEIZHI_DEFAULT_WASM_MAX_LINEAR_BYTES);
     engine->limits.fs_io_bytes = size_or_default(limits ? limits->fs_io_bytes : 0, WEIZHI_DEFAULT_FS_IO_BYTES);
+    engine->limits.max_async_io =
+        int_or_default(limits ? limits->max_async_io : 0, WEIZHI_DEFAULT_MAX_ASYNC_IO);
     atomic_init(&engine->state, ST_IDLE);
     engine->next_timer_id = 1;
     engine->next_request_id = 1;
     pthread_mutex_init(&engine->wake_mu, NULL);
     pthread_cond_init(&engine->wake_cv, NULL);
+    pthread_mutex_init(&engine->async_mu, NULL);
+    pthread_cond_init(&engine->async_cv, NULL);
     engine->rt = JS_NewRuntime();
     if (engine->rt == NULL) {
         pthread_mutex_destroy(&engine->wake_mu);
         pthread_cond_destroy(&engine->wake_cv);
+        pthread_mutex_destroy(&engine->async_mu);
+        pthread_cond_destroy(&engine->async_cv);
         wamr_release();
         free(engine);
         return NULL;
@@ -670,6 +676,8 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
         JS_FreeRuntime(engine->rt);
         pthread_mutex_destroy(&engine->wake_mu);
         pthread_cond_destroy(&engine->wake_cv);
+        pthread_mutex_destroy(&engine->async_mu);
+        pthread_cond_destroy(&engine->async_cv);
         wamr_release();
         free(engine);
         return NULL;
@@ -697,6 +705,7 @@ int weizhi_close(WeizhiEngine *engine) {
     if (!atomic_compare_exchange_strong(&engine->state, &expected, ST_CLOSED)) {
         return -1;
     }
+    weizhi_async_pool_shutdown(engine);
     weizhi_timers_clear(engine);
     weizhi_pending_clear(engine);
     JS_FreeContext(engine->ctx);
@@ -711,6 +720,8 @@ int weizhi_close(WeizhiEngine *engine) {
     free(engine->run_id);
     pthread_mutex_destroy(&engine->wake_mu);
     pthread_cond_destroy(&engine->wake_cv);
+    pthread_mutex_destroy(&engine->async_mu);
+    pthread_cond_destroy(&engine->async_cv);
     free(engine);
     return 0;
 }

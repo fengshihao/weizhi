@@ -12,20 +12,24 @@ import java.util.concurrent.Executors;
  * Agents write JS only; this class is for the app host.
  */
 public final class WeizhiEngine implements AutoCloseable {
+    /** Matches WEIZHI_DEFAULT_MAX_ASYNC_IO in weizhi.h. */
+    private static final int DEFAULT_MAX_ASYNC_IO = 16;
+
     static {
         System.loadLibrary("weizhijni");
     }
 
     private long nativeHandle;
     private final ExecutorService executor;
+    private final boolean ownsExecutor;
     private String fsRoot;
 
     public WeizhiEngine() {
-        this(null, Executors.newCachedThreadPool());
+        this(null, null);
     }
 
     public WeizhiEngine(WeizhiLimits limits) {
-        this(limits, Executors.newCachedThreadPool());
+        this(limits, null);
     }
 
     public WeizhiEngine(ExecutorService executor) {
@@ -33,7 +37,14 @@ public final class WeizhiEngine implements AutoCloseable {
     }
 
     public WeizhiEngine(WeizhiLimits limits, ExecutorService executor) {
-        this.executor = executor;
+        int asyncIo = resolveAsyncIo(limits);
+        if (executor != null) {
+            this.executor = executor;
+            this.ownsExecutor = false;
+        } else {
+            this.executor = Executors.newFixedThreadPool(asyncIo);
+            this.ownsExecutor = true;
+        }
         this.nativeHandle = nativeOpen(
                 limits == null ? 0 : limits.jsHeapBytes,
                 limits == null ? 0 : limits.jsStackBytes,
@@ -42,10 +53,21 @@ public final class WeizhiEngine implements AutoCloseable {
                 limits == null ? 0 : limits.wasmStackBytes,
                 limits == null ? 0 : limits.wasmHeapBytes,
                 limits == null ? 0 : limits.wasmMaxLinearBytes,
-                limits == null ? 0 : limits.fsIoBytes);
+                limits == null ? 0 : limits.fsIoBytes,
+                limits == null ? 0 : limits.maxAsyncIo);
         if (this.nativeHandle == 0) {
+            if (this.ownsExecutor) {
+                this.executor.shutdownNow();
+            }
             throw new IllegalStateException("weizhi_open failed");
         }
+    }
+
+    private static int resolveAsyncIo(WeizhiLimits limits) {
+        if (limits != null && limits.maxAsyncIo > 0) {
+            return limits.maxAsyncIo;
+        }
+        return DEFAULT_MAX_ASYNC_IO;
     }
 
     public void setFsRoot(String folder) {
@@ -85,7 +107,7 @@ public final class WeizhiEngine implements AutoCloseable {
                 Path root = Paths.get(fsRoot == null ? "." : fsRoot).toAbsolutePath().normalize();
                 Path target = root.resolve(relpath).normalize();
                 if (!target.startsWith(root)) {
-                    nativeComplete(engine, requestId, false, null, "路径越界");
+                    nativeComplete(engine, requestId, false, null, "path escape");
                     return;
                 }
                 switch (op) {
@@ -100,10 +122,10 @@ public final class WeizhiEngine implements AutoCloseable {
                         break;
                     }
                     default:
-                        nativeComplete(engine, requestId, false, null, "不支持的操作");
+                        nativeComplete(engine, requestId, false, null, "unsupported operation");
                 }
             } catch (IOException e) {
-                nativeComplete(engine, requestId, false, null, e.getMessage() == null ? "读写失败" : e.getMessage());
+                nativeComplete(engine, requestId, false, null, e.getMessage() == null ? "I/O failed" : e.getMessage());
             }
         });
     }
@@ -114,12 +136,14 @@ public final class WeizhiEngine implements AutoCloseable {
             nativeClose(nativeHandle);
             nativeHandle = 0;
         }
-        executor.shutdownNow();
+        if (ownsExecutor) {
+            executor.shutdownNow();
+        }
     }
 
     private static native long nativeOpen(long jsHeapBytes, long jsStackBytes, int maxPacks, int maxHostFunctions,
                                          long wasmStackBytes, long wasmHeapBytes, long wasmMaxLinearBytes,
-                                         long fsIoBytes);
+                                         long fsIoBytes, int maxAsyncIo);
 
     private static native void nativeClose(long handle);
 

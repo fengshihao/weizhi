@@ -13,15 +13,6 @@ typedef struct BufferData {
     size_t len;
 } BufferData;
 
-typedef struct AsyncJob {
-    Engine *engine;
-    int64_t request_id;
-    WeizhiVfsOp op;
-    char *relpath;
-    char *relpath2;
-    WeizhiBytes in;
-} AsyncJob;
-
 JSValue weizhi_throw_unsupported(JSContext *ctx, const char *what) {
     return JS_ThrowReferenceError(ctx, "unsupported: %s", what ? what : "?");
 }
@@ -554,8 +545,17 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     }
 }
 
-static void *async_job_main(void *arg) {
-    AsyncJob *job = arg;
+static void async_job_free(WeizhiAsyncJob *job) {
+    if (job == NULL) {
+        return;
+    }
+    free(job->relpath);
+    free(job->relpath2);
+    free(job->in.data);
+    free(job);
+}
+
+static void async_job_run(WeizhiAsyncJob *job) {
     WeizhiBytes out;
     char errbuf[128];
     int rc;
@@ -570,17 +570,108 @@ static void *async_job_main(void *arg) {
     }
     weizhi_complete(job->engine, job->request_id, rc == 0, &out, errbuf);
     weizhi_bytes_free(&out);
-    free(job->relpath);
-    free(job->relpath2);
-    free(job->in.data);
-    free(job);
-    return NULL;
+    async_job_free(job);
+}
+
+static void *async_worker_main(void *arg) {
+    Engine *engine = arg;
+    for (;;) {
+        WeizhiAsyncJob *job;
+        pthread_mutex_lock(&engine->async_mu);
+        while (engine->async_queue_head == NULL && !engine->async_stop) {
+            pthread_cond_wait(&engine->async_cv, &engine->async_mu);
+        }
+        if (engine->async_stop && engine->async_queue_head == NULL) {
+            pthread_mutex_unlock(&engine->async_mu);
+            return NULL;
+        }
+        job = engine->async_queue_head;
+        engine->async_queue_head = job->next;
+        if (engine->async_queue_head == NULL) {
+            engine->async_queue_tail = NULL;
+        }
+        job->next = NULL;
+        pthread_mutex_unlock(&engine->async_mu);
+        async_job_run(job);
+    }
+}
+
+static int async_pool_ensure_started(Engine *engine) {
+    int n;
+    int i;
+    if (engine->async_pool_started) {
+        return 0;
+    }
+    n = engine->limits.max_async_io;
+    if (n < 1) {
+        n = WEIZHI_DEFAULT_MAX_ASYNC_IO;
+    }
+    if (n > WEIZHI_MAX_PENDING) {
+        n = WEIZHI_MAX_PENDING;
+    }
+    engine->async_workers = calloc((size_t)n, sizeof(pthread_t));
+    if (engine->async_workers == NULL) {
+        return -1;
+    }
+    engine->async_worker_count = n;
+    engine->async_stop = 0;
+    for (i = 0; i < n; i++) {
+        if (pthread_create(&engine->async_workers[i], NULL, async_worker_main, engine) != 0) {
+            int j;
+            pthread_mutex_lock(&engine->async_mu);
+            engine->async_stop = 1;
+            pthread_cond_broadcast(&engine->async_cv);
+            pthread_mutex_unlock(&engine->async_mu);
+            for (j = 0; j < i; j++) {
+                pthread_join(engine->async_workers[j], NULL);
+            }
+            free(engine->async_workers);
+            engine->async_workers = NULL;
+            engine->async_worker_count = 0;
+            engine->async_stop = 0;
+            return -1;
+        }
+    }
+    engine->async_pool_started = 1;
+    return 0;
+}
+
+void weizhi_async_pool_shutdown(Engine *engine) {
+    WeizhiAsyncJob *job;
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->async_mu);
+    engine->async_stop = 1;
+    pthread_cond_broadcast(&engine->async_cv);
+    pthread_mutex_unlock(&engine->async_mu);
+    if (engine->async_workers != NULL) {
+        for (i = 0; i < engine->async_worker_count; i++) {
+            pthread_join(engine->async_workers[i], NULL);
+        }
+        free(engine->async_workers);
+        engine->async_workers = NULL;
+        engine->async_worker_count = 0;
+    }
+    pthread_mutex_lock(&engine->async_mu);
+    job = engine->async_queue_head;
+    engine->async_queue_head = NULL;
+    engine->async_queue_tail = NULL;
+    pthread_mutex_unlock(&engine->async_mu);
+    while (job != NULL) {
+        WeizhiAsyncJob *next = job->next;
+        weizhi_complete(engine, job->request_id, 0, NULL, "engine closed");
+        async_job_free(job);
+        job = next;
+    }
+    engine->async_pool_started = 0;
+    engine->async_stop = 0;
 }
 
 static int default_vfs_async(WeizhiEngine *engine, int64_t request_id, WeizhiVfsOp op, const char *relpath,
                              const char *relpath2, const WeizhiBytes *in, void *userdata) {
-    AsyncJob *job = calloc(1, sizeof(*job));
-    pthread_t thread;
+    WeizhiAsyncJob *job = calloc(1, sizeof(*job));
     (void)userdata;
     if (job == NULL) {
         return -1;
@@ -593,22 +684,34 @@ static int default_vfs_async(WeizhiEngine *engine, int64_t request_id, WeizhiVfs
     if (in != NULL && in->len > 0 && in->data != NULL) {
         job->in.data = malloc(in->len);
         if (job->in.data == NULL) {
-            free(job->relpath);
-            free(job->relpath2);
-            free(job);
+            async_job_free(job);
             return -1;
         }
         memcpy(job->in.data, in->data, in->len);
         job->in.len = in->len;
     }
-    if (pthread_create(&thread, NULL, async_job_main, job) != 0) {
-        free(job->relpath);
-        free(job->relpath2);
-        free(job->in.data);
-        free(job);
+    if (job->relpath == NULL || (relpath2 != NULL && job->relpath2 == NULL)) {
+        async_job_free(job);
         return -1;
     }
-    pthread_detach(thread);
+    if (async_pool_ensure_started(engine) != 0) {
+        async_job_free(job);
+        return -1;
+    }
+    pthread_mutex_lock(&engine->async_mu);
+    if (engine->async_stop) {
+        pthread_mutex_unlock(&engine->async_mu);
+        async_job_free(job);
+        return -1;
+    }
+    if (engine->async_queue_tail != NULL) {
+        engine->async_queue_tail->next = job;
+    } else {
+        engine->async_queue_head = job;
+    }
+    engine->async_queue_tail = job;
+    pthread_cond_signal(&engine->async_cv);
+    pthread_mutex_unlock(&engine->async_mu);
     return 0;
 }
 

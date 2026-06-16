@@ -33,7 +33,7 @@ static char *jstring_to_utf8(JNIEnv *env, jstring str) {
 JNIEXPORT jlong JNICALL Java_com_weizhi_WeizhiEngine_nativeOpen(JNIEnv *env, jclass clazz, jlong js_heap,
                                                                jlong js_stack, jint max_packs, jint max_hosts,
                                                                jlong wasm_stack, jlong wasm_heap, jlong wasm_linear,
-                                                               jlong fs_io) {
+                                                               jlong fs_io, jint max_async_io) {
     WeizhiLimits limits;
     (void)env;
     (void)clazz;
@@ -46,6 +46,7 @@ JNIEXPORT jlong JNICALL Java_com_weizhi_WeizhiEngine_nativeOpen(JNIEnv *env, jcl
     limits.wasm_heap_bytes = (size_t)wasm_heap;
     limits.wasm_max_linear_bytes = (size_t)wasm_linear;
     limits.fs_io_bytes = (size_t)fs_io;
+    limits.max_async_io = (int)max_async_io;
     return (jlong)(intptr_t)weizhi_open(&limits);
 }
 

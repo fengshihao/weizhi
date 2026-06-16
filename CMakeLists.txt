@@ -56,6 +56,10 @@ else()
     message(FATAL_ERROR "Only macOS, Linux (incl. WSL), and Android NDK are supported; got ${CMAKE_SYSTEM_NAME}")
 endif()
 
+# Interpreter + embed-in-JVM (Android / desktop JNI): HW bound checks install
+# SIGSEGV handlers that collide with HotSpot and crash on weizhi_open (SIGILL).
+set(WAMR_DISABLE_HW_BOUND_CHECK 1)
+
 # Desktop and Android dev builds use the interpreter; switch to AOT for production mobile later.
 set(WAMR_BUILD_INTERP 1)
 set(WAMR_BUILD_FAST_INTERP 1)

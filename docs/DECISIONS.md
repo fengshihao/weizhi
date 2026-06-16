@@ -2,6 +2,8 @@
 
 When people step away, work continues against the agreed design. Below are the specs already locked in code and verified by tests.
 
+Agent-facing sandbox contract (copy into system prompts): [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md).
+
 ## Product boundaries
 
 - Repo lives at `/Users/fengshihao/Work/weizhi`, alongside Agent1, not inside it.
@@ -9,7 +11,7 @@ When people step away, work continues against the agreed design. Below are the s
 - Do not depend on or fork all of quickjs-kt. Compile Bellard QuickJS only inside this engine.
 - Agents have one entry point: run a JS snippet. Capability packs are loaded from JS via `loadPack("name")`. `loadScript("file.js")` loads plain JS libraries.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
-- Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool.
+- Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
 
 ## Memory
@@ -25,9 +27,10 @@ Default per-engine caps:
 | Per-pack call stack | 64 KB | Used for in-pack calls |
 | Per-pack internal heap | 64 KB | Pack `malloc` |
 | Per-pack declared linear memory | max 2 MB | Larger initial memory in the pack file is rejected with `memory` in the error |
-| Single fs read/write | 1 MB | Over limit fails with `too large` in the error |
+| Single fs read/write payload | 1 MB | Cap on **one** `read`/`write` byte count, not total workspace size. Over limit fails with `too large` |
+| In-flight async I/O workers | 16 | Default async VFS / Java pool concurrency. Excess **queues** (no error). Set via `max_async_io` / `maxAsyncIo`. |
 
-These can be lowered via `WeizhiLimits` (tests do this). 0 means use the default.
+Set at engine creation via `WeizhiLimits` (C: `weizhi_open`; Java: `new WeizhiEngine(limits)`). Field `0` means use the default. Cannot change after open.
 
 Dev builds use the system allocator, not a pre-reserved pool. Closing the engine returns memory to the system. If a fixed pool is needed on mobile later, add tests then.
 
@@ -37,7 +40,8 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 - **JS runs on one thread only** (the thread that called `runJs`). Concurrent entry into the same engine’s QuickJS is forbidden.
 - Sync host functions (default `addFunction`, `fs.*Sync`) still run on the JS thread to completion.
-- **Async host** (`fs.promises`, future `fetch`): run on a thread pool; when done, enqueue completion and wake `runJs`; **never** call QuickJS directly from pool threads.
+- **Async host** (`fs.promises`, future `fetch`): run on a bounded worker pool; when done, enqueue completion and wake `runJs`; **never** call QuickJS directly from pool threads.
+- Default in-flight async I/O concurrency is **16** (`WeizhiLimits.max_async_io` / Java `maxAsyncIo`; `0` = default). Extra jobs **queue and wait**; they do not fail the script. Hosts may set `1` (fully serial) or raise the limit. A custom `weizhi_set_vfs` async callback / custom Java `ExecutorService` is host-managed and bypasses this default pool.
 - One engine runs one script at a time.
   - Same thread calls `runJs` again: fails with `again` in the error.
   - Another thread calls `runJs`: fails with `busy` in the error.

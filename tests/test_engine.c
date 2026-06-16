@@ -646,12 +646,16 @@ static int slow_join(const char *root, const char *rel, char *out, size_t out_le
     return 0;
 }
 
+/* Sync VFS with artificial delay so default async pool concurrency is observable. */
 static int slow_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
                          WeizhiBytes *out, char *errbuf, size_t errbuf_len, void *userdata) {
     SlowFs *fs = userdata;
     char path[512];
     (void)relpath2;
     memset(out, 0, sizeof(*out));
+    if (fs->delay_ms > 0) {
+        usleep((useconds_t)fs->delay_ms * 1000);
+    }
     if (slow_join(fs->root, relpath, path, sizeof(path)) != 0) {
         snprintf(errbuf, errbuf_len, "invalid path");
         return -1;
@@ -694,64 +698,6 @@ static int slow_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *relpat
     return -1;
 }
 
-typedef struct SlowJob {
-    WeizhiEngine *engine;
-    int64_t request_id;
-    WeizhiVfsOp op;
-    char *relpath;
-    WeizhiBytes in;
-    SlowFs *fs;
-} SlowJob;
-
-static void *slow_job_main(void *arg) {
-    SlowJob *job = arg;
-    WeizhiBytes out;
-    char errbuf[64];
-    int rc;
-    usleep((useconds_t)job->fs->delay_ms * 1000);
-    memset(&out, 0, sizeof(out));
-    rc = slow_vfs_sync(job->op, job->relpath, NULL, &job->in, &out, errbuf, sizeof(errbuf), job->fs);
-    weizhi_complete(job->engine, job->request_id, rc == 0, &out, errbuf);
-    weizhi_bytes_free(&out);
-    free(job->relpath);
-    free(job->in.data);
-    free(job);
-    return NULL;
-}
-
-static int slow_vfs_async(WeizhiEngine *engine, int64_t request_id, WeizhiVfsOp op, const char *relpath,
-                          const char *relpath2, const WeizhiBytes *in, void *userdata) {
-    SlowJob *job = calloc(1, sizeof(*job));
-    pthread_t thread;
-    (void)relpath2;
-    if (job == NULL) {
-        return -1;
-    }
-    job->engine = engine;
-    job->request_id = request_id;
-    job->op = op;
-    job->fs = userdata;
-    job->relpath = strdup(relpath != NULL ? relpath : "");
-    if (in != NULL && in->len > 0 && in->data != NULL) {
-        job->in.data = malloc(in->len);
-        if (job->in.data == NULL) {
-            free(job->relpath);
-            free(job);
-            return -1;
-        }
-        memcpy(job->in.data, in->data, in->len);
-        job->in.len = in->len;
-    }
-    if (pthread_create(&thread, NULL, slow_job_main, job) != 0) {
-        free(job->relpath);
-        free(job->in.data);
-        free(job);
-        return -1;
-    }
-    pthread_detach(thread);
-    return 0;
-}
-
 static void test_promise_all_parallel(void) {
     char *dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
@@ -762,7 +708,8 @@ static void test_promise_all_parallel(void) {
     fs.root = dir;
     fs.delay_ms = 80;
     EXPECT(weizhi_set_fs_root(engine, dir) == 0);
-    weizhi_set_vfs(engine, slow_vfs_sync, slow_vfs_async, &fs);
+    /* Keep default async pool; only replace sync so workers hit the delay. */
+    weizhi_set_vfs(engine, slow_vfs_sync, NULL, &fs);
     result = weizhi_run_js(engine, "fs.writeFileSync('x.txt','x'); fs.writeFileSync('y.txt','y'); 1", 2000);
     EXPECT(result.ok == 1);
     weizhi_result_free(&result);
@@ -775,8 +722,42 @@ static void test_promise_all_parallel(void) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     elapsed_ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
     EXPECT(result.ok == 1);
-    /* Each path sleeps 80ms; parallel should be clearly under serial 160ms */
+    /* Each path sleeps 80ms; default pool (16) should run them in parallel. */
     EXPECT(elapsed_ms < 150);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
+static void test_async_io_serializes(void) {
+    char *dir = make_temp_dir();
+    WeizhiLimits limits;
+    WeizhiEngine *engine;
+    SlowFs fs;
+    WeizhiResult result;
+    struct timespec t0, t1;
+    long elapsed_ms;
+    memset(&limits, 0, sizeof(limits));
+    limits.max_async_io = 1;
+    engine = weizhi_open(&limits);
+    fs.root = dir;
+    fs.delay_ms = 80;
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    weizhi_set_vfs(engine, slow_vfs_sync, NULL, &fs);
+    result = weizhi_run_js(engine, "fs.writeFileSync('x.txt','x'); fs.writeFileSync('y.txt','y'); 1", 2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    result = weizhi_run_js(engine,
+                           "const a = fs.promises.readFile('x.txt');"
+                           "const b = fs.promises.readFile('y.txt');"
+                           "await Promise.all([a,b]); 1",
+                           5000);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    elapsed_ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+    EXPECT(result.ok == 1);
+    /* One worker: two 80ms jobs should take about 160ms (queue, no error). */
+    EXPECT(elapsed_ms >= 150);
     weizhi_result_free(&result);
     weizhi_close(engine);
     free(dir);
@@ -835,6 +816,7 @@ int main(void) {
     test_console_logs();
     test_import_fs();
     test_promise_all_parallel();
+    test_async_io_serializes();
     test_agent_precise_errors();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);

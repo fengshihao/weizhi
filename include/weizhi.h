@@ -13,19 +13,24 @@
 #define WEIZHI_DEFAULT_WASM_STACK_BYTES (64u * 1024u)
 #define WEIZHI_DEFAULT_WASM_HEAP_BYTES (64u * 1024u)
 #define WEIZHI_DEFAULT_WASM_MAX_LINEAR_BYTES (2u * 1024u * 1024u)
+/* Max bytes for one fs read OR one fs write payload (not workspace total size). */
 #define WEIZHI_DEFAULT_FS_IO_BYTES (1u * 1024u * 1024u)
+/* Max in-flight default async VFS jobs (extra work queues; does not fail). */
+#define WEIZHI_DEFAULT_MAX_ASYNC_IO 16
 
 typedef struct WeizhiEngine WeizhiEngine;
 
+/* Pass to weizhi_open / Java WeizhiLimits. 0 = use default above. Immutable after open. */
 typedef struct WeizhiLimits {
-    size_t js_heap_bytes;       /* 0 means use the default */
-    size_t js_stack_bytes;
-    int max_packs;
-    int max_host_functions;
-    size_t wasm_stack_bytes;
-    size_t wasm_heap_bytes;
-    size_t wasm_max_linear_bytes;
-    size_t fs_io_bytes;
+    size_t js_heap_bytes;         /* JS heap (strings/objects). Default 8MB. Over → "memory" */
+    size_t js_stack_bytes;        /* JS stack. Default 256KB. Over → "stack" */
+    int max_packs;                /* Loaded Wasm packs. Default 4. Over → "too many" */
+    int max_host_functions;       /* addFunction cap. Default 32 */
+    size_t wasm_stack_bytes;      /* Per-pack call stack. Default 64KB */
+    size_t wasm_heap_bytes;       /* Per-pack internal heap. Default 64KB */
+    size_t wasm_max_linear_bytes; /* Pack linear memory request max. Default 2MB. Over → "memory" */
+    size_t fs_io_bytes;           /* Single fs read/write size. Default 1MB. Over → "too large" */
+    int max_async_io;             /* In-flight default async I/O workers. Default 16. Excess queues. */
 } WeizhiLimits;
 
 typedef struct WeizhiBytes {

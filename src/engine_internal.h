@@ -39,6 +39,17 @@ typedef struct WeizhiPending {
     char *error;
 } WeizhiPending;
 
+/* Built-in async VFS queue node (node_api.c). */
+typedef struct WeizhiAsyncJob {
+    struct WeizhiEngine *engine;
+    int64_t request_id;
+    WeizhiVfsOp op;
+    char *relpath;
+    char *relpath2;
+    WeizhiBytes in;
+    struct WeizhiAsyncJob *next;
+} WeizhiAsyncJob;
+
 struct WeizhiEngine {
     JSRuntime *rt;
     JSContext *ctx;
@@ -65,6 +76,15 @@ struct WeizhiEngine {
     int64_t next_request_id;
     pthread_mutex_t wake_mu;
     pthread_cond_t wake_cv;
+    /* Default async VFS worker pool (lazy-start; unused when host sets custom vfs_async). */
+    pthread_t *async_workers;
+    int async_worker_count;
+    WeizhiAsyncJob *async_queue_head;
+    WeizhiAsyncJob *async_queue_tail;
+    pthread_mutex_t async_mu;
+    pthread_cond_t async_cv;
+    int async_stop;
+    int async_pool_started;
     JSClassID buffer_class_id;
 };
 
@@ -77,6 +97,7 @@ Engine *weizhi_from_ctx(JSContext *ctx);
 int weizhi_install_node_api(Engine *engine);
 void weizhi_timers_clear(Engine *engine);
 void weizhi_pending_clear(Engine *engine);
+void weizhi_async_pool_shutdown(Engine *engine);
 int weizhi_fire_due_timers(Engine *engine);
 int weizhi_apply_completions(Engine *engine);
 void weizhi_wake(Engine *engine);

@@ -21,7 +21,13 @@ public final class WeizhiLimits {
     public long wasmMaxLinearBytes;
     /**
      * Max bytes for a single fs read or write payload (not total disk quota).
-     * Default 1 MiB. Over limit → error contains 「太大」.
+     * Default 1 MiB. Over limit → error contains "too large".
      */
     public long fsIoBytes;
+    /**
+     * Max in-flight async I/O workers for the default Java thread pool.
+     * Default 16. Excess work queues; does not fail the script.
+     * Ignored if the host passes a custom {@link java.util.concurrent.ExecutorService}.
+     */
+    public int maxAsyncIo;
 }
