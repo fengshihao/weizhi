@@ -1,0 +1,52 @@
+plugins {
+    id("com.android.application")
+}
+
+android {
+    namespace = "com.weizhi.smoke"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.weizhi.smoke"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += ["arm64-v8a"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        getByName("main") {
+            java.srcDir("../../java")
+            jniLibs.srcDir("src/main/jniLibs")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+}
+
+dependencies {
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+}
+
+tasks.register("copyNativeLib", Copy) {
+    description = "Copy arm64 libweizhijni.so built by scripts/build-android.sh"
+    from("../../build-android/arm64-v8a/libweizhijni.so")
+    into("src/main/jniLibs/arm64-v8a")
+    onlyIf { file("../../build-android/arm64-v8a/libweizhijni.so").exists() }
+}
+
+tasks.named("preBuild").configure { dependsOn("copyNativeLib") }
