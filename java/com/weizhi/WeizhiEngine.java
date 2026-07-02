@@ -1,9 +1,16 @@
 package com.weizhi;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -14,6 +21,7 @@ import java.util.concurrent.Executors;
 public final class WeizhiEngine implements AutoCloseable {
     /** Matches WEIZHI_DEFAULT_MAX_ASYNC_IO in weizhi.h. */
     private static final int DEFAULT_MAX_ASYNC_IO = 16;
+    private static final long DEFAULT_FS_IO = 1024L * 1024L;
 
     static {
         System.loadLibrary("weizhijni");
@@ -22,7 +30,10 @@ public final class WeizhiEngine implements AutoCloseable {
     private long nativeHandle;
     private final ExecutorService executor;
     private final boolean ownsExecutor;
+    private final long maxIoBytes;
     private String fsRoot;
+    private String[] fetchHostAllowlist;
+    private boolean fetchEnabled;
 
     public WeizhiEngine() {
         this(null, null);
@@ -38,6 +49,7 @@ public final class WeizhiEngine implements AutoCloseable {
 
     public WeizhiEngine(WeizhiLimits limits, ExecutorService executor) {
         int asyncIo = resolveAsyncIo(limits);
+        this.maxIoBytes = limits != null && limits.fsIoBytes > 0 ? limits.fsIoBytes : DEFAULT_FS_IO;
         if (executor != null) {
             this.executor = executor;
             this.ownsExecutor = false;
@@ -82,6 +94,20 @@ public final class WeizhiEngine implements AutoCloseable {
         if (nativeSetPackFolder(nativeHandle, folder) != 0) {
             throw new IllegalArgumentException("setPackFolder failed");
         }
+    }
+
+    /**
+     * Enable {@code globalThis.fetch}. Optional host suffix allowlist (e.g. {@code "example.com"});
+     * {@code null} allows any http(s) host. Agents get clear errors when blocked.
+     */
+    public void enableFetch(String[] hostSuffixAllowlist) {
+        this.fetchHostAllowlist = hostSuffixAllowlist;
+        this.fetchEnabled = true;
+        nativeInstallJavaHttp(nativeHandle);
+    }
+
+    public void enableFetch() {
+        enableFetch(null);
     }
 
     /**
@@ -130,6 +156,155 @@ public final class WeizhiEngine implements AutoCloseable {
         });
     }
 
+    /** Called from JNI: run HTTP on the thread pool, then complete_fetch. */
+    @SuppressWarnings("unused")
+    void onFetchAsync(long engine, long requestId, String method, String url, String headersJson, byte[] body) {
+        executor.execute(() -> {
+            if (!fetchEnabled) {
+                nativeCompleteFetch(engine, requestId, 0, null, null,
+                        "unsupported: fetch (call WeizhiEngine.enableFetch() on the host first)");
+                return;
+            }
+            try {
+                doFetch(engine, requestId, method, url, headersJson, body);
+            } catch (Exception e) {
+                String msg = e.getMessage() == null ? "fetch network error" : e.getMessage();
+                String hint = msg.toLowerCase(Locale.US).contains("permission")
+                        ? " (add android.permission.INTERNET to the app manifest)"
+                        : " (check URL, connectivity, host allowlist, and INTERNET permission)";
+                nativeCompleteFetch(engine, requestId, 0, null, null, "fetch failed: " + msg + hint);
+            }
+        });
+    }
+
+    private void doFetch(long engine, long requestId, String method, String url, String headersJson, byte[] body)
+            throws IOException {
+        URL parsed = new URL(url);
+        String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
+        if (fetchHostAllowlist != null && fetchHostAllowlist.length > 0) {
+            boolean allowed = false;
+            for (String suffix : fetchHostAllowlist) {
+                if (suffix == null || suffix.isEmpty()) {
+                    continue;
+                }
+                String s = suffix.toLowerCase(Locale.US);
+                if (host.equals(s) || host.endsWith("." + s)) {
+                    allowed = true;
+                    break;
+                }
+            }
+            if (!allowed) {
+                nativeCompleteFetch(engine, requestId, 0, null, null,
+                        "fetch blocked: host \"" + host + "\" is not allowlisted "
+                                + "(ask the host to widen enableFetch allowlist, or use an approved URL)");
+                return;
+            }
+        }
+
+        HttpURLConnection conn = (HttpURLConnection) parsed.openConnection();
+        conn.setConnectTimeout(10_000);
+        conn.setReadTimeout(30_000);
+        conn.setRequestMethod(method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US));
+        conn.setInstanceFollowRedirects(true);
+        if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
+            try {
+                // Minimal JSON object parse without org.json dependency: "key":"value" pairs only via simple scan.
+                applyHeadersLoose(conn, headersJson);
+            } catch (Exception e) {
+                nativeCompleteFetch(engine, requestId, 0, null, null,
+                        "bad argument: fetch headers must be a flat JSON object of string values");
+                return;
+            }
+        }
+        if (body != null && body.length > 0) {
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body);
+            }
+        }
+
+        int status = conn.getResponseCode();
+        InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+        if (stream == null) {
+            stream = conn.getInputStream();
+        }
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        if (stream != null) {
+            byte[] buf = new byte[8192];
+            int n;
+            long total = 0;
+            while ((n = stream.read(buf)) >= 0) {
+                total += n;
+                if (total > maxIoBytes) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "too large: fetch response exceeds " + maxIoBytes
+                                    + " bytes (raise WeizhiLimits.fsIoBytes or request a smaller payload)");
+                    return;
+                }
+                bos.write(buf, 0, n);
+            }
+        }
+        String headersOut = headersToJson(conn.getHeaderFields());
+        nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
+    }
+
+    private static void applyHeadersLoose(HttpURLConnection conn, String headersJson) {
+        // Expect {"a":"b","c":"d"} — enough for agent scripts.
+        String s = headersJson.trim();
+        if (!s.startsWith("{") || !s.endsWith("}")) {
+            throw new IllegalArgumentException("headers");
+        }
+        s = s.substring(1, s.length() - 1).trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        // Split on "," that are outside quotes — keep simple: split by ","
+        String[] parts = s.split(",");
+        for (String part : parts) {
+            int colon = part.indexOf(':');
+            if (colon < 0) {
+                continue;
+            }
+            String key = unquote(part.substring(0, colon).trim());
+            String val = unquote(part.substring(colon + 1).trim());
+            if (!key.isEmpty()) {
+                conn.setRequestProperty(key, val);
+            }
+        }
+    }
+
+    private static String unquote(String v) {
+        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
+            return v.substring(1, v.length() - 1);
+        }
+        return v;
+    }
+
+    private static String headersToJson(Map<String, java.util.List<String>> fields) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('{');
+        boolean first = true;
+        if (fields != null) {
+            for (Map.Entry<String, java.util.List<String>> e : fields.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null || e.getValue().isEmpty()) {
+                    continue;
+                }
+                if (!first) {
+                    sb.append(',');
+                }
+                first = false;
+                sb.append('"').append(escape(e.getKey().toLowerCase(Locale.US))).append('"').append(':');
+                sb.append('"').append(escape(e.getValue().get(0))).append('"');
+            }
+        }
+        sb.append('}');
+        return sb.toString();
+    }
+
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     @Override
     public void close() {
         if (nativeHandle != 0) {
@@ -155,5 +330,10 @@ public final class WeizhiEngine implements AutoCloseable {
 
     private native void nativeInstallJavaAsyncVfs(long handle);
 
+    private native void nativeInstallJavaHttp(long handle);
+
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
+
+    private static native void nativeCompleteFetch(long handle, long requestId, int status, String headersJson,
+                                                   byte[] body, String error);
 }

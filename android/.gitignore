@@ -2,6 +2,7 @@
 **/build/
 local.properties
 app/src/main/jniLibs/
+app/src/androidTest/assets/
 *.iml
 .idea/
 .cxx/

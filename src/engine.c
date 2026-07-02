@@ -410,28 +410,51 @@ static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     snprintf(wasm_file, sizeof(wasm_file), "%s.wasm", name);
     snprintf(aot_file, sizeof(aot_file), "%s.aot", name);
-    if (resolve_under(engine->pack_folder, wasm_file, path, sizeof(path)) != 0) {
-        if (resolve_under(engine->pack_folder, aot_file, path, sizeof(path)) == 0) {
-            JS_FreeCString(ctx, name);
-            return JS_ThrowTypeError(ctx, "this build cannot run aot packs");
+    {
+        int have_wasm = resolve_under(engine->pack_folder, wasm_file, path, sizeof(path)) == 0;
+        int have_aot = 0;
+        char aot_path[PATH_MAX];
+        if (!have_wasm) {
+            have_aot = resolve_under(engine->pack_folder, aot_file, aot_path, sizeof(aot_path)) == 0;
+            if (have_aot) {
+#if defined(WEIZHI_HAS_AOT) && WEIZHI_HAS_AOT
+                memcpy(path, aot_path, sizeof(path));
+#else
+                char msg[192];
+                JS_FreeCString(ctx, name);
+                snprintf(msg, sizeof(msg),
+                         "aot pack (this build only loads .wasm; provide %s.wasm or rebuild with "
+                         "WEIZHI_WAMR_AOT=ON)",
+                         aot_file);
+                return weizhi_throw_unsupported(ctx, msg);
+#endif
+            } else {
+                JS_FreeCString(ctx, name);
+                return JS_ThrowReferenceError(ctx, "pack not found");
+            }
         }
-        JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "pack not found");
     }
     bytes = read_file(path, &length, &error);
     if (bytes == NULL) {
         JS_FreeCString(ctx, name);
         return JS_ThrowInternalError(ctx, "%s", error);
     }
-    if (wasm_linear_bytes(bytes, length, &linear, &error) != 0) {
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowTypeError(ctx, "%s", error);
-    }
-    if (linear > engine->limits.wasm_max_linear_bytes) {
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowRangeError(ctx, "pack memory exceeds the limit");
+#if defined(WEIZHI_HAS_AOT) && WEIZHI_HAS_AOT
+    if (get_package_type(bytes, (uint32_t)length) == Wasm_Module_AoT) {
+        /* AOT packs skip wasm section linear-memory precheck; instantiate enforces runtime limits. */
+    } else
+#endif
+    {
+        if (wasm_linear_bytes(bytes, length, &linear, &error) != 0) {
+            free(bytes);
+            JS_FreeCString(ctx, name);
+            return JS_ThrowTypeError(ctx, "%s", error);
+        }
+        if (linear > engine->limits.wasm_max_linear_bytes) {
+            free(bytes);
+            JS_FreeCString(ctx, name);
+            return JS_ThrowRangeError(ctx, "pack memory exceeds the limit");
+        }
     }
     wasm_error[0] = '\0';
     module = wasm_runtime_load(bytes, (uint32_t)length, wasm_error, sizeof(wasm_error));
@@ -990,6 +1013,7 @@ void weizhi_pending_clear(Engine *engine) {
             JS_FreeValue(engine->ctx, engine->pending[i].reject);
             weizhi_bytes_free(&engine->pending[i].out);
             free(engine->pending[i].error);
+            free(engine->pending[i].headers_json);
             memset(&engine->pending[i], 0, sizeof(engine->pending[i]));
         }
     }
@@ -1031,7 +1055,9 @@ int weizhi_apply_completions(Engine *engine) {
         }
         pthread_mutex_unlock(&engine->wake_mu);
         if (p->ok) {
-            if (p->out.data != NULL) {
+            if (p->kind == WEIZHI_PENDING_FETCH) {
+                arg = weizhi_make_fetch_response(engine->ctx, p->http_status, p->headers_json, &p->out);
+            } else if (p->out.data != NULL) {
                 arg = weizhi_bytes_to_buffer(engine->ctx, p->out.data, p->out.len);
             } else {
                 arg = JS_UNDEFINED;
@@ -1047,6 +1073,7 @@ int weizhi_apply_completions(Engine *engine) {
         JS_FreeValue(engine->ctx, p->reject);
         weizhi_bytes_free(&p->out);
         free(p->error);
+        free(p->headers_json);
         memset(p, 0, sizeof(*p));
         applied++;
         if (JS_IsException(ret)) {
@@ -1173,6 +1200,7 @@ void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const Wei
         }
         p->completed = 1;
         p->ok = ok;
+        p->kind = WEIZHI_PENDING_BUFFER;
         if (ok && out != NULL && out->data != NULL && out->len > 0) {
             p->out.data = malloc(out->len);
             if (p->out.data != NULL) {
@@ -1189,6 +1217,59 @@ void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const Wei
     }
     pthread_cond_signal(&engine->wake_cv);
     pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_complete_fetch(WeizhiEngine *engine, int64_t request_id, int status, const char *headers_json,
+                           const WeizhiBytes *body, const char *error) {
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (!p->in_use || p->id != request_id || p->completed) {
+            continue;
+        }
+        p->completed = 1;
+        p->kind = WEIZHI_PENDING_FETCH;
+        if (error != NULL && error[0] != '\0') {
+            p->ok = 0;
+            p->error = strdup(error);
+            break;
+        }
+        p->ok = 1;
+        p->http_status = status;
+        p->headers_json = strdup(headers_json != NULL ? headers_json : "{}");
+        if (p->headers_json == NULL) {
+            p->ok = 0;
+            p->error = strdup("out of memory");
+            break;
+        }
+        if (body != NULL && body->data != NULL && body->len > 0) {
+            p->out.data = malloc(body->len);
+            if (p->out.data == NULL) {
+                p->ok = 0;
+                free(p->headers_json);
+                p->headers_json = NULL;
+                p->error = strdup("out of memory");
+                break;
+            }
+            memcpy(p->out.data, body->data, body->len);
+            p->out.len = body->len;
+        }
+        break;
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_set_http(WeizhiEngine *engine, WeizhiHttpAsyncFn async_fn, void *userdata) {
+    if (engine == NULL) {
+        return;
+    }
+    engine->http_async = async_fn;
+    engine->http_ud = userdata;
 }
 
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder) {

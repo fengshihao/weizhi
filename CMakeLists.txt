@@ -60,10 +60,18 @@ endif()
 # SIGSEGV handlers that collide with HotSpot and crash on weizhi_open (SIGILL).
 set(WAMR_DISABLE_HW_BOUND_CHECK 1)
 
-# Desktop and Android dev builds use the interpreter; switch to AOT for production mobile later.
+# Desktop and Android default to interpreter. Optional AOT runtime for mobile benchmarks:
+#   cmake -DWEIZHI_WAMR_AOT=ON ...
+option(WEIZHI_WAMR_AOT "Enable WAMR AOT runtime (load .aot packs; keep interpreter too)" OFF)
 set(WAMR_BUILD_INTERP 1)
 set(WAMR_BUILD_FAST_INTERP 1)
-set(WAMR_BUILD_AOT 0)
+if(WEIZHI_WAMR_AOT)
+    set(WAMR_BUILD_AOT 1)
+    add_compile_definitions(WEIZHI_HAS_AOT=1)
+    message(STATUS "WEIZHI_WAMR_AOT=ON (interpreter + AOT)")
+else()
+    set(WAMR_BUILD_AOT 0)
+endif()
 set(WAMR_BUILD_JIT 0)
 set(WAMR_BUILD_FAST_JIT 0)
 set(WAMR_BUILD_LIBC_WASI 0)

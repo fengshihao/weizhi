@@ -8,6 +8,8 @@
 
 static JavaVM *g_vm = NULL;
 static jmethodID g_async_mid = NULL;
+static jmethodID g_fetch_mid = NULL;
+static jobject g_http_thiz = NULL;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
@@ -188,5 +190,94 @@ JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeComplete(JNIEnv *env, 
     }
     weizhi_complete((WeizhiEngine *)(intptr_t)handle, (int64_t)request_id, ok ? 1 : 0, &bytes, err);
     weizhi_bytes_free(&bytes);
+    free(err);
+}
+
+static int java_http_async(WeizhiEngine *engine, int64_t request_id, const char *method, const char *url,
+                           const char *headers_json, const WeizhiBytes *body, void *userdata) {
+    JNIEnv *env = NULL;
+    jobject engine_obj = (jobject)userdata;
+    jstring jmethod;
+    jstring jurl;
+    jstring jheaders;
+    jbyteArray jbody = NULL;
+    int attached = 0;
+    (void)engine;
+    if (g_vm == NULL || engine_obj == NULL || g_fetch_mid == NULL) {
+        return -1;
+    }
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, (void **)&env, NULL) != 0) {
+            return -1;
+        }
+        attached = 1;
+    }
+    jmethod = (*env)->NewStringUTF(env, method != NULL ? method : "GET");
+    jurl = (*env)->NewStringUTF(env, url != NULL ? url : "");
+    jheaders = (*env)->NewStringUTF(env, headers_json != NULL ? headers_json : "{}");
+    if (body != NULL && body->data != NULL && body->len > 0) {
+        jbody = (*env)->NewByteArray(env, (jsize)body->len);
+        if (jbody != NULL) {
+            (*env)->SetByteArrayRegion(env, jbody, 0, (jsize)body->len, (const jbyte *)body->data);
+        }
+    }
+    (*env)->CallVoidMethod(env, engine_obj, g_fetch_mid, (jlong)(intptr_t)engine, (jlong)request_id, jmethod, jurl,
+                           jheaders, jbody);
+    if ((*env)->ExceptionCheck(env)) {
+        if (attached) {
+            (*g_vm)->DetachCurrentThread(g_vm);
+        }
+        return -1;
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+    return 0;
+}
+
+JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeInstallJavaHttp(JNIEnv *env, jobject thiz, jlong handle) {
+    WeizhiEngine *engine = (WeizhiEngine *)(intptr_t)handle;
+    jclass cls;
+    if (engine == NULL) {
+        return;
+    }
+    cls = (*env)->GetObjectClass(env, thiz);
+    g_fetch_mid = (*env)->GetMethodID(env, cls, "onFetchAsync",
+                                      "(JJLjava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)V");
+    if (g_http_thiz != NULL) {
+        (*env)->DeleteGlobalRef(env, g_http_thiz);
+    }
+    g_http_thiz = (*env)->NewGlobalRef(env, thiz);
+    weizhi_set_http(engine, java_http_async, g_http_thiz);
+}
+
+JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteFetch(JNIEnv *env, jclass clazz, jlong handle,
+                                                                       jlong request_id, jint status,
+                                                                       jstring headers_json, jbyteArray body,
+                                                                       jstring error) {
+    WeizhiBytes bytes;
+    char *headers = NULL;
+    char *err = NULL;
+    (void)clazz;
+    memset(&bytes, 0, sizeof(bytes));
+    if (body != NULL) {
+        jsize len = (*env)->GetArrayLength(env, body);
+        if (len > 0) {
+            bytes.data = malloc((size_t)len);
+            if (bytes.data != NULL) {
+                (*env)->GetByteArrayRegion(env, body, 0, len, (jbyte *)bytes.data);
+                bytes.len = (size_t)len;
+            }
+        }
+    }
+    if (headers_json != NULL) {
+        headers = jstring_to_utf8(env, headers_json);
+    }
+    if (error != NULL) {
+        err = jstring_to_utf8(env, error);
+    }
+    weizhi_complete_fetch((WeizhiEngine *)(intptr_t)handle, (int64_t)request_id, (int)status, headers, &bytes, err);
+    weizhi_bytes_free(&bytes);
+    free(headers);
     free(err);
 }

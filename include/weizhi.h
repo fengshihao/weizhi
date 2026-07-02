@@ -64,6 +64,11 @@ typedef int (*WeizhiVfsAsyncFn)(WeizhiEngine *engine, int64_t request_id, Weizhi
                                const char *relpath, const char *relpath2, const WeizhiBytes *in,
                                void *userdata);
 
+/* Async HTTP for globalThis.fetch. Return 0 if started; later call weizhi_complete_fetch. */
+typedef int (*WeizhiHttpAsyncFn)(WeizhiEngine *engine, int64_t request_id, const char *method,
+                                 const char *url, const char *headers_json, const WeizhiBytes *body,
+                                 void *userdata);
+
 typedef struct WeizhiResult {
     int ok;
     char *output_text;
@@ -81,7 +86,12 @@ int weizhi_set_pack_folder(WeizhiEngine *engine, const char *folder);
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder);
 /* Pass NULL for sync_fn / async_fn to keep that callback; userdata updates with any non-NULL callback. */
 void weizhi_set_vfs(WeizhiEngine *engine, WeizhiVfsSyncFn sync_fn, WeizhiVfsAsyncFn async_fn, void *userdata);
+/* Install host HTTP. Without this, fetch() fails with an agent-facing unsupported hint. */
+void weizhi_set_http(WeizhiEngine *engine, WeizhiHttpAsyncFn async_fn, void *userdata);
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error);
+/* Complete a fetch() promise. headers_json is a JSON object string (may be "{}"). */
+void weizhi_complete_fetch(WeizhiEngine *engine, int64_t request_id, int status, const char *headers_json,
+                           const WeizhiBytes *body, const char *error);
 void weizhi_bytes_free(WeizhiBytes *bytes);
 void weizhi_set_log(WeizhiEngine *engine, WeizhiLogFn fn, void *userdata);
 void weizhi_set_run_id(WeizhiEngine *engine, const char *run_id);

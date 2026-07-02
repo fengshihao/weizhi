@@ -1133,6 +1133,262 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
     return NULL;
 }
 
+/* Response body held on the response object via __body Buffer. */
+static JSValue js_response_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue body_val;
+    BufferData *buf;
+    Engine *engine = weizhi_from_ctx(ctx);
+    JSValue promise;
+    JSValue funcs[2];
+    JSValue text;
+    (void)argc;
+    (void)argv;
+    body_val = JS_GetPropertyStr(ctx, this_val, "__body");
+    if (JS_IsException(body_val)) {
+        return body_val;
+    }
+    buf = JS_GetOpaque(body_val, engine->buffer_class_id);
+    if (buf == NULL) {
+        JS_FreeValue(ctx, body_val);
+        return weizhi_throw_bad_arg(ctx, "Response.text", "missing body");
+    }
+    text = JS_NewStringLen(ctx, (const char *)buf->bytes, buf->len);
+    JS_FreeValue(ctx, body_val);
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, text);
+        return promise;
+    }
+    {
+        JSValue ret = JS_Call(ctx, funcs[0], JS_UNDEFINED, 1, &text);
+        JS_FreeValue(ctx, ret);
+    }
+    JS_FreeValue(ctx, text);
+    JS_FreeValue(ctx, funcs[0]);
+    JS_FreeValue(ctx, funcs[1]);
+    return promise;
+}
+
+static JSValue js_response_array_buffer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue body_val;
+    JSValue funcs[2];
+    JSValue promise;
+    JSValue ret;
+    (void)argc;
+    (void)argv;
+    body_val = JS_GetPropertyStr(ctx, this_val, "__body");
+    if (JS_IsException(body_val)) {
+        return body_val;
+    }
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, body_val);
+        return promise;
+    }
+    ret = JS_Call(ctx, funcs[0], JS_UNDEFINED, 1, &body_val);
+    JS_FreeValue(ctx, ret);
+    JS_FreeValue(ctx, body_val);
+    JS_FreeValue(ctx, funcs[0]);
+    JS_FreeValue(ctx, funcs[1]);
+    return promise;
+}
+
+static JSValue js_response_json(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue text_promise;
+    JSValue then_fn;
+    JSValue parser;
+    JSValue result;
+    (void)argc;
+    (void)argv;
+    text_promise = js_response_text(ctx, this_val, 0, NULL);
+    if (JS_IsException(text_promise)) {
+        return text_promise;
+    }
+    parser = JS_Eval(ctx,
+                     "(t)=>JSON.parse(t)",
+                     strlen("(t)=>JSON.parse(t)"),
+                     "<fetch-json>",
+                     JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(parser)) {
+        JS_FreeValue(ctx, text_promise);
+        return parser;
+    }
+    then_fn = JS_GetPropertyStr(ctx, text_promise, "then");
+    result = JS_Call(ctx, then_fn, text_promise, 1, &parser);
+    JS_FreeValue(ctx, then_fn);
+    JS_FreeValue(ctx, parser);
+    JS_FreeValue(ctx, text_promise);
+    return result;
+}
+
+JSValue weizhi_make_fetch_response(JSContext *ctx, int status, const char *headers_json, const WeizhiBytes *body) {
+    JSValue obj = JS_NewObject(ctx);
+    JSValue headers_obj;
+    JSValue body_buf;
+    int ok = status >= 200 && status < 300;
+    if (JS_IsException(obj)) {
+        return obj;
+    }
+    JS_SetPropertyStr(ctx, obj, "status", JS_NewInt32(ctx, status));
+    JS_SetPropertyStr(ctx, obj, "ok", JS_NewBool(ctx, ok));
+    JS_SetPropertyStr(ctx, obj, "statusText", JS_NewString(ctx, ok ? "OK" : "Error"));
+    if (headers_json != NULL && headers_json[0] != '\0') {
+        headers_obj = JS_ParseJSON(ctx, headers_json, strlen(headers_json), "<fetch-headers>");
+        if (JS_IsException(headers_obj)) {
+            JS_FreeValue(ctx, headers_obj);
+            headers_obj = JS_NewObject(ctx);
+        }
+    } else {
+        headers_obj = JS_NewObject(ctx);
+    }
+    JS_SetPropertyStr(ctx, obj, "headers", headers_obj);
+    body_buf = weizhi_bytes_to_buffer(ctx, body != NULL ? body->data : NULL, body != NULL ? body->len : 0);
+    JS_SetPropertyStr(ctx, obj, "__body", body_buf);
+    JS_SetPropertyStr(ctx, obj, "text", JS_NewCFunction(ctx, js_response_text, "text", 0));
+    JS_SetPropertyStr(ctx, obj, "json", JS_NewCFunction(ctx, js_response_json, "json", 0));
+    JS_SetPropertyStr(ctx, obj, "arrayBuffer", JS_NewCFunction(ctx, js_response_array_buffer, "arrayBuffer", 0));
+    return obj;
+}
+
+static char *headers_object_to_json(JSContext *ctx, JSValueConst headers_val) {
+    JSValue json;
+    const char *cstr;
+    char *copy;
+    if (JS_IsUndefined(headers_val) || JS_IsNull(headers_val)) {
+        return strdup("{}");
+    }
+    if (!JS_IsObject(headers_val)) {
+        return NULL;
+    }
+    json = JS_JSONStringify(ctx, headers_val, JS_UNDEFINED, JS_UNDEFINED);
+    if (JS_IsException(json)) {
+        return NULL;
+    }
+    cstr = JS_ToCString(ctx, json);
+    JS_FreeValue(ctx, json);
+    if (cstr == NULL) {
+        return NULL;
+    }
+    copy = strdup(cstr);
+    JS_FreeCString(ctx, cstr);
+    return copy;
+}
+
+static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    JSValue funcs[2];
+    JSValue promise;
+    JSValue init = JS_UNDEFINED;
+    const char *url = NULL;
+    const char *method = "GET";
+    char *method_owned = NULL;
+    char *headers_json = NULL;
+    WeizhiBytes body;
+    int64_t id;
+    int rc;
+    (void)this_val;
+    memset(&body, 0, sizeof(body));
+
+    if (engine->http_async == NULL) {
+        return weizhi_throw_unsupported(
+            ctx,
+            "fetch (network is disabled until the host installs HTTP; use local fs, or ask the host "
+            "to call weizhi_set_http / enableFetch)");
+    }
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return weizhi_throw_bad_arg(ctx, "fetch", "url string required (example: await fetch(\"https://...\"))");
+    }
+    url = JS_ToCString(ctx, argv[0]);
+    if (url == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "bad argument: fetch: url must start with http:// or https:// (got a non-HTTP scheme; "
+                 "for local files use fs.readFileSync instead)");
+        JS_FreeCString(ctx, url);
+        return JS_ThrowTypeError(ctx, "%s", msg);
+    }
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue method_val;
+        JSValue headers_val;
+        JSValue body_val;
+        init = argv[1];
+        method_val = JS_GetPropertyStr(ctx, init, "method");
+        if (JS_IsString(method_val)) {
+            const char *m = JS_ToCString(ctx, method_val);
+            if (m != NULL) {
+                method_owned = strdup(m);
+                JS_FreeCString(ctx, m);
+                if (method_owned != NULL) {
+                    method = method_owned;
+                }
+            }
+        }
+        JS_FreeValue(ctx, method_val);
+        headers_val = JS_GetPropertyStr(ctx, init, "headers");
+        headers_json = headers_object_to_json(ctx, headers_val);
+        JS_FreeValue(ctx, headers_val);
+        if (headers_json == NULL) {
+            headers_json = strdup("{}");
+        }
+        body_val = JS_GetPropertyStr(ctx, init, "body");
+        if (!JS_IsUndefined(body_val) && !JS_IsNull(body_val)) {
+            rc = bytes_from_js(ctx, body_val, &body, engine->limits.fs_io_bytes);
+            if (rc == -2) {
+                JS_FreeValue(ctx, body_val);
+                JS_FreeCString(ctx, url);
+                free(method_owned);
+                free(headers_json);
+                return JS_ThrowRangeError(
+                    ctx,
+                    "too large: fetch request body exceeds the limit (raise WeizhiLimits.fsIoBytes or send less data)");
+            }
+            if (rc != 0) {
+                JS_FreeValue(ctx, body_val);
+                JS_FreeCString(ctx, url);
+                free(method_owned);
+                free(headers_json);
+                return weizhi_throw_bad_arg(ctx, "fetch", "body must be a string or Buffer");
+            }
+        }
+        JS_FreeValue(ctx, body_val);
+    } else {
+        headers_json = strdup("{}");
+    }
+
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        JS_FreeCString(ctx, url);
+        free(method_owned);
+        free(headers_json);
+        weizhi_bytes_free(&body);
+        return promise;
+    }
+    id = weizhi_pending_add(engine, funcs[0], funcs[1]);
+    if (id < 0) {
+        JS_FreeValue(ctx, funcs[0]);
+        JS_FreeValue(ctx, funcs[1]);
+        JS_FreeValue(ctx, promise);
+        JS_FreeCString(ctx, url);
+        free(method_owned);
+        free(headers_json);
+        weizhi_bytes_free(&body);
+        return JS_ThrowRangeError(ctx, "too many async requests");
+    }
+    rc = engine->http_async(engine, id, method, url, headers_json, &body, engine->http_ud);
+    JS_FreeCString(ctx, url);
+    free(method_owned);
+    free(headers_json);
+    weizhi_bytes_free(&body);
+    if (rc != 0) {
+        weizhi_complete_fetch(engine, id, 0, NULL, NULL,
+                             "fetch failed to start (host HTTP callback returned an error; check network permissions)");
+    }
+    return promise;
+}
+
 int weizhi_install_node_api(Engine *engine) {
     JSClassDef class_def;
     JSValue global;
@@ -1149,6 +1405,7 @@ int weizhi_install_node_api(Engine *engine) {
 
     global = JS_GetGlobalObject(engine->ctx);
     JS_SetPropertyStr(engine->ctx, global, "require", JS_NewCFunction(engine->ctx, js_require, "require", 1));
+    JS_SetPropertyStr(engine->ctx, global, "fetch", JS_NewCFunction(engine->ctx, js_fetch, "fetch", 2));
     JS_SetPropertyStr(engine->ctx, global, "setTimeout",
                       JS_NewCFunction(engine->ctx, js_set_timeout, "setTimeout", 2));
     JS_SetPropertyStr(engine->ctx, global, "clearTimeout",

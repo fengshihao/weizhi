@@ -12,6 +12,7 @@ Agent-facing sandbox contract (copy into system prompts): [AGENT_SANDBOX_PROMPT.
 - Agents have one entry point: run a JS snippet. Capability packs are loaded from JS via `loadPack("name")`. `loadScript("file.js")` loads plain JS libraries.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
+- **`fetch`**: C provides `globalThis.fetch` (Promise + Response-like `text`/`json`/`arrayBuffer`). Real HTTP is host-installed via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
 
 ## Memory
@@ -40,8 +41,9 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 - **JS runs on one thread only** (the thread that called `runJs`). Concurrent entry into the same engine’s QuickJS is forbidden.
 - Sync host functions (default `addFunction`, `fs.*Sync`) still run on the JS thread to completion.
-- **Async host** (`fs.promises`, future `fetch`): run on a bounded worker pool; when done, enqueue completion and wake `runJs`; **never** call QuickJS directly from pool threads.
+- **Async host** (`fs.promises`, `fetch`): run on a bounded worker pool; when done, enqueue completion and wake `runJs`; **never** call QuickJS directly from pool threads.
 - Default in-flight async I/O concurrency is **16** (`WeizhiLimits.max_async_io` / Java `maxAsyncIo`; `0` = default). Extra jobs **queue and wait**; they do not fail the script. Hosts may set `1` (fully serial) or raise the limit. A custom `weizhi_set_vfs` async callback / custom Java `ExecutorService` is host-managed and bypasses this default pool.
+- Optional Android AOT: build with `-DWEIZHI_WAMR_AOT=ON` / `WEIZHI_WAMR_AOT=1 ./scripts/build-android.sh` to load `.aot` packs (still prefers `.wasm` when both exist). Dev default stays interpreter-only.
 - One engine runs one script at a time.
   - Same thread calls `runJs` again: fails with `again` in the error.
   - Another thread calls `runJs`: fails with `busy` in the error.
@@ -81,6 +83,9 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |
 | Timeout / memory / stack | `timeout` / `memory` / `stack` |
+| Fetch disabled | `unsupported: fetch (... enableFetch / weizhi_set_http ...)` |
+| Fetch host blocked | `fetch blocked: host "..." is not allowlisted ...` |
+| Fetch body/response too big | `too large: fetch ...` |
 
 Hosts should pass the full `error` (and `error_location`) back to the orchestrating agent; do not swallow or rewrite into a vague “failed”.
 

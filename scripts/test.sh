@@ -20,6 +20,7 @@ usage: ./scripts/test.sh [desktop|android]
   android    build arm64 libweizhijni.so and run instrumented Java tests on device
 
   ./scripts/test.sh android --skip-native   reuse existing .so
+  ./scripts/test.sh android --aot           AOT-enabled .so + add.aot bench (needs wamrc)
 EOF
         exit 0
         ;;

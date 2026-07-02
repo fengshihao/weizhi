@@ -14,6 +14,8 @@
 #define ST_CLOSED 2
 #define WEIZHI_MAX_TIMERS 64
 #define WEIZHI_MAX_PENDING 64
+#define WEIZHI_PENDING_BUFFER 0
+#define WEIZHI_PENDING_FETCH 1
 
 typedef struct HostFn {
     char *name;
@@ -33,6 +35,9 @@ typedef struct WeizhiPending {
     int in_use;
     int completed;
     int ok;
+    int kind;
+    int http_status;
+    char *headers_json;
     JSValue resolve;
     JSValue reject;
     WeizhiBytes out;
@@ -66,6 +71,8 @@ struct WeizhiEngine {
     WeizhiVfsAsyncFn vfs_async;
     void *vfs_ud;
     void *vfs_async_ud;
+    WeizhiHttpAsyncFn http_async;
+    void *http_ud;
     int seq;
     int64_t deadline_ms;
     pthread_t owner;
@@ -108,5 +115,7 @@ JSValue weizhi_bytes_to_buffer(JSContext *ctx, const unsigned char *bytes, size_
 JSValue weizhi_throw_unsupported(JSContext *ctx, const char *what);
 JSValue weizhi_throw_bad_arg(JSContext *ctx, const char *api, const char *detail);
 JSValue weizhi_guard_module(JSContext *ctx, JSValue obj, const char *ns);
+JSValue weizhi_make_fetch_response(JSContext *ctx, int status, const char *headers_json,
+                                   const WeizhiBytes *body);
 
 #endif

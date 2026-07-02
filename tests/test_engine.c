@@ -392,6 +392,7 @@ static void test_missing_and_illegal_pack(void) {
     result = weizhi_run_js(engine, "loadPack(\"old\")", 1000);
     EXPECT(result.ok == 0);
     EXPECT(result.error != NULL && strstr(result.error, "aot") != NULL);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported") != NULL);
     weizhi_result_free(&result);
     weizhi_close(engine);
     free(dir);
@@ -788,6 +789,62 @@ static void test_agent_precise_errors(void) {
     EXPECT(result.ok == 0);
     EXPECT(result.error != NULL && strstr(result.error, "unsupported: process.exit") != NULL);
     weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fetch('https://example.com')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: fetch") != NULL);
+    EXPECT(result.error != NULL && strstr(result.error, "enableFetch") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+static int mock_http_async(WeizhiEngine *engine, int64_t request_id, const char *method, const char *url,
+                           const char *headers_json, const WeizhiBytes *body, void *userdata) {
+    WeizhiBytes out;
+    const char *payload = "{\"hello\":\"world\"}";
+    (void)method;
+    (void)headers_json;
+    (void)body;
+    (void)userdata;
+    if (url != NULL && strstr(url, "blocked.example") != NULL) {
+        weizhi_complete_fetch(engine, request_id, 0, NULL, NULL,
+                              "fetch blocked: host \"blocked.example\" is not allowlisted");
+        return 0;
+    }
+    memset(&out, 0, sizeof(out));
+    out.len = strlen(payload);
+    out.data = (unsigned char *)malloc(out.len);
+    if (out.data == NULL) {
+        weizhi_complete_fetch(engine, request_id, 0, NULL, NULL, "out of memory");
+        return 0;
+    }
+    memcpy(out.data, payload, out.len);
+    weizhi_complete_fetch(engine, request_id, 200, "{\"content-type\":\"application/json\"}", &out, NULL);
+    weizhi_bytes_free(&out);
+    return 0;
+}
+
+static void test_fetch_with_host(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    weizhi_set_http(engine, mock_http_async, NULL);
+    result = weizhi_run_js(engine,
+                          "const r = await fetch('https://ok.example/api');"
+                          "const t = await r.text();"
+                          "({ok:r.ok,status:r.status,body:t})",
+                          3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"ok\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"status\":200") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "hello") != NULL);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "await fetch('https://blocked.example/')", 3000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "fetch blocked") != NULL);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "await fetch('/local/path')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "http://") != NULL);
+    weizhi_result_free(&result);
     weizhi_close(engine);
 }
 
@@ -818,6 +875,7 @@ int main(void) {
     test_promise_all_parallel();
     test_async_io_serializes();
     test_agent_precise_errors();
+    test_fetch_with_host();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);
         return 1;
