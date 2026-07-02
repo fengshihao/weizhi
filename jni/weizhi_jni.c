@@ -33,20 +33,15 @@ static char *jstring_to_utf8(JNIEnv *env, jstring str) {
 }
 
 JNIEXPORT jlong JNICALL Java_com_weizhi_WeizhiEngine_nativeOpen(JNIEnv *env, jclass clazz, jlong js_heap,
-                                                               jlong js_stack, jint max_packs, jint max_hosts,
-                                                               jlong wasm_stack, jlong wasm_heap, jlong wasm_linear,
-                                                               jlong fs_io, jint max_async_io) {
+                                                               jlong js_stack, jint max_hosts, jlong fs_io,
+                                                               jint max_async_io) {
     WeizhiLimits limits;
     (void)env;
     (void)clazz;
     memset(&limits, 0, sizeof(limits));
     limits.js_heap_bytes = (size_t)js_heap;
     limits.js_stack_bytes = (size_t)js_stack;
-    limits.max_packs = (int)max_packs;
     limits.max_host_functions = (int)max_hosts;
-    limits.wasm_stack_bytes = (size_t)wasm_stack;
-    limits.wasm_heap_bytes = (size_t)wasm_heap;
-    limits.wasm_max_linear_bytes = (size_t)wasm_linear;
     limits.fs_io_bytes = (size_t)fs_io;
     limits.max_async_io = (int)max_async_io;
     return (jlong)(intptr_t)weizhi_open(&limits);
@@ -71,15 +66,15 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetFsRoot(JNIEnv *env,
     return rc;
 }
 
-JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetPackFolder(JNIEnv *env, jclass clazz, jlong handle,
-                                                                      jstring folder) {
+JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetScriptFolder(JNIEnv *env, jclass clazz, jlong handle,
+                                                                         jstring folder) {
     char *path = jstring_to_utf8(env, folder);
     int rc;
     (void)clazz;
     if (path == NULL) {
         return -1;
     }
-    rc = weizhi_set_pack_folder((WeizhiEngine *)(intptr_t)handle, path);
+    rc = weizhi_set_script_folder((WeizhiEngine *)(intptr_t)handle, path);
     free(path);
     return rc;
 }

@@ -8,11 +8,7 @@
 #define WEIZHI_DEFAULT_JS_HEAP_BYTES (8u * 1024u * 1024u)
 #define WEIZHI_DEFAULT_JS_STACK_BYTES (256u * 1024u)
 #define WEIZHI_DEFAULT_TIMEOUT_MS 3000
-#define WEIZHI_DEFAULT_MAX_PACKS 4
 #define WEIZHI_DEFAULT_MAX_HOST_FUNCTIONS 32
-#define WEIZHI_DEFAULT_WASM_STACK_BYTES (64u * 1024u)
-#define WEIZHI_DEFAULT_WASM_HEAP_BYTES (64u * 1024u)
-#define WEIZHI_DEFAULT_WASM_MAX_LINEAR_BYTES (2u * 1024u * 1024u)
 /* Max bytes for one fs read OR one fs write payload (not workspace total size). */
 #define WEIZHI_DEFAULT_FS_IO_BYTES (1u * 1024u * 1024u)
 /* Max in-flight default async VFS jobs (extra work queues; does not fail). */
@@ -24,11 +20,7 @@ typedef struct WeizhiEngine WeizhiEngine;
 typedef struct WeizhiLimits {
     size_t js_heap_bytes;         /* JS heap (strings/objects). Default 8MB. Over → "memory" */
     size_t js_stack_bytes;        /* JS stack. Default 256KB. Over → "stack" */
-    int max_packs;                /* Loaded Wasm packs. Default 4. Over → "too many" */
     int max_host_functions;       /* addFunction cap. Default 32 */
-    size_t wasm_stack_bytes;      /* Per-pack call stack. Default 64KB */
-    size_t wasm_heap_bytes;       /* Per-pack internal heap. Default 64KB */
-    size_t wasm_max_linear_bytes; /* Pack linear memory request max. Default 2MB. Over → "memory" */
     size_t fs_io_bytes;           /* Single fs read/write size. Default 1MB. Over → "too large" */
     int max_async_io;             /* In-flight default async I/O workers. Default 16. Excess queues. */
 } WeizhiLimits;
@@ -81,7 +73,8 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits);
 /* Returns -1 while a script is running; engine stays usable. 0 on close; pointer is invalid after. */
 int weizhi_close(WeizhiEngine *engine);
 int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn, void *userdata);
-int weizhi_set_pack_folder(WeizhiEngine *engine, const char *folder);
+/* Folder for loadScript JS libs (leaf filenames only; resolved under this root). */
+int weizhi_set_script_folder(WeizhiEngine *engine, const char *folder);
 /* Workspace sandbox root. If no custom VFS is set, uses the built-in POSIX impl (thread-pool async). */
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder);
 /* Pass NULL for sync_fn / async_fn to keep that callback; userdata updates with any non-NULL callback. */

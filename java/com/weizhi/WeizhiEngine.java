@@ -60,11 +60,7 @@ public final class WeizhiEngine implements AutoCloseable {
         this.nativeHandle = nativeOpen(
                 limits == null ? 0 : limits.jsHeapBytes,
                 limits == null ? 0 : limits.jsStackBytes,
-                limits == null ? 0 : limits.maxPacks,
                 limits == null ? 0 : limits.maxHostFunctions,
-                limits == null ? 0 : limits.wasmStackBytes,
-                limits == null ? 0 : limits.wasmHeapBytes,
-                limits == null ? 0 : limits.wasmMaxLinearBytes,
                 limits == null ? 0 : limits.fsIoBytes,
                 limits == null ? 0 : limits.maxAsyncIo);
         if (this.nativeHandle == 0) {
@@ -90,9 +86,10 @@ public final class WeizhiEngine implements AutoCloseable {
         nativeInstallJavaAsyncVfs(nativeHandle);
     }
 
-    public void setPackFolder(String folder) {
-        if (nativeSetPackFolder(nativeHandle, folder) != 0) {
-            throw new IllegalArgumentException("setPackFolder failed");
+    /** Folder for {@code loadScript("file.js")} libraries (leaf names only). */
+    public void setScriptFolder(String folder) {
+        if (nativeSetScriptFolder(nativeHandle, folder) != 0) {
+            throw new IllegalArgumentException("setScriptFolder failed");
         }
     }
 
@@ -316,15 +313,14 @@ public final class WeizhiEngine implements AutoCloseable {
         }
     }
 
-    private static native long nativeOpen(long jsHeapBytes, long jsStackBytes, int maxPacks, int maxHostFunctions,
-                                         long wasmStackBytes, long wasmHeapBytes, long wasmMaxLinearBytes,
+    private static native long nativeOpen(long jsHeapBytes, long jsStackBytes, int maxHostFunctions,
                                          long fsIoBytes, int maxAsyncIo);
 
     private static native void nativeClose(long handle);
 
     private static native int nativeSetFsRoot(long handle, String folder);
 
-    private static native int nativeSetPackFolder(long handle, String folder);
+    private static native int nativeSetScriptFolder(long handle, String folder);
 
     private static native String nativeRunJs(long handle, String source, int timeoutMs);
 

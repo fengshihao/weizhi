@@ -1,40 +1,27 @@
 package com.weizhi;
 
 import android.content.Context;
-import android.util.Log;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * On-device JNI smoke + pack microbench (interpreter .wasm; optional .aot when present).
+ * On-device JNI smoke: arithmetic, fs, loadScript, fetch hints.
  */
 @RunWith(AndroidJUnit4.class)
 public final class WeizhiJniInstrumentedTest {
-    private static final String BENCH_TAG = "weizhi-bench";
-    private static final int BENCH_CALLS = 1000;
-
-    /* (func (export "add") (param i32 i32) (result i32) (i32.add)) — same as tests/test_engine.c */
-    private static final byte[] ADD_WASM = new byte[] {
-            0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
-            0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09,
-            0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
-    };
-
     @Test
     public void jniSmoke() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -71,105 +58,16 @@ public final class WeizhiJniInstrumentedTest {
     }
 
     @Test
-    public void loadPackWasm() throws Exception {
-        File packDir = newPackDir("pack-wasm");
-        writeBytes(new File(packDir, "add.wasm"), ADD_WASM);
-        try (WeizhiEngine engine = new WeizhiEngine()) {
-            engine.setPackFolder(packDir.getAbsolutePath());
-            assertEquals("42", engine.runJs("const p = loadPack(\"add\"); p.add(20, 22)", 2000));
-        }
-    }
-
-    @Test
-    public void benchPackWasm() throws Exception {
-        File packDir = newPackDir("bench-wasm");
-        writeBytes(new File(packDir, "add.wasm"), ADD_WASM);
-        runPackBench("wasm", packDir);
-    }
-
-    @Test
-    public void loadPackAot() throws Exception {
-        File aot = resolveBundledAot();
-        Assume.assumeTrue("add.aot not bundled (build with WEIZHI_WAMR_AOT=1)", aot != null && aot.isFile());
-
-        File packDir = newPackDir("pack-aot");
-        Files.copy(aot.toPath(), new File(packDir, "add.aot").toPath());
-        try (WeizhiEngine engine = new WeizhiEngine()) {
-            engine.setPackFolder(packDir.getAbsolutePath());
-            assertEquals("42", engine.runJs("const p = loadPack(\"add\"); p.add(20, 22)", 2000));
-        }
-    }
-
-    @Test
-    public void benchPackAot() throws Exception {
-        File aot = resolveBundledAot();
-        Assume.assumeTrue("add.aot not bundled (build with WEIZHI_WAMR_AOT=1)", aot != null && aot.isFile());
-
-        File packDir = newPackDir("bench-aot");
-        Files.copy(aot.toPath(), new File(packDir, "add.aot").toPath());
-        runPackBench("aot", packDir);
-    }
-
-    private static void runPackBench(String kind, File packDir) throws Exception {
-        try (WeizhiEngine engine = new WeizhiEngine()) {
-            engine.setPackFolder(packDir.getAbsolutePath());
-
-            long t0 = System.nanoTime();
-            assertEquals("42", engine.runJs("globalThis.__p = loadPack(\"add\"); __p.add(20, 22)", 5000));
-            long loadMs = (System.nanoTime() - t0) / 1_000_000L;
-
-            t0 = System.nanoTime();
-            String out = engine.runJs(
-                    "var s=0; for (var i=0;i<" + BENCH_CALLS + ";i++) s+=__p.add(i,1); s",
-                    30_000);
-            long callTotalMs = (System.nanoTime() - t0) / 1_000_000L;
-            double callAvgUs = (callTotalMs * 1000.0) / BENCH_CALLS;
-
-            Log.i(BENCH_TAG,
-                    String.format(
-                            "kind=%s pack_load_ms=%d pack_call_total_ms=%d pack_call_avg_us=%.2f calls=%d result=%s",
-                            kind, loadMs, callTotalMs, callAvgUs, BENCH_CALLS, out));
-        }
-    }
-
-    private static File newPackDir(String name) {
+    public void loadScript() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File dir = new File(context.getCacheDir(), "weizhi-" + name + "-" + System.currentTimeMillis());
-        assertTrue(dir.mkdirs());
-        return dir;
-    }
-
-    private static void writeBytes(File file, byte[] bytes) throws IOException {
-        try (FileOutputStream out = new FileOutputStream(file)) {
-            out.write(bytes);
+        File scriptDir = new File(context.getCacheDir(), "weizhi-scripts-" + System.currentTimeMillis());
+        assertTrue(scriptDir.mkdirs());
+        writeBytes(new File(scriptDir, "util.js"),
+                "globalThis.inc = function(x){ return x + 1; }; 0".getBytes(StandardCharsets.UTF_8));
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setScriptFolder(scriptDir.getAbsolutePath());
+            assertEquals("42", engine.runJs("loadScript(\"util.js\"); inc(41)", 2000));
         }
-    }
-
-    /** Prefer assets/add.aot, then /data/local/tmp/weizhi-add.aot. */
-    private static File resolveBundledAot() throws IOException {
-        Context context = InstrumentationRegistry.getInstrumentation().getContext();
-        try {
-            InputStream in = context.getAssets().open("add.aot");
-            File out = new File(context.getCacheDir(), "bundled-add.aot");
-            try (FileOutputStream fos = new FileOutputStream(out)) {
-                byte[] buf = new byte[4096];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    fos.write(buf, 0, n);
-                }
-            }
-            in.close();
-            if (out.length() > 0) {
-                return out;
-            }
-        } catch (IOException ignored) {
-            /* asset missing when AOT fixture was not packaged */
-        }
-        File fromRepo = new File("/data/local/tmp/weizhi-add.aot");
-        if (fromRepo.isFile() && fromRepo.length() > 0) {
-            return fromRepo;
-        }
-        return null;
     }
 
     @Test
@@ -195,6 +93,12 @@ public final class WeizhiJniInstrumentedTest {
                     20_000);
             assertTrue(out.contains("\"status\""));
             assertTrue(out.contains("\"len\""));
+        }
+    }
+
+    private static void writeBytes(File file, byte[] bytes) throws IOException {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(bytes);
         }
     }
 }

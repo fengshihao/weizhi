@@ -1,7 +1,5 @@
 #include "engine_internal.h"
 
-#include "wasm_export.h"
-
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -9,26 +7,7 @@
 #include <string.h>
 #include <time.h>
 
-#define MAX_WASM_FILE_BYTES (16u * 1024u * 1024u)
-#define MAX_EXPORTS 64
-#define MAX_I32_PARAMS 8
-
-typedef struct PackInst {
-    Engine *engine;
-    wasm_module_t module;
-    wasm_module_inst_t inst;
-    wasm_exec_env_t exec;
-    uint8_t *bytes;
-} PackInst;
-
-static JSClassID g_pack_class_id;
-static pthread_once_t g_class_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t g_wamr_mu = PTHREAD_MUTEX_INITIALIZER;
-static int g_wamr_refs = 0;
-
-static void init_pack_class_id(void) {
-    JS_NewClassID(&g_pack_class_id);
-}
+#define MAX_SCRIPT_FILE_BYTES (16u * 1024u * 1024u)
 
 int64_t weizhi_now_ms(void) {
     struct timespec ts;
@@ -42,33 +21,6 @@ Engine *weizhi_from_ctx(JSContext *ctx) {
 
 static int64_t now_ms(void) {
     return weizhi_now_ms();
-}
-
-static int wamr_acquire(void) {
-    int rc = 0;
-    RuntimeInitArgs args;
-    pthread_mutex_lock(&g_wamr_mu);
-    if (g_wamr_refs == 0) {
-        memset(&args, 0, sizeof(args));
-        args.mem_alloc_type = Alloc_With_System_Allocator;
-        if (!wasm_runtime_full_init(&args)) {
-            rc = -1;
-        }
-    }
-    if (rc == 0) {
-        g_wamr_refs++;
-    }
-    pthread_mutex_unlock(&g_wamr_mu);
-    return rc;
-}
-
-static void wamr_release(void) {
-    pthread_mutex_lock(&g_wamr_mu);
-    g_wamr_refs--;
-    if (g_wamr_refs == 0) {
-        wasm_runtime_destroy();
-    }
-    pthread_mutex_unlock(&g_wamr_mu);
 }
 
 static char *quote_json(const char *text) {
@@ -192,18 +144,18 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     long size;
     uint8_t *buf;
     if (file == NULL) {
-        *error = "pack not found";
+        *error = "script not found";
         return NULL;
     }
     if (fseek(file, 0, SEEK_END) != 0) {
         fclose(file);
-        *error = "pack not found";
+        *error = "script not found";
         return NULL;
     }
     size = ftell(file);
-    if (size < 0 || (size_t)size > MAX_WASM_FILE_BYTES) {
+    if (size < 0 || (size_t)size > MAX_SCRIPT_FILE_BYTES) {
         fclose(file);
-        *error = "pack file too large";
+        *error = "script file too large";
         return NULL;
     }
     rewind(file);
@@ -211,326 +163,13 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     if (buf == NULL || (size > 0 && fread(buf, 1, (size_t)size, file) != (size_t)size)) {
         free(buf);
         fclose(file);
-        *error = "pack not found";
+        *error = "script not found";
         return NULL;
     }
     fclose(file);
     buf[size] = '\0';
     *out_len = (size_t)size;
     return buf;
-}
-
-static int read_leb(const uint8_t *buf, size_t len, size_t *offset, uint32_t *out) {
-    uint32_t result = 0;
-    int shift = 0;
-    while (*offset < len && shift <= 28) {
-        uint8_t byte = buf[(*offset)++];
-        result |= (uint32_t)(byte & 0x7f) << shift;
-        if ((byte & 0x80) == 0) {
-            *out = result;
-            return 0;
-        }
-        shift += 7;
-    }
-    return -1;
-}
-
-static int wasm_linear_bytes(const uint8_t *buf, size_t len, uint64_t *bytes, const char **error) {
-    size_t offset = 8;
-    *bytes = 0;
-    if (len < 8 || memcmp(buf, "\0asm", 4) != 0) {
-        *error = "pack is not valid wasm";
-        return -1;
-    }
-    while (offset < len) {
-        uint32_t id = 0;
-        uint32_t size = 0;
-        size_t content;
-        if (read_leb(buf, len, &offset, &id) != 0 || read_leb(buf, len, &offset, &size) != 0) {
-            *error = "pack is not valid wasm";
-            return -1;
-        }
-        content = offset;
-        if ((size_t)size > len - offset) {
-            *error = "pack is not valid wasm";
-            return -1;
-        }
-        if (id == 5) {
-            uint32_t count = 0;
-            uint32_t i;
-            if (read_leb(buf, len, &offset, &count) != 0) {
-                *error = "pack is not valid wasm";
-                return -1;
-            }
-            for (i = 0; i < count; i++) {
-                uint32_t flags = 0;
-                uint32_t min_pages = 0;
-                if (read_leb(buf, len, &offset, &flags) != 0 ||
-                    read_leb(buf, len, &offset, &min_pages) != 0) {
-                    *error = "pack is not valid wasm";
-                    return -1;
-                }
-                if ((flags & 1u) != 0) {
-                    uint32_t max_pages = 0;
-                    if (read_leb(buf, len, &offset, &max_pages) != 0) {
-                        *error = "pack is not valid wasm";
-                        return -1;
-                    }
-                }
-                *bytes = (uint64_t)min_pages * 65536u;
-            }
-        }
-        offset = content + size;
-    }
-    return 0;
-}
-
-static void pack_finalizer(JSRuntime *rt, JSValue val) {
-    PackInst *pack = JS_GetOpaque(val, g_pack_class_id);
-    (void)rt;
-    if (pack == NULL) {
-        return;
-    }
-    if (pack->exec != NULL) {
-        wasm_runtime_destroy_exec_env(pack->exec);
-    }
-    if (pack->inst != NULL) {
-        wasm_runtime_deinstantiate(pack->inst);
-    }
-    if (pack->module != NULL) {
-        wasm_runtime_unload(pack->module);
-    }
-    free(pack->bytes);
-    if (pack->engine != NULL && atomic_load(&pack->engine->state) != ST_CLOSED &&
-        pack->engine->pack_count > 0) {
-        pack->engine->pack_count--;
-    }
-    free(pack);
-}
-
-static JSValue js_call_export(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                              int magic, JSValue *func_data) {
-    PackInst *pack = JS_GetOpaque(func_data[0], g_pack_class_id);
-    wasm_export_t exp;
-    wasm_function_inst_t func;
-    uint32_t param_count;
-    uint32_t result_count;
-    wasm_valkind_t param_kinds[MAX_I32_PARAMS];
-    wasm_valkind_t result_kinds[1];
-    uint32_t cells[MAX_I32_PARAMS];
-    uint32_t i;
-    char error_buf[128];
-    (void)this_val;
-    if (pack == NULL || pack->inst == NULL) {
-        return JS_ThrowInternalError(ctx, "pack already released");
-    }
-    memset(&exp, 0, sizeof(exp));
-    wasm_runtime_get_export_type(pack->module, magic, &exp);
-    if (exp.kind != WASM_IMPORT_EXPORT_KIND_FUNC || exp.name == NULL) {
-        return JS_ThrowTypeError(ctx, "this export is not a function");
-    }
-    func = wasm_runtime_lookup_function(pack->inst, exp.name);
-    if (func == NULL) {
-        return JS_ThrowReferenceError(ctx, "export function not found");
-    }
-    param_count = wasm_func_get_param_count(func, pack->inst);
-    result_count = wasm_func_get_result_count(func, pack->inst);
-    if (param_count > MAX_I32_PARAMS || result_count > 1) {
-        return JS_ThrowTypeError(ctx, "this function only supports a few integer arguments");
-    }
-    if (param_count > 0) {
-        wasm_func_get_param_types(func, pack->inst, param_kinds);
-    }
-    if (result_count == 1) {
-        wasm_func_get_result_types(func, pack->inst, result_kinds);
-        if (result_kinds[0] != WASM_I32) {
-            return JS_ThrowTypeError(ctx, "this function only supports integer arguments");
-        }
-    }
-    if ((uint32_t)argc < param_count) {
-        return JS_ThrowTypeError(ctx, "not enough arguments");
-    }
-    for (i = 0; i < param_count; i++) {
-        int32_t value = 0;
-        if (param_kinds[i] != WASM_I32 || JS_ToInt32(ctx, &value, argv[i]) != 0) {
-            return JS_ThrowTypeError(ctx, "this function only supports integer arguments");
-        }
-        cells[i] = (uint32_t)value;
-    }
-    if (!wasm_runtime_call_wasm(pack->exec, func, param_count, cells)) {
-        const char *exception = wasm_runtime_get_exception(pack->inst);
-        snprintf(error_buf, sizeof(error_buf), "pack execution failed%s%s",
-                 exception != NULL ? "：" : "", exception != NULL ? exception : "");
-        wasm_runtime_clear_exception(pack->inst);
-        return JS_ThrowInternalError(ctx, "%s", error_buf);
-    }
-    if (result_count == 0) {
-        return JS_UNDEFINED;
-    }
-    return JS_NewInt32(ctx, (int32_t)cells[0]);
-}
-
-static JSValue js_load_pack(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    Engine *engine = JS_GetContextOpaque(ctx);
-    const char *name = NULL;
-    char wasm_file[80];
-    char aot_file[80];
-    char path[PATH_MAX];
-    const char *error = NULL;
-    uint8_t *bytes = NULL;
-    size_t length = 0;
-    uint64_t linear = 0;
-    char wasm_error[128];
-    wasm_module_t module = NULL;
-    wasm_module_inst_t inst = NULL;
-    wasm_exec_env_t exec = NULL;
-    PackInst *pack = NULL;
-    JSValue obj = JS_EXCEPTION;
-    int32_t export_count;
-    int32_t index;
-    (void)this_val;
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "invalid pack name");
-    }
-    name = JS_ToCString(ctx, argv[0]);
-    if (name == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (!valid_leaf_name(name)) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowTypeError(ctx, "invalid pack name");
-    }
-    if (engine->pack_folder == NULL) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "pack folder not set");
-    }
-    if (engine->pack_count >= engine->limits.max_packs) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowRangeError(ctx, "too many packs loaded");
-    }
-    snprintf(wasm_file, sizeof(wasm_file), "%s.wasm", name);
-    snprintf(aot_file, sizeof(aot_file), "%s.aot", name);
-    {
-        int have_wasm = resolve_under(engine->pack_folder, wasm_file, path, sizeof(path)) == 0;
-        int have_aot = 0;
-        char aot_path[PATH_MAX];
-        if (!have_wasm) {
-            have_aot = resolve_under(engine->pack_folder, aot_file, aot_path, sizeof(aot_path)) == 0;
-            if (have_aot) {
-#if defined(WEIZHI_HAS_AOT) && WEIZHI_HAS_AOT
-                memcpy(path, aot_path, sizeof(path));
-#else
-                char msg[192];
-                JS_FreeCString(ctx, name);
-                snprintf(msg, sizeof(msg),
-                         "aot pack (this build only loads .wasm; provide %s.wasm or rebuild with "
-                         "WEIZHI_WAMR_AOT=ON)",
-                         aot_file);
-                return weizhi_throw_unsupported(ctx, msg);
-#endif
-            } else {
-                JS_FreeCString(ctx, name);
-                return JS_ThrowReferenceError(ctx, "pack not found");
-            }
-        }
-    }
-    bytes = read_file(path, &length, &error);
-    if (bytes == NULL) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "%s", error);
-    }
-#if defined(WEIZHI_HAS_AOT) && WEIZHI_HAS_AOT
-    if (get_package_type(bytes, (uint32_t)length) == Wasm_Module_AoT) {
-        /* AOT packs skip wasm section linear-memory precheck; instantiate enforces runtime limits. */
-    } else
-#endif
-    {
-        if (wasm_linear_bytes(bytes, length, &linear, &error) != 0) {
-            free(bytes);
-            JS_FreeCString(ctx, name);
-            return JS_ThrowTypeError(ctx, "%s", error);
-        }
-        if (linear > engine->limits.wasm_max_linear_bytes) {
-            free(bytes);
-            JS_FreeCString(ctx, name);
-            return JS_ThrowRangeError(ctx, "pack memory exceeds the limit");
-        }
-    }
-    wasm_error[0] = '\0';
-    module = wasm_runtime_load(bytes, (uint32_t)length, wasm_error, sizeof(wasm_error));
-    if (module == NULL) {
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "failed to load pack: %s", wasm_error);
-    }
-    inst = wasm_runtime_instantiate(module, (uint32_t)engine->limits.wasm_stack_bytes,
-                                    (uint32_t)engine->limits.wasm_heap_bytes, wasm_error,
-                                    sizeof(wasm_error));
-    if (inst == NULL) {
-        wasm_runtime_unload(module);
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "failed to start pack: %s", wasm_error);
-    }
-    exec = wasm_runtime_create_exec_env(inst, (uint32_t)engine->limits.wasm_stack_bytes);
-    if (exec == NULL) {
-        wasm_runtime_deinstantiate(inst);
-        wasm_runtime_unload(module);
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "failed to start pack");
-    }
-    pack = calloc(1, sizeof(*pack));
-    if (pack == NULL) {
-        wasm_runtime_destroy_exec_env(exec);
-        wasm_runtime_deinstantiate(inst);
-        wasm_runtime_unload(module);
-        free(bytes);
-        JS_FreeCString(ctx, name);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    pack->engine = engine;
-    pack->module = module;
-    pack->inst = inst;
-    pack->exec = exec;
-    pack->bytes = bytes;
-    obj = JS_NewObjectClass(ctx, (int)g_pack_class_id);
-    if (JS_IsException(obj)) {
-        wasm_runtime_destroy_exec_env(exec);
-        wasm_runtime_deinstantiate(inst);
-        wasm_runtime_unload(module);
-        free(bytes);
-        free(pack);
-        JS_FreeCString(ctx, name);
-        return JS_EXCEPTION;
-    }
-    JS_SetOpaque(obj, pack);
-    engine->pack_count++;
-    export_count = wasm_runtime_get_export_count(module);
-    for (index = 0; index < export_count && index < MAX_EXPORTS; index++) {
-        wasm_export_t exp;
-        JSValue data[1];
-        JSValue fn;
-        memset(&exp, 0, sizeof(exp));
-        wasm_runtime_get_export_type(module, index, &exp);
-        if (exp.kind != WASM_IMPORT_EXPORT_KIND_FUNC || exp.name == NULL) {
-            continue;
-        }
-        data[0] = obj;
-        fn = JS_NewCFunctionData(ctx, js_call_export, 0, index, 1, data);
-        JS_DefinePropertyValueStr(ctx, obj, exp.name, fn, JS_PROP_C_W_E);
-    }
-    {
-        char *quoted = quote_json(name);
-        char data[160];
-        if (quoted != NULL) {
-            snprintf(data, sizeof(data), "{\"name\":%s}", quoted);
-            emit_log(engine, "load_pack", data);
-            free(quoted);
-        }
-    }
-    JS_FreeCString(ctx, name);
-    return obj;
 }
 
 static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -553,11 +192,11 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
         JS_FreeCString(ctx, name);
         return JS_ThrowTypeError(ctx, "invalid script name");
     }
-    if (engine->pack_folder == NULL) {
+    if (engine->script_folder == NULL) {
         JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "pack folder not set");
+        return JS_ThrowReferenceError(ctx, "script folder not set");
     }
-    if (resolve_under(engine->pack_folder, name, path, sizeof(path)) != 0) {
+    if (resolve_under(engine->script_folder, name, path, sizeof(path)) != 0) {
         JS_FreeCString(ctx, name);
         return JS_ThrowReferenceError(ctx, "script not found");
     }
@@ -651,26 +290,13 @@ static int int_or_default(int value, int fallback) {
 
 WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
     Engine *engine = calloc(1, sizeof(*engine));
-    JSClassDef class_def;
     if (engine == NULL) {
-        return NULL;
-    }
-    pthread_once(&g_class_once, init_pack_class_id);
-    if (wamr_acquire() != 0) {
-        free(engine);
         return NULL;
     }
     engine->limits.js_heap_bytes = size_or_default(limits ? limits->js_heap_bytes : 0, WEIZHI_DEFAULT_JS_HEAP_BYTES);
     engine->limits.js_stack_bytes = size_or_default(limits ? limits->js_stack_bytes : 0, WEIZHI_DEFAULT_JS_STACK_BYTES);
-    engine->limits.max_packs = int_or_default(limits ? limits->max_packs : 0, WEIZHI_DEFAULT_MAX_PACKS);
     engine->limits.max_host_functions =
         int_or_default(limits ? limits->max_host_functions : 0, WEIZHI_DEFAULT_MAX_HOST_FUNCTIONS);
-    engine->limits.wasm_stack_bytes =
-        size_or_default(limits ? limits->wasm_stack_bytes : 0, WEIZHI_DEFAULT_WASM_STACK_BYTES);
-    engine->limits.wasm_heap_bytes =
-        size_or_default(limits ? limits->wasm_heap_bytes : 0, WEIZHI_DEFAULT_WASM_HEAP_BYTES);
-    engine->limits.wasm_max_linear_bytes =
-        size_or_default(limits ? limits->wasm_max_linear_bytes : 0, WEIZHI_DEFAULT_WASM_MAX_LINEAR_BYTES);
     engine->limits.fs_io_bytes = size_or_default(limits ? limits->fs_io_bytes : 0, WEIZHI_DEFAULT_FS_IO_BYTES);
     engine->limits.max_async_io =
         int_or_default(limits ? limits->max_async_io : 0, WEIZHI_DEFAULT_MAX_ASYNC_IO);
@@ -687,7 +313,6 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
         pthread_cond_destroy(&engine->wake_cv);
         pthread_mutex_destroy(&engine->async_mu);
         pthread_cond_destroy(&engine->async_cv);
-        wamr_release();
         free(engine);
         return NULL;
     }
@@ -701,16 +326,10 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
         pthread_cond_destroy(&engine->wake_cv);
         pthread_mutex_destroy(&engine->async_mu);
         pthread_cond_destroy(&engine->async_cv);
-        wamr_release();
         free(engine);
         return NULL;
     }
     JS_SetContextOpaque(engine->ctx, engine);
-    memset(&class_def, 0, sizeof(class_def));
-    class_def.class_name = "WeizhiPack";
-    class_def.finalizer = pack_finalizer;
-    JS_NewClass(engine->rt, g_pack_class_id, &class_def);
-    install_builtin(engine, "loadPack", js_load_pack);
     install_builtin(engine, "loadScript", js_load_script);
     if (weizhi_install_node_api(engine) != 0) {
         weizhi_close(engine);
@@ -733,12 +352,11 @@ int weizhi_close(WeizhiEngine *engine) {
     weizhi_pending_clear(engine);
     JS_FreeContext(engine->ctx);
     JS_FreeRuntime(engine->rt);
-    wamr_release();
     for (i = 0; i < engine->host_count; i++) {
         free(engine->hosts[i].name);
     }
     free(engine->hosts);
-    free(engine->pack_folder);
+    free(engine->script_folder);
     free(engine->fs_root);
     free(engine->run_id);
     pthread_mutex_destroy(&engine->wake_mu);
@@ -760,7 +378,7 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     if (atomic_load(&engine->state) != ST_IDLE) {
         return -1;
     }
-    if (strcmp(name, "loadPack") == 0 || strcmp(name, "loadScript") == 0 || strcmp(name, "require") == 0 ||
+    if (strcmp(name, "loadScript") == 0 || strcmp(name, "require") == 0 ||
         strcmp(name, "Buffer") == 0 || strcmp(name, "setTimeout") == 0 || strcmp(name, "clearTimeout") == 0) {
         return -1;
     }
@@ -787,7 +405,7 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     return 0;
 }
 
-int weizhi_set_pack_folder(WeizhiEngine *engine, const char *folder) {
+int weizhi_set_script_folder(WeizhiEngine *engine, const char *folder) {
     char *copy;
     if (engine == NULL || folder == NULL || folder[0] == '\0') {
         return -1;
@@ -799,8 +417,8 @@ int weizhi_set_pack_folder(WeizhiEngine *engine, const char *folder) {
     if (copy == NULL) {
         return -1;
     }
-    free(engine->pack_folder);
-    engine->pack_folder = copy;
+    free(engine->script_folder);
+    engine->script_folder = copy;
     return 0;
 }
 

@@ -61,8 +61,7 @@ struct WeizhiEngine {
     WeizhiLimits limits;
     HostFn *hosts;
     int host_count;
-    int pack_count;
-    char *pack_folder;
+    char *script_folder;
     char *fs_root;
     char *run_id;
     WeizhiLogFn log_fn;

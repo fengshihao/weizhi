@@ -2,14 +2,16 @@
 
 When people step away, work continues against the agreed design. Below are the specs already locked in code and verified by tests.
 
-Agent-facing sandbox contract (copy into system prompts): [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md).
+- Agent-facing sandbox contract: [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)
+- Host / native plugin ABI (design): [HOST_ABI.md](HOST_ABI.md)
 
 ## Product boundaries
 
 - Repo lives at `/Users/fengshihao/Work/weizhi`, alongside Agent1, not inside it.
-- License is Apache-2.0. QuickJS stays upstream MIT and must not be altered. WAMR stays Apache-2.0 plus the LLVM exception.
+- License is Apache-2.0. QuickJS stays upstream MIT and must not be altered.
 - Do not depend on or fork all of quickjs-kt. Compile Bellard QuickJS only inside this engine.
-- Agents have one entry point: run a JS snippet. Capability packs are loaded from JS via `loadPack("name")`. `loadScript("file.js")` loads plain JS libraries.
+- Agents have one entry point: run a JS snippet. Plain JS libraries load via `loadScript("file.js")` from a script folder. **Heavy / platform capability is host-signed native SO** (see HOST_ABI), not in-engine Wasm.
+- **Wasm / WAMR / `loadPack` are archived** on branch `archive/wamr-packs`. Trunk does not link WAMR. Restore from that branch if needed later.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
 - **`fetch`**: C provides `globalThis.fetch` (Promise + Response-like `text`/`json`/`arrayBuffer`). Real HTTP is host-installed via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
@@ -23,17 +25,13 @@ Default per-engine caps:
 |---|---|---|
 | JS heap | 8 MB | Strings and objects in the script count here. Over limit stops with `memory` in the error |
 | JS stack | 256 KB | Deep recursion stops with `stack` in the error |
-| Loaded packs at once | 4 | Another load fails with `too many` in the error |
 | Registered host functions | 32 | Beyond this, `addFunction` fails |
-| Per-pack call stack | 64 KB | Used for in-pack calls |
-| Per-pack internal heap | 64 KB | Pack `malloc` |
-| Per-pack declared linear memory | max 2 MB | Larger initial memory in the pack file is rejected with `memory` in the error |
 | Single fs read/write payload | 1 MB | Cap on **one** `read`/`write` byte count, not total workspace size. Over limit fails with `too large` |
 | In-flight async I/O workers | 16 | Default async VFS / Java pool concurrency. Excess **queues** (no error). Set via `max_async_io` / `maxAsyncIo`. |
 
 Set at engine creation via `WeizhiLimits` (C: `weizhi_open`; Java: `new WeizhiEngine(limits)`). Field `0` means use the default. Cannot change after open.
 
-Dev builds use the system allocator, not a pre-reserved pool. Closing the engine returns memory to the system. If a fixed pool is needed on mobile later, add tests then.
+Dev builds use the system allocator, not a pre-reserved pool. Closing the engine returns memory to the system (`WeizhiEngine.close` / `weizhi_close`). Prefer close after each agent task; do not keep an idle engine forever. Native plugin SO unload policy is in HOST_ABI (refcount + idle TTL); `libweizhijni.so` stays process-resident.
 
 Script return values are always text (JSON). Image bytes go through host functions or `Buffer`; `runJs` does not emit a separate byte payload.
 
@@ -43,12 +41,10 @@ Script return values are always text (JSON). Image bytes go through host functio
 - Sync host functions (default `addFunction`, `fs.*Sync`) still run on the JS thread to completion.
 - **Async host** (`fs.promises`, `fetch`): run on a bounded worker pool; when done, enqueue completion and wake `runJs`; **never** call QuickJS directly from pool threads.
 - Default in-flight async I/O concurrency is **16** (`WeizhiLimits.max_async_io` / Java `maxAsyncIo`; `0` = default). Extra jobs **queue and wait**; they do not fail the script. Hosts may set `1` (fully serial) or raise the limit. A custom `weizhi_set_vfs` async callback / custom Java `ExecutorService` is host-managed and bypasses this default pool.
-- Optional Android AOT: build with `-DWEIZHI_WAMR_AOT=ON` / `WEIZHI_WAMR_AOT=1 ./scripts/build-android.sh` to load `.aot` packs (still prefers `.wasm` when both exist). Dev default stays interpreter-only.
 - One engine runs one script at a time.
   - Same thread calls `runJs` again: fails with `again` in the error.
   - Another thread calls `runJs`: fails with `busy` in the error.
 - `close` returns -1 while a script is running; the engine is not torn down and can run again after the script ends.
-- WAMR may initialize only once per process. When two engines open at once, a lock guards only that initialization.
 
 ## Promise / async / await
 
@@ -89,24 +85,22 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 
 Hosts should pass the full `error` (and `error_location`) back to the orchestrating agent; do not swallow or rewrite into a vague “failed”.
 
-## Pack files
+## Script libraries
 
-- Folder is set by `setPackFolder`. JS uses names only, not paths.
-- `loadPack("add")` reads `add.wasm`.
-- Names allow only letters, digits, `.`, `_`, and `-`. Slash or `..` fails immediately with `name` in the error.
-- If only `add.aot` exists (no wasm): current dev build fails with `aot` in the error. Production mobile builds may keep AOT only; that test must change then.
-- Pack files over 16 MB are rejected. Dev builds enable the WAMR interpreter and disable AOT and SIMD.
-- Pack root and workspace (fs) root are separate.
+- Folder is set by `weizhi_set_script_folder` / Java `setScriptFolder`. JS uses leaf names only (`loadScript("util.js")`), not paths.
+- Names allow only letters, digits, `.`, `_`, and `-`. Slash or `..` fails with `name` in the error.
+- Script root and workspace (`fs`) root are separate.
+- Files over 16 MB are rejected.
 
 ## Logging
 
-One JSON object per line. Dev builds log script source, host-function args and returns. Field names are English: `run_id`, `seq`, `event`. Events include `run_js_start`, `host_call`, `load_pack`, `load_script`, `console`. Human-readable failure reasons are English.
+One JSON object per line. Dev builds log script source, host-function args and returns. Field names are English: `run_id`, `seq`, `event`. Events include `run_js_start`, `host_call`, `load_script`, `console`. Human-readable failure reasons are English.
 
 ## Size
 
 - Android measures Release + stripped `.so` / binary.
-- Phase-1 engine growth vs pre-enhancement strip baseline: target ≤ 256KB; `Buffer` only utf8/base64/hex and similar subsets.
+- Phase-1 engine growth vs pre-enhancement strip baseline: target ≤ 256KB; `Buffer` only utf8/base64/hex and similar subsets. Removing WAMR from trunk shrinks the JNI `.so` further; re-run `scripts/size-check.sh` after release builds.
 
 ## How dependencies are placed
 
-`third_party/quickjs` and `third_party/wamr` are shallow-cloned by `scripts/fetch-deps.sh` and not committed. They are already cloned locally.
+`third_party/quickjs` is shallow-cloned by `scripts/fetch-deps.sh` and not committed. WAMR is not fetched on trunk; see `archive/wamr-packs` if restoring Wasm.

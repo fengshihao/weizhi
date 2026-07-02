@@ -51,20 +51,6 @@ static void write_file(const char *dir, const char *name, const void *bytes, siz
     fclose(file);
 }
 
-/* (func (export "add") (param i32 i32) (result i32) (i32.add)) */
-static const unsigned char ADD_WASM[] = {
-    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
-    0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, 0x0a, 0x09,
-    0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
-};
-
-/* Same as above, but declares 40 pages (2.5MB), over the 2MB limit. Memory section must precede exports. */
-static const unsigned char BIG_MEM_WASM[] = {
-    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
-    0x7f, 0x03, 0x02, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x28, 0x07, 0x07, 0x01, 0x03, 0x61, 0x64,
-    0x64, 0x00, 0x00, 0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
-};
-
 static void test_arithmetic(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
@@ -359,78 +345,13 @@ static void test_host_function_limit(void) {
     weizhi_close(engine);
 }
 
-static void test_load_pack_add(void) {
-    char *dir = make_temp_dir();
-    WeizhiEngine *engine = weizhi_open(NULL);
-    WeizhiResult result;
-    write_file(dir, "add.wasm", ADD_WASM, sizeof(ADD_WASM));
-    EXPECT(weizhi_set_pack_folder(engine, dir) == 0);
-    result = weizhi_run_js(engine, "const p = loadPack(\"add\"); p.add(20, 22)", 2000);
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
-    weizhi_result_free(&result);
-    weizhi_close(engine);
-    free(dir);
-}
-
-static void test_missing_and_illegal_pack(void) {
-    char *dir = make_temp_dir();
-    WeizhiEngine *engine = weizhi_open(NULL);
-    WeizhiResult result;
-    const unsigned char aot_mark[] = {'a', 'o', 't'};
-    write_file(dir, "add.wasm", ADD_WASM, sizeof(ADD_WASM));
-    write_file(dir, "old.aot", aot_mark, sizeof(aot_mark));
-    EXPECT(weizhi_set_pack_folder(engine, dir) == 0);
-    result = weizhi_run_js(engine, "loadPack(\"missing\")", 1000);
-    EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "not found") != NULL);
-    weizhi_result_free(&result);
-    result = weizhi_run_js(engine, "loadPack(\"../add\")", 1000);
-    EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "name") != NULL);
-    weizhi_result_free(&result);
-    result = weizhi_run_js(engine, "loadPack(\"old\")", 1000);
-    EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "aot") != NULL);
-    EXPECT(result.error != NULL && strstr(result.error, "unsupported") != NULL);
-    weizhi_result_free(&result);
-    weizhi_close(engine);
-    free(dir);
-}
-
-static void test_pack_memory_and_count(void) {
-    char *dir = make_temp_dir();
-    WeizhiLimits limits;
-    WeizhiEngine *engine;
-    WeizhiResult result;
-    write_file(dir, "add.wasm", ADD_WASM, sizeof(ADD_WASM));
-    write_file(dir, "big.wasm", BIG_MEM_WASM, sizeof(BIG_MEM_WASM));
-    memset(&limits, 0, sizeof(limits));
-    limits.max_packs = 2;
-    engine = weizhi_open(&limits);
-    EXPECT(weizhi_set_pack_folder(engine, dir) == 0);
-    result = weizhi_run_js(engine, "loadPack(\"big\")", 2000);
-    EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "memory") != NULL);
-    weizhi_result_free(&result);
-    result = weizhi_run_js(
-        engine,
-        "var a = loadPack(\"add\"); var b = loadPack(\"add\"); var c = loadPack(\"add\"); 1",
-        2000);
-    EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "too many") != NULL);
-    weizhi_result_free(&result);
-    weizhi_close(engine);
-    free(dir);
-}
-
 static void test_load_script(void) {
     char *dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
     const char *lib = "globalThis.inc = function(x){ return x + 1; }; 0";
     write_file(dir, "util.js", lib, strlen(lib));
-    EXPECT(weizhi_set_pack_folder(engine, dir) == 0);
+    EXPECT(weizhi_set_script_folder(engine, dir) == 0);
     result = weizhi_run_js(engine, "loadScript(\"util.js\"); inc(41)", 1000);
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
@@ -574,29 +495,26 @@ static void test_fs_size_limit(void) {
     free(dir);
 }
 
-static void test_pack_fs_roots_isolated(void) {
-    char *pack_dir = make_temp_dir();
+static void test_script_fs_roots_isolated(void) {
+    char *script_dir = make_temp_dir();
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    write_file(pack_dir, "add.wasm", ADD_WASM, sizeof(ADD_WASM));
-    write_file(pack_dir, "secret.txt", "from-pack", 9);
-    EXPECT(weizhi_set_pack_folder(engine, pack_dir) == 0);
+    const char *lib = "globalThis.secretFromScript = 'from-script'; 0";
+    write_file(script_dir, "util.js", lib, strlen(lib));
+    write_file(script_dir, "secret.txt", "from-script-dir", 15);
+    EXPECT(weizhi_set_script_folder(engine, script_dir) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
-    result = weizhi_run_js(engine, "loadPack('add').add(2,3)", 2000);
+    result = weizhi_run_js(engine, "loadScript('util.js'); secretFromScript", 2000);
     EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "5") == 0);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"from-script\"") == 0);
     weizhi_result_free(&result);
     result = weizhi_run_js(engine, "fs.readFileSync('secret.txt')", 1000);
     EXPECT(result.ok == 0);
     EXPECT(result.error != NULL && strstr(result.error, "not found") != NULL);
     weizhi_result_free(&result);
-    result = weizhi_run_js(engine, "fs.writeFileSync('add.wasm','corrupt'); loadPack('add').add(1,1)", 2000);
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "2") == 0);
-    weizhi_result_free(&result);
     weizhi_close(engine);
-    free(pack_dir);
+    free(script_dir);
     free(fs_dir);
 }
 
@@ -861,15 +779,12 @@ int main(void) {
     test_second_thread_rejected();
     test_close_while_running_fails();
     test_host_function_limit();
-    test_load_pack_add();
-    test_missing_and_illegal_pack();
-    test_pack_memory_and_count();
     test_load_script();
     test_promise_await();
     test_buffer_path_require();
     test_fs_sync_and_promises();
     test_fs_size_limit();
-    test_pack_fs_roots_isolated();
+    test_script_fs_roots_isolated();
     test_console_logs();
     test_import_fs();
     test_promise_all_parallel();

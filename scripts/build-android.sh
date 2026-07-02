@@ -48,24 +48,18 @@ out="$root/build-android/$abi"
 mkdir -p "$out"
 cd "$out"
 
-aot_flag=OFF
-if [ "${WEIZHI_WAMR_AOT:-0}" = "1" ] || [ "${WEIZHI_WAMR_AOT:-}" = "ON" ]; then
-    aot_flag=ON
-fi
-
 cmake "$root" \
     -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI="$abi" \
     -DANDROID_PLATFORM="android-$api" \
     -DANDROID_STL=c++_static \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DWEIZHI_WAMR_AOT="$aot_flag"
+    -DCMAKE_BUILD_TYPE=Release
 
 jobs=$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 cmake --build . -- -j"$jobs"
 
 echo "NDK: $ndk"
-echo "ABI: $abi  API: $api  WEIZHI_WAMR_AOT=$aot_flag"
+echo "ABI: $abi  API: $api"
 echo "artifacts: $out/libweizhi.a  $out/weizhi_tests"
 if [ -f "$out/libweizhijni.so" ]; then
     echo "JNI:  $out/libweizhijni.so"
