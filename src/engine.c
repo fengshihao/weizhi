@@ -675,6 +675,8 @@ int weizhi_apply_completions(Engine *engine) {
         if (p->ok) {
             if (p->kind == WEIZHI_PENDING_FETCH) {
                 arg = weizhi_make_fetch_response(engine->ctx, p->http_status, p->headers_json, &p->out);
+            } else if (p->kind == WEIZHI_PENDING_NATIVE) {
+                arg = weizhi_make_native_plugin(engine->ctx, p->headers_json);
             } else if (p->out.data != NULL) {
                 arg = weizhi_bytes_to_buffer(engine->ctx, p->out.data, p->out.len);
             } else {
@@ -888,6 +890,54 @@ void weizhi_set_http(WeizhiEngine *engine, WeizhiHttpAsyncFn async_fn, void *use
     }
     engine->http_async = async_fn;
     engine->http_ud = userdata;
+    weizhi_refresh_caps(engine);
+}
+
+void weizhi_set_native(WeizhiEngine *engine, WeizhiNativeEnsureFn ensure_fn, WeizhiNativeCallFn call_fn,
+                       void *userdata) {
+    if (engine == NULL) {
+        return;
+    }
+    engine->native_ensure = ensure_fn;
+    engine->native_call = call_fn;
+    engine->native_ud = userdata;
+    weizhi_refresh_caps(engine);
+}
+
+void weizhi_complete_native(WeizhiEngine *engine, int64_t request_id, int ok, const char *plugin_json,
+                            const char *error) {
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (!p->in_use || p->id != request_id || p->completed) {
+            continue;
+        }
+        p->completed = 1;
+        p->kind = WEIZHI_PENDING_NATIVE;
+        if (!ok || error != NULL) {
+            p->ok = 0;
+            p->error = strdup(error != NULL ? error : "native ensure failed");
+            break;
+        }
+        if (plugin_json == NULL || plugin_json[0] == '\0') {
+            p->ok = 0;
+            p->error = strdup("native ensure failed: empty plugin json");
+            break;
+        }
+        p->ok = 1;
+        p->headers_json = strdup(plugin_json);
+        if (p->headers_json == NULL) {
+            p->ok = 0;
+            p->error = strdup("out of memory");
+        }
+        break;
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
 }
 
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder) {

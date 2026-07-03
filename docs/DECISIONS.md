@@ -15,6 +15,7 @@ When people step away, work continues against the agreed design. Below are the s
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
 - **`fetch`**: C provides `globalThis.fetch` (Promise + Response-like `text`/`json`/`arrayBuffer`). Real HTTP is host-installed via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
+- **`host.ensureNative`**: async plugin load via Host ABI NATIVE. Host does catalog/download/verify/dlopen (Android mock: `enableNativeMock()`). See [HOST_ABI.md](HOST_ABI.md).
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
 
 ## Memory

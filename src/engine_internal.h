@@ -16,6 +16,7 @@
 #define WEIZHI_MAX_PENDING 64
 #define WEIZHI_PENDING_BUFFER 0
 #define WEIZHI_PENDING_FETCH 1
+#define WEIZHI_PENDING_NATIVE 2
 
 typedef struct HostFn {
     char *name;
@@ -72,6 +73,9 @@ struct WeizhiEngine {
     void *vfs_async_ud;
     WeizhiHttpAsyncFn http_async;
     void *http_ud;
+    WeizhiNativeEnsureFn native_ensure;
+    WeizhiNativeCallFn native_call;
+    void *native_ud;
     int seq;
     int64_t deadline_ms;
     pthread_t owner;
@@ -116,5 +120,9 @@ JSValue weizhi_throw_bad_arg(JSContext *ctx, const char *api, const char *detail
 JSValue weizhi_guard_module(JSContext *ctx, JSValue obj, const char *ns);
 JSValue weizhi_make_fetch_response(JSContext *ctx, int status, const char *headers_json,
                                    const WeizhiBytes *body);
+/* Build plugin handle from ensureNative JSON; exports call native_call. */
+JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json);
+/* Refresh process.weizhiCaps after host installs HTTP/NATIVE. */
+void weizhi_refresh_caps(Engine *engine);
 
 #endif

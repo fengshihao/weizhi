@@ -4,7 +4,7 @@
 
 相关文档：[DECISIONS.md](DECISIONS.md)（已实现规格）、[AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)（给 Agent 的契约）。
 
-> 本文件以**设计**为主。`fetch` / VFS 等已在主干落地；`ensureNative` 与插件目录客户端**尚未实现**，按本文分阶段开发。
+> 本文件为 Host ABI 设计。主干已落地：`fetch` / VFS，以及 **`host.ensureNative`（下载/验签/dlopen 可先由宿主模拟）**。Android：`WeizhiEngine.enableNativeMock()`。
 
 ## 1. 分层
 
@@ -35,7 +35,7 @@ flowchart TB
 | RANDOM | 熵 | `crypto.getRandomValues` 子集 | 建议新增 |
 | COMPRESS | gzip/deflate | 小表面 | 建议新增 |
 | HASH | sha256 等 | digest / `host.hash` | 建议新增（验签插件） |
-| NATIVE | 签名原生插件 | `host.ensureNative(name)` | **设计锁定，待实现** |
+| NATIVE | 签名原生插件 | `host.ensureNative(name)` | 已有 C API + Android `enableNativeMock`（目录/验签模拟） |
 | UI / IMAGE | 位图/相册等 | 后置 | 本阶段 out of scope |
 
 应用级扩展仍可用 `addFunction`（不替代 NATIVE 目录生态）。

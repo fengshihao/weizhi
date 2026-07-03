@@ -955,6 +955,30 @@ static JSValue make_fs_module(JSContext *ctx) {
     return guarded;
 }
 
+static JSValue make_caps_object(JSContext *ctx, Engine *engine) {
+    JSValue caps = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, caps, "hostAbi", JS_NewInt32(ctx, WEIZHI_HOST_ABI_VERSION));
+    JS_SetPropertyStr(ctx, caps, "vfs", JS_TRUE);
+    JS_SetPropertyStr(ctx, caps, "http", JS_NewBool(ctx, engine != NULL && engine->http_async != NULL));
+    JS_SetPropertyStr(ctx, caps, "native", JS_NewBool(ctx, engine != NULL && engine->native_ensure != NULL));
+    return caps;
+}
+
+void weizhi_refresh_caps(Engine *engine) {
+    JSValue global;
+    JSValue process;
+    if (engine == NULL || engine->ctx == NULL) {
+        return;
+    }
+    global = JS_GetGlobalObject(engine->ctx);
+    process = JS_GetPropertyStr(engine->ctx, global, "process");
+    if (!JS_IsException(process) && JS_IsObject(process)) {
+        JS_SetPropertyStr(engine->ctx, process, "weizhiCaps", make_caps_object(engine->ctx, engine));
+    }
+    JS_FreeValue(engine->ctx, process);
+    JS_FreeValue(engine->ctx, global);
+}
+
 static JSValue js_process_cwd(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     Engine *engine = weizhi_from_ctx(ctx);
     (void)this_val;
@@ -977,6 +1001,7 @@ static JSValue make_process_object(JSContext *ctx) {
 #endif
     JS_SetPropertyStr(ctx, mod, "version", JS_NewString(ctx, "v0.1.0-weizhi"));
     JS_SetPropertyStr(ctx, mod, "env", JS_NewObject(ctx));
+    JS_SetPropertyStr(ctx, mod, "weizhiCaps", make_caps_object(ctx, weizhi_from_ctx(ctx)));
     JS_SetPropertyStr(ctx, mod, "default", JS_DupValue(ctx, mod));
     return weizhi_guard_module(ctx, mod, "process");
 }
@@ -1389,6 +1414,217 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     return promise;
 }
 
+static JSValue js_native_export_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic, JSValue *func_data) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    const char *plugin_name;
+    const char *export_name;
+    JSValue arg;
+    JSValue json;
+    const char *args_text;
+    char *returned;
+    JSValue parsed;
+    (void)this_val;
+    (void)magic;
+    if (engine == NULL || engine->native_call == NULL) {
+        return weizhi_throw_unsupported(ctx, "native call (host native not installed)");
+    }
+    plugin_name = JS_ToCString(ctx, func_data[0]);
+    export_name = JS_ToCString(ctx, func_data[1]);
+    if (plugin_name == NULL || export_name == NULL) {
+        if (plugin_name != NULL) {
+            JS_FreeCString(ctx, plugin_name);
+        }
+        if (export_name != NULL) {
+            JS_FreeCString(ctx, export_name);
+        }
+        return JS_EXCEPTION;
+    }
+    arg = argc > 0 ? argv[0] : JS_UNDEFINED;
+    if (JS_IsUndefined(arg) || JS_IsNull(arg)) {
+        args_text = "[]";
+        json = JS_UNDEFINED;
+    } else {
+        json = JS_JSONStringify(ctx, arg, JS_UNDEFINED, JS_UNDEFINED);
+        if (JS_IsException(json)) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        args_text = JS_ToCString(ctx, json);
+        if (args_text == NULL) {
+            JS_FreeValue(ctx, json);
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+    }
+    returned = engine->native_call(plugin_name, export_name, args_text, engine->native_ud);
+    if (!JS_IsUndefined(json)) {
+        JS_FreeCString(ctx, args_text);
+        JS_FreeValue(ctx, json);
+    }
+    JS_FreeCString(ctx, plugin_name);
+    JS_FreeCString(ctx, export_name);
+    if (returned == NULL) {
+        return JS_NULL;
+    }
+    parsed = JS_ParseJSON(ctx, returned, strlen(returned), "<native>");
+    if (JS_IsException(parsed)) {
+        JSValue exc = JS_GetException(ctx);
+        JS_FreeValue(ctx, exc);
+        parsed = JS_NewString(ctx, returned);
+    }
+    free(returned);
+    return parsed;
+}
+
+JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json) {
+    JSValue info;
+    JSValue name_val;
+    JSValue exports_val;
+    JSValue obj;
+    const char *name;
+    uint32_t i;
+    uint32_t len;
+
+    if (plugin_json == NULL) {
+        return JS_ThrowInternalError(ctx, "native ensure failed: empty plugin json");
+    }
+    info = JS_ParseJSON(ctx, plugin_json, strlen(plugin_json), "<native-plugin>");
+    if (JS_IsException(info)) {
+        return info;
+    }
+    name_val = JS_GetPropertyStr(ctx, info, "name");
+    exports_val = JS_GetPropertyStr(ctx, info, "exports");
+    name = JS_ToCString(ctx, name_val);
+    if (name == NULL || !JS_IsArray(ctx, exports_val)) {
+        if (name != NULL) {
+            JS_FreeCString(ctx, name);
+        }
+        JS_FreeValue(ctx, name_val);
+        JS_FreeValue(ctx, exports_val);
+        JS_FreeValue(ctx, info);
+        return JS_ThrowTypeError(ctx, "native plugin json must include name and exports[]");
+    }
+    obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_DupValue(ctx, name_val));
+    {
+        JSValue ver = JS_GetPropertyStr(ctx, info, "version");
+        if (!JS_IsUndefined(ver) && !JS_IsException(ver)) {
+            JS_SetPropertyStr(ctx, obj, "version", ver);
+        } else {
+            JS_FreeValue(ctx, ver);
+        }
+    }
+    {
+        JSValue len_val = JS_GetPropertyStr(ctx, exports_val, "length");
+        int32_t len32 = 0;
+        if (JS_ToInt32(ctx, &len32, len_val) != 0) {
+            JS_FreeValue(ctx, len_val);
+            JS_FreeCString(ctx, name);
+            JS_FreeValue(ctx, name_val);
+            JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, info);
+            JS_FreeValue(ctx, obj);
+            return JS_EXCEPTION;
+        }
+        JS_FreeValue(ctx, len_val);
+        if (len32 < 0) {
+            len32 = 0;
+        }
+        len = (uint32_t)len32;
+    }
+    for (i = 0; i < len; i++) {
+        JSValue exp = JS_GetPropertyUint32(ctx, exports_val, i);
+        const char *exp_name;
+        JSValue data[2];
+        JSValue fn;
+        if (JS_IsException(exp)) {
+            JS_FreeCString(ctx, name);
+            JS_FreeValue(ctx, name_val);
+            JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, info);
+            JS_FreeValue(ctx, obj);
+            return exp;
+        }
+        exp_name = JS_ToCString(ctx, exp);
+        JS_FreeValue(ctx, exp);
+        if (exp_name == NULL) {
+            JS_FreeCString(ctx, name);
+            JS_FreeValue(ctx, name_val);
+            JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, info);
+            JS_FreeValue(ctx, obj);
+            return JS_EXCEPTION;
+        }
+        data[0] = JS_NewString(ctx, name);
+        data[1] = JS_NewString(ctx, exp_name);
+        fn = JS_NewCFunctionData(ctx, js_native_export_call, 1, 0, 2, data);
+        JS_FreeValue(ctx, data[0]);
+        JS_FreeValue(ctx, data[1]);
+        JS_DefinePropertyValueStr(ctx, obj, exp_name, fn, JS_PROP_C_W_E);
+        JS_FreeCString(ctx, exp_name);
+    }
+    JS_FreeCString(ctx, name);
+    JS_FreeValue(ctx, name_val);
+    JS_FreeValue(ctx, exports_val);
+    JS_FreeValue(ctx, info);
+    return obj;
+}
+
+static JSValue js_host_ensure_native(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    const char *name = NULL;
+    JSValue funcs[2];
+    JSValue promise;
+    int64_t id;
+    int rc;
+    (void)this_val;
+    if (engine == NULL || engine->native_ensure == NULL) {
+        return weizhi_throw_unsupported(
+            ctx,
+            "native (host.ensureNative needs host NATIVE; ask the host to enableNativeMock / weizhi_set_native)");
+    }
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return weizhi_throw_bad_arg(ctx, "host.ensureNative", "plugin name string required");
+    }
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (name[0] == '\0' || strchr(name, '/') != NULL || strstr(name, "..") != NULL) {
+        JS_FreeCString(ctx, name);
+        return weizhi_throw_bad_arg(ctx, "host.ensureNative", "invalid plugin name");
+    }
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        JS_FreeCString(ctx, name);
+        return promise;
+    }
+    id = weizhi_pending_add(engine, funcs[0], funcs[1]);
+    if (id < 0) {
+        JS_FreeCString(ctx, name);
+        JS_FreeValue(ctx, promise);
+        return JS_ThrowRangeError(ctx, "too many pending async operations");
+    }
+    rc = engine->native_ensure(engine, id, name, engine->native_ud);
+    JS_FreeCString(ctx, name);
+    if (rc != 0) {
+        weizhi_complete_native(engine, id, 0, NULL,
+                               "native ensure failed to start (host callback returned an error)");
+    }
+    return promise;
+}
+
+static JSValue make_host_object(JSContext *ctx) {
+    JSValue host = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, host, "ensureNative",
+                      JS_NewCFunction(ctx, js_host_ensure_native, "ensureNative", 1));
+    JS_SetPropertyStr(ctx, host, "abiVersion", JS_NewInt32(ctx, WEIZHI_HOST_ABI_VERSION));
+    return weizhi_guard_module(ctx, host, "host");
+}
+
 int weizhi_install_node_api(Engine *engine) {
     JSClassDef class_def;
     JSValue global;
@@ -1406,6 +1642,7 @@ int weizhi_install_node_api(Engine *engine) {
     global = JS_GetGlobalObject(engine->ctx);
     JS_SetPropertyStr(engine->ctx, global, "require", JS_NewCFunction(engine->ctx, js_require, "require", 1));
     JS_SetPropertyStr(engine->ctx, global, "fetch", JS_NewCFunction(engine->ctx, js_fetch, "fetch", 2));
+    JS_SetPropertyStr(engine->ctx, global, "host", make_host_object(engine->ctx));
     JS_SetPropertyStr(engine->ctx, global, "setTimeout",
                       JS_NewCFunction(engine->ctx, js_set_timeout, "setTimeout", 2));
     JS_SetPropertyStr(engine->ctx, global, "clearTimeout",

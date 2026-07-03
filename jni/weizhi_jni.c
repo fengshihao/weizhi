@@ -9,7 +9,10 @@
 static JavaVM *g_vm = NULL;
 static jmethodID g_async_mid = NULL;
 static jmethodID g_fetch_mid = NULL;
+static jmethodID g_native_ensure_mid = NULL;
+static jmethodID g_native_call_mid = NULL;
 static jobject g_http_thiz = NULL;
+static jobject g_native_thiz = NULL;
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
@@ -274,5 +277,108 @@ JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteFetch(JNIEnv *
     weizhi_complete_fetch((WeizhiEngine *)(intptr_t)handle, (int64_t)request_id, (int)status, headers, &bytes, err);
     weizhi_bytes_free(&bytes);
     free(headers);
+    free(err);
+}
+
+static int java_native_ensure(WeizhiEngine *engine, int64_t request_id, const char *name, void *userdata) {
+    JNIEnv *env = NULL;
+    jobject engine_obj = (jobject)userdata;
+    jstring jname;
+    int attached = 0;
+    (void)engine;
+    if (g_vm == NULL || engine_obj == NULL || g_native_ensure_mid == NULL) {
+        return -1;
+    }
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, (void **)&env, NULL) != 0) {
+            return -1;
+        }
+        attached = 1;
+    }
+    jname = (*env)->NewStringUTF(env, name != NULL ? name : "");
+    (*env)->CallVoidMethod(env, engine_obj, g_native_ensure_mid, (jlong)(intptr_t)engine, (jlong)request_id, jname);
+    if ((*env)->ExceptionCheck(env)) {
+        if (attached) {
+            (*g_vm)->DetachCurrentThread(g_vm);
+        }
+        return -1;
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+    return 0;
+}
+
+static char *java_native_call(const char *plugin_name, const char *export_name, const char *args_json,
+                              void *userdata) {
+    JNIEnv *env = NULL;
+    jobject engine_obj = (jobject)userdata;
+    jstring jplugin;
+    jstring jexport;
+    jstring jargs;
+    jstring jresult;
+    char *copy = NULL;
+    int attached = 0;
+    if (g_vm == NULL || engine_obj == NULL || g_native_call_mid == NULL) {
+        return NULL;
+    }
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, (void **)&env, NULL) != 0) {
+            return NULL;
+        }
+        attached = 1;
+    }
+    jplugin = (*env)->NewStringUTF(env, plugin_name != NULL ? plugin_name : "");
+    jexport = (*env)->NewStringUTF(env, export_name != NULL ? export_name : "");
+    jargs = (*env)->NewStringUTF(env, args_json != NULL ? args_json : "[]");
+    jresult = (jstring)(*env)->CallObjectMethod(env, engine_obj, g_native_call_mid, jplugin, jexport, jargs);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        if (attached) {
+            (*g_vm)->DetachCurrentThread(g_vm);
+        }
+        return NULL;
+    }
+    if (jresult != NULL) {
+        copy = jstring_to_utf8(env, jresult);
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+    return copy;
+}
+
+JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeInstallJavaNative(JNIEnv *env, jobject thiz, jlong handle) {
+    WeizhiEngine *engine = (WeizhiEngine *)(intptr_t)handle;
+    jclass cls;
+    if (engine == NULL) {
+        return;
+    }
+    cls = (*env)->GetObjectClass(env, thiz);
+    g_native_ensure_mid = (*env)->GetMethodID(env, cls, "onNativeEnsure", "(JJLjava/lang/String;)V");
+    g_native_call_mid =
+        (*env)->GetMethodID(env, cls, "onNativeCall",
+                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+    if (g_native_thiz != NULL) {
+        (*env)->DeleteGlobalRef(env, g_native_thiz);
+    }
+    g_native_thiz = (*env)->NewGlobalRef(env, thiz);
+    weizhi_set_native(engine, java_native_ensure, java_native_call, g_native_thiz);
+}
+
+JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteNative(JNIEnv *env, jclass clazz, jlong handle,
+                                                                        jlong request_id, jboolean ok,
+                                                                        jstring plugin_json, jstring error) {
+    char *json = NULL;
+    char *err = NULL;
+    (void)clazz;
+    if (plugin_json != NULL) {
+        json = jstring_to_utf8(env, plugin_json);
+    }
+    if (error != NULL) {
+        err = jstring_to_utf8(env, error);
+    }
+    weizhi_complete_native((WeizhiEngine *)(intptr_t)handle, (int64_t)request_id, ok ? 1 : 0, json, err);
+    free(json);
     free(err);
 }

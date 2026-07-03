@@ -96,6 +96,60 @@ public final class WeizhiJniInstrumentedTest {
         }
     }
 
+    @Test
+    public void nativeMockEnsureAndCall() throws Exception {
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.enableNativeMock();
+            String out = engine.runJs(
+                    "const p = await host.ensureNative('echo_math');"
+                            + "({name:p.name,version:p.version,sum:p.add([20,22]),product:p.mul([3,7]),"
+                            + "caps:process.weizhiCaps.native})",
+                    5000);
+            assertTrue(out.contains("\"sum\":42"));
+            assertTrue(out.contains("\"product\":21"));
+            assertTrue(out.contains("\"caps\":true"));
+            assertTrue(out.contains("echo_math"));
+        }
+    }
+
+    @Test
+    public void nativeMockVerifyAndCatalogErrors() throws Exception {
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.enableNativeMock();
+            try {
+                engine.runJs("await host.ensureNative('bad_sig')", 5000);
+                fail("expected signature failure");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage() != null && e.getMessage().contains("signature"));
+            }
+            try {
+                engine.runJs("await host.ensureNative('no_such_plugin')", 5000);
+                fail("expected catalog miss");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage() != null && e.getMessage().contains("not in catalog"));
+            }
+            try {
+                engine.runJs("await host.ensureNative('too_new')", 5000);
+                fail("expected abi incompatible");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage() != null && e.getMessage().contains("min_host_abi"));
+            }
+        }
+    }
+
+    @Test
+    public void nativeDisabledGivesAgentHint() throws Exception {
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            try {
+                engine.runJs("await host.ensureNative('echo_math')", 2000);
+                fail("expected native disabled");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage() != null && e.getMessage().contains("unsupported: native"));
+                assertTrue(e.getMessage().contains("enableNativeMock") || e.getMessage().contains("weizhi_set_native"));
+            }
+        }
+    }
+
     private static void writeBytes(File file, byte[] bytes) throws IOException {
         try (FileOutputStream out = new FileOutputStream(file)) {
             out.write(bytes);

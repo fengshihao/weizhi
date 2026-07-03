@@ -17,7 +17,7 @@
 - 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`。
 - 可用 `require("fs")` 或 `import fs from "fs"` 等内置模块名；**没有 npm**。
 - 用 `loadScript("file.js")` 加载脚本目录下的 JS 库（仅叶子文件名）。
-- 若宿主启用了原生插件：用文档/工具列表里给出的名字调用（例如将来的 `host.ensureNative("image_resize")`），再使用其导出 API。
+- 若宿主启用了原生插件：`const p = await host.ensureNative("echo_math")`，再调用导出（如 `p.add([1,2])`）。只传插件名，不要传 SO URL。
 - 支持 Promise、`async`/`await`、`setTimeout` / `clearTimeout`（定时器只在本轮 `runJs` 内有效）。
 - 可以用 `Promise.all` 发起多个异步 I/O。
 - 若宿主启用了网络：可用 `fetch(url, { method, headers, body })`，返回类似浏览器的 Response（`ok` / `status` / `await res.text()` / `json()` / `arrayBuffer()`）。`body` 可以是字符串或 `Buffer`（适合预签名 PUT 上传文件字节）。
@@ -63,6 +63,6 @@
 
 - C：`weizhi_set_http` + `weizhi_complete_fetch`；脚本库目录：`weizhi_set_script_folder`。
 - Java：`engine.enableFetch()` 或 `enableFetch(new String[]{"example.com"})`；`setScriptFolder`。
-- 原生插件目录 / 验签 / `ensureNative`：见 [HOST_ABI.md](HOST_ABI.md)（设计已锁定；运行时实现另开任务）。
+- 原生插件：Java `engine.enableNativeMock()`（模拟目录/验签）；C `weizhi_set_native` + `weizhi_complete_native`。详见 [HOST_ABI.md](HOST_ABI.md)。
 - 真机冒烟：`./scripts/test.sh android`。
 - Wasm 历史能力在 git 分支 `archive/wamr-packs`。

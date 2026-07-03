@@ -766,6 +766,87 @@ static void test_fetch_with_host(void) {
     weizhi_close(engine);
 }
 
+typedef struct NativeMock {
+    int ensure_calls;
+    int call_calls;
+} NativeMock;
+
+static int mock_native_ensure(WeizhiEngine *engine, int64_t request_id, const char *name, void *userdata) {
+    NativeMock *m = userdata;
+    m->ensure_calls++;
+    if (strcmp(name, "bad_sig") == 0) {
+        weizhi_complete_native(engine, request_id, 0, NULL, "native verify failed: signature");
+        return 0;
+    }
+    if (strcmp(name, "echo_math") == 0) {
+        weizhi_complete_native(engine, request_id, 1,
+                               "{\"name\":\"echo_math\",\"version\":\"1.0.0\",\"exports\":[\"add\"]}", NULL);
+        return 0;
+    }
+    {
+        char err[160];
+        snprintf(err, sizeof(err), "unsupported: native \"%s\" (not in catalog)", name != NULL ? name : "?");
+        weizhi_complete_native(engine, request_id, 0, NULL, err);
+    }
+    return 0;
+}
+
+static char *mock_native_call(const char *plugin_name, const char *export_name, const char *args_json,
+                              void *userdata) {
+    NativeMock *m = userdata;
+    int a = 0;
+    int b = 0;
+    char *out;
+    m->call_calls++;
+    (void)plugin_name;
+    if (strcmp(export_name, "add") != 0) {
+        return NULL;
+    }
+    if (args_json != NULL && sscanf(args_json, "[%d,%d]", &a, &b) >= 1) {
+        /* ok */
+    }
+    out = malloc(32);
+    if (out == NULL) {
+        return NULL;
+    }
+    snprintf(out, 32, "%d", a + b);
+    return out;
+}
+
+static void test_native_ensure_mock(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    NativeMock mock;
+    WeizhiResult result;
+    memset(&mock, 0, sizeof(mock));
+    result = weizhi_run_js(engine, "await host.ensureNative('echo_math')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: native") != NULL);
+    weizhi_result_free(&result);
+
+    weizhi_set_native(engine, mock_native_ensure, mock_native_call, &mock);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_math');"
+                           "({name:p.name,version:p.version,sum:p.add([20,22]),caps:process.weizhiCaps.native})",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"sum\":42") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"caps\":true") != NULL);
+    weizhi_result_free(&result);
+    EXPECT(mock.ensure_calls >= 1);
+    EXPECT(mock.call_calls >= 1);
+
+    result = weizhi_run_js(engine, "await host.ensureNative('bad_sig')", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "signature") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "await host.ensureNative('nope')", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "not in catalog") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
@@ -791,6 +872,7 @@ int main(void) {
     test_async_io_serializes();
     test_agent_precise_errors();
     test_fetch_with_host();
+    test_native_ensure_mock();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);
         return 1;

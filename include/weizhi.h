@@ -14,6 +14,9 @@
 /* Max in-flight default async VFS jobs (extra work queues; does not fail). */
 #define WEIZHI_DEFAULT_MAX_ASYNC_IO 16
 
+/* Host ABI version for native plugins (see docs/HOST_ABI.md). */
+#define WEIZHI_HOST_ABI_VERSION 1
+
 typedef struct WeizhiEngine WeizhiEngine;
 
 /* Pass to weizhi_open / Java WeizhiLimits. 0 = use default above. Immutable after open. */
@@ -61,6 +64,13 @@ typedef int (*WeizhiHttpAsyncFn)(WeizhiEngine *engine, int64_t request_id, const
                                  const char *url, const char *headers_json, const WeizhiBytes *body,
                                  void *userdata);
 
+/* Async ensureNative: host later calls weizhi_complete_native with plugin JSON. */
+typedef int (*WeizhiNativeEnsureFn)(WeizhiEngine *engine, int64_t request_id, const char *name,
+                                    void *userdata);
+/* Sync call into an ensured plugin export. Host mallocs JSON return; engine frees. NULL → JSON null. */
+typedef char *(*WeizhiNativeCallFn)(const char *plugin_name, const char *export_name, const char *args_json,
+                                    void *userdata);
+
 typedef struct WeizhiResult {
     int ok;
     char *output_text;
@@ -81,10 +91,20 @@ int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder);
 void weizhi_set_vfs(WeizhiEngine *engine, WeizhiVfsSyncFn sync_fn, WeizhiVfsAsyncFn async_fn, void *userdata);
 /* Install host HTTP. Without this, fetch() fails with an agent-facing unsupported hint. */
 void weizhi_set_http(WeizhiEngine *engine, WeizhiHttpAsyncFn async_fn, void *userdata);
+/* Install native plugin host. Without this, host.ensureNative fails with unsupported. */
+void weizhi_set_native(WeizhiEngine *engine, WeizhiNativeEnsureFn ensure_fn, WeizhiNativeCallFn call_fn,
+                       void *userdata);
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error);
 /* Complete a fetch() promise. headers_json is a JSON object string (may be "{}"). */
 void weizhi_complete_fetch(WeizhiEngine *engine, int64_t request_id, int status, const char *headers_json,
                            const WeizhiBytes *body, const char *error);
+/*
+ * Complete host.ensureNative. On success plugin_json looks like:
+ *   {"name":"echo_math","version":"1.0.0","exports":["add"]}
+ * Host owns download/verify/dlopen (or mocks); engine only builds the JS handle.
+ */
+void weizhi_complete_native(WeizhiEngine *engine, int64_t request_id, int ok, const char *plugin_json,
+                            const char *error);
 void weizhi_bytes_free(WeizhiBytes *bytes);
 void weizhi_set_log(WeizhiEngine *engine, WeizhiLogFn fn, void *userdata);
 void weizhi_set_run_id(WeizhiEngine *engine, const char *run_id);

@@ -108,6 +108,92 @@ public final class WeizhiEngine implements AutoCloseable {
     }
 
     /**
+     * Install a <b>mock</b> native-plugin host (catalog / download / signature / "dlopen" are simulated).
+     * Agents call {@code await host.ensureNative("echo_math")} then {@code plugin.add([1,2])}.
+     * Built-in mock catalog: {@code echo_math}, {@code bad_sig}, {@code too_new}.
+     */
+    public void enableNativeMock() {
+        nativeInstallJavaNative(nativeHandle);
+    }
+
+    /** Called from JNI: mock catalog → verify → complete_native on the pool thread. */
+    @SuppressWarnings("unused")
+    void onNativeEnsure(long engine, long requestId, String name) {
+        executor.execute(() -> {
+            try {
+                Thread.sleep(15); // pretend download
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            if (name == null || name.isEmpty()) {
+                nativeCompleteNative(engine, requestId, false, null, "bad argument: host.ensureNative: empty name");
+                return;
+            }
+            if ("bad_sig".equals(name)) {
+                nativeCompleteNative(engine, requestId, false, null, "native verify failed: signature");
+                return;
+            }
+            if ("too_new".equals(name)) {
+                nativeCompleteNative(engine, requestId, false, null,
+                        "native incompatible: min_host_abi 99 > host " + 1);
+                return;
+            }
+            if ("echo_math".equals(name)) {
+                // Mock: verified + "loaded" — exports implemented in onNativeCall (no real .so).
+                nativeCompleteNative(engine, requestId, true,
+                        "{\"name\":\"echo_math\",\"version\":\"1.0.0-mock\",\"exports\":[\"add\",\"mul\"]}", null);
+                return;
+            }
+            nativeCompleteNative(engine, requestId, false, null,
+                    "unsupported: native \"" + name + "\" (not in catalog)");
+        });
+    }
+
+    /** Sync plugin export call from the JS thread (mock SO body). */
+    @SuppressWarnings("unused")
+    String onNativeCall(String plugin, String exportName, String argsJson) {
+        if (!"echo_math".equals(plugin)) {
+            return null;
+        }
+        double[] nums = parseNumberArray(argsJson);
+        if ("add".equals(exportName)) {
+            double a = nums.length > 0 ? nums[0] : 0;
+            double b = nums.length > 1 ? nums[1] : 0;
+            return Double.toString(a + b);
+        }
+        if ("mul".equals(exportName)) {
+            double a = nums.length > 0 ? nums[0] : 0;
+            double b = nums.length > 1 ? nums[1] : 0;
+            return Double.toString(a * b);
+        }
+        return null;
+    }
+
+    private static double[] parseNumberArray(String argsJson) {
+        if (argsJson == null) {
+            return new double[0];
+        }
+        String s = argsJson.trim();
+        if (s.startsWith("[") && s.endsWith("]")) {
+            s = s.substring(1, s.length() - 1).trim();
+            if (s.isEmpty()) {
+                return new double[0];
+            }
+            String[] parts = s.split(",");
+            double[] out = new double[parts.length];
+            for (int i = 0; i < parts.length; i++) {
+                try {
+                    out[i] = Double.parseDouble(parts[i].trim());
+                } catch (NumberFormatException e) {
+                    out[i] = 0;
+                }
+            }
+            return out;
+        }
+        return new double[0];
+    }
+
+    /**
      * Run JS. Returns JSON text on success; throws on failure (error text from C).
      */
     public String runJs(String source, int timeoutMs) {
@@ -328,8 +414,13 @@ public final class WeizhiEngine implements AutoCloseable {
 
     private native void nativeInstallJavaHttp(long handle);
 
+    private native void nativeInstallJavaNative(long handle);
+
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
 
     private static native void nativeCompleteFetch(long handle, long requestId, int status, String headersJson,
                                                    byte[] body, String error);
+
+    private static native void nativeCompleteNative(long handle, long requestId, boolean ok, String pluginJson,
+                                                    String error);
 }
