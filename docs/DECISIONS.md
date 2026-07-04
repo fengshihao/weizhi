@@ -3,7 +3,8 @@
 When people step away, work continues against the agreed design. Below are the specs already locked in code and verified by tests.
 
 - Agent-facing sandbox contract: [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)
-- Host / native plugin ABI (design): [HOST_ABI.md](HOST_ABI.md)
+- Host / native plugin ABI: [HOST_ABI.md](HOST_ABI.md)
+- Typed SO / IDL (近原生、Buffer、回调): [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)
 
 ## Product boundaries
 

@@ -94,6 +94,8 @@ void weizhi_set_http(WeizhiEngine *engine, WeizhiHttpAsyncFn async_fn, void *use
 /* Install native plugin host. Without this, host.ensureNative fails with unsupported. */
 void weizhi_set_native(WeizhiEngine *engine, WeizhiNativeEnsureFn ensure_fn, WeizhiNativeCallFn call_fn,
                        void *userdata);
+/* Built-in typed loader (dlopen + IDL manifest). See docs/NATIVE_PLUGIN_IDL.md. */
+int weizhi_enable_plugin_loader(WeizhiEngine *engine, const char *plugin_dir);
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error);
 /* Complete a fetch() promise. headers_json is a JSON object string (may be "{}"). */
 void weizhi_complete_fetch(WeizhiEngine *engine, int64_t request_id, int status, const char *headers_json,

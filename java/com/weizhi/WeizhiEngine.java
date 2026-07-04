@@ -116,6 +116,16 @@ public final class WeizhiEngine implements AutoCloseable {
         nativeInstallJavaNative(nativeHandle);
     }
 
+    /**
+     * Enable typed plugin loader ({@code dir/&lt;name&gt;/manifest.json} + {@code lib&lt;name&gt;.so}).
+     * See docs/NATIVE_PLUGIN_IDL.md.
+     */
+    public void enableNativePlugins(String pluginDir) {
+        if (nativeEnablePluginLoader(nativeHandle, pluginDir) != 0) {
+            throw new IllegalArgumentException("enableNativePlugins failed");
+        }
+    }
+
     /** Called from JNI: mock catalog → verify → complete_native on the pool thread. */
     @SuppressWarnings("unused")
     void onNativeEnsure(long engine, long requestId, String name) {
@@ -415,6 +425,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private native void nativeInstallJavaHttp(long handle);
 
     private native void nativeInstallJavaNative(long handle);
+
+    private static native int nativeEnablePluginLoader(long handle, String pluginDir);
 
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
 

@@ -31,7 +31,7 @@ esac
 
 "$root/scripts/build.sh"
 echo "== weizhi_tests =="
-"$root/build/weizhi_tests"
+WEIZHI_BUILD_DIR="$root/build" "$root/build/weizhi_tests"
 
 echo "== JNI smoke =="
 "$root/scripts/test-jni.sh"

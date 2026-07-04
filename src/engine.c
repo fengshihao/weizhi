@@ -350,6 +350,7 @@ int weizhi_close(WeizhiEngine *engine) {
     weizhi_async_pool_shutdown(engine);
     weizhi_timers_clear(engine);
     weizhi_pending_clear(engine);
+    weizhi_plugins_clear(engine);
     JS_FreeContext(engine->ctx);
     JS_FreeRuntime(engine->rt);
     for (i = 0; i < engine->host_count; i++) {
@@ -767,6 +768,16 @@ JSValue weizhi_await_value(Engine *engine, JSValue value) {
         if (applied < 0) {
             JS_FreeValue(engine->ctx, value);
             return JS_EXCEPTION;
+        }
+        {
+            int cbd = weizhi_drain_cb_queue(engine);
+            if (cbd < 0) {
+                JS_FreeValue(engine->ctx, value);
+                return JS_EXCEPTION;
+            }
+            if (cbd > 0) {
+                continue;
+            }
         }
         if (fired > 0 || applied > 0 || JS_IsJobPending(engine->rt)) {
             continue;

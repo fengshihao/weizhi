@@ -847,6 +847,39 @@ static void test_native_ensure_mock(void) {
     weizhi_close(engine);
 }
 
+static void test_typed_plugin_loader(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char plugin_dir[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_math');"
+                           "const sum = p.add(20, 22);"
+                           "const b = Buffer.from('hi');"
+                           "const e = p.echo_bytes(b);"
+                           "let seen = 0;"
+                           "const n = p.count_with_cb(3, (i) => { seen += i; });"
+                           "({sum, elen:e.length, n, seen, caps:process.weizhiCaps.native})",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"sum\":42") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"elen\":2") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"n\":3") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"seen\":3") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"caps\":true") != NULL);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "const q = await host.ensureNative('echo_math'); q.add(1)", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "bad argument") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
@@ -873,6 +906,7 @@ int main(void) {
     test_agent_precise_errors();
     test_fetch_with_host();
     test_native_ensure_mock();
+    test_typed_plugin_loader();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);
         return 1;

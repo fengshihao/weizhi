@@ -1,0 +1,34 @@
+{
+  "name": "echo_math",
+  "version": "1.0.0",
+  "min_host_abi": 1,
+  "abi": "weizhi_plugin_v1",
+  "exports": [
+    {
+      "name": "add",
+      "symbol": "weizhi_echo_math_add",
+      "args": [
+        "i32",
+        "i32"
+      ],
+      "ret": "i32"
+    },
+    {
+      "name": "echo_bytes",
+      "symbol": "weizhi_echo_math_echo_bytes",
+      "args": [
+        "bytes"
+      ],
+      "ret": "bytes"
+    },
+    {
+      "name": "count_with_cb",
+      "symbol": "weizhi_echo_math_count_with_cb",
+      "args": [
+        "i32",
+        "cb(i: i32)"
+      ],
+      "ret": "i32"
+    }
+  ]
+}

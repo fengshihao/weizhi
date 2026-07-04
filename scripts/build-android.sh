@@ -58,10 +58,31 @@ cmake "$root" \
 jobs=$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 cmake --build . -- -j"$jobs"
 
+# Stage typed sample plugin next to JNI for device tests / local loading.
+plugin_out="$out/plugins/echo_math"
+mkdir -p "$plugin_out"
+cp -f "$root/plugins/echo_math/generated/manifest.json" "$plugin_out/manifest.json" || true
+built=$(find "$out" -name 'libecho_math.so' 2>/dev/null | head -1 || true)
+if [ -n "$built" ] && [ "$built" != "$plugin_out/libecho_math.so" ]; then
+    cp -f "$built" "$plugin_out/libecho_math.so" || true
+elif [ -n "$built" ]; then
+    : # already in place
+fi
+
+assets_plugin="$root/android/app/src/androidTest/assets/plugins/echo_math"
+mkdir -p "$assets_plugin"
+cp -f "$plugin_out/manifest.json" "$assets_plugin/" || true
+if [ -f "$plugin_out/libecho_math.so" ]; then
+    cp -f "$plugin_out/libecho_math.so" "$assets_plugin/" || true
+fi
+
 echo "NDK: $ndk"
 echo "ABI: $abi  API: $api"
 echo "artifacts: $out/libweizhi.a  $out/weizhi_tests"
 if [ -f "$out/libweizhijni.so" ]; then
     echo "JNI:  $out/libweizhijni.so"
+fi
+if [ -f "$plugin_out/libecho_math.so" ]; then
+    echo "plugin: $plugin_out/libecho_math.so"
 fi
 echo "Java: $root/java/com/weizhi/WeizhiEngine.java"

@@ -37,12 +37,12 @@ add_library(quickjs
 target_include_directories(quickjs PUBLIC ${QUICKJS_DIR})
 target_compile_definitions(quickjs PUBLIC CONFIG_VERSION="2026-06-04")
 
-add_library(weizhi src/engine.c src/node_api.c)
+add_library(weizhi src/engine.c src/node_api.c src/plugin_loader.c)
 target_include_directories(weizhi PUBLIC include)
 target_include_directories(weizhi PRIVATE include src)
 target_link_libraries(weizhi PUBLIC quickjs Threads::Threads)
 if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
-    target_link_libraries(weizhi PUBLIC log android)
+    target_link_libraries(weizhi PUBLIC log android ${CMAKE_DL_LIBS})
 else()
     target_link_libraries(weizhi PUBLIC m ${CMAKE_DL_LIBS})
 endif()
@@ -51,6 +51,22 @@ if(WEIZHI_SANITIZE)
     target_compile_options(weizhi PRIVATE ${WEIZHI_SANITIZE_FLAGS})
     target_link_options(weizhi PUBLIC ${WEIZHI_SANITIZE_FLAGS})
 endif()
+
+# Sample typed plugin (IDL path).
+add_library(echo_math SHARED plugins/echo_math/echo_math.c)
+target_include_directories(echo_math PRIVATE include plugins/echo_math/generated)
+target_compile_options(echo_math PRIVATE -fvisibility=hidden)
+set_target_properties(echo_math PROPERTIES
+    OUTPUT_NAME "echo_math"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_math"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_math"
+    PREFIX "lib"
+)
+add_custom_command(TARGET echo_math POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/plugins/echo_math/generated/manifest.json"
+        "$<TARGET_FILE_DIR:echo_math>/manifest.json"
+)
 
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)

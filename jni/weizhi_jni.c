@@ -366,6 +366,19 @@ JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeInstallJavaNative(JNIE
     weizhi_set_native(engine, java_native_ensure, java_native_call, g_native_thiz);
 }
 
+JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeEnablePluginLoader(JNIEnv *env, jclass clazz, jlong handle,
+                                                                            jstring folder) {
+    char *path = jstring_to_utf8(env, folder);
+    int rc;
+    (void)clazz;
+    if (path == NULL) {
+        return -1;
+    }
+    rc = weizhi_enable_plugin_loader((WeizhiEngine *)(intptr_t)handle, path);
+    free(path);
+    return rc;
+}
+
 JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteNative(JNIEnv *env, jclass clazz, jlong handle,
                                                                         jlong request_id, jboolean ok,
                                                                         jstring plugin_json, jstring error) {

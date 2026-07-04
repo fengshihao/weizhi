@@ -2,6 +2,8 @@
 **/build/
 local.properties
 app/src/main/jniLibs/
+app/src/androidTest/assets/plugins/
+
 app/src/androidTest/assets/
 *.iml
 .idea/

@@ -17,6 +17,44 @@
 #define WEIZHI_PENDING_BUFFER 0
 #define WEIZHI_PENDING_FETCH 1
 #define WEIZHI_PENDING_NATIVE 2
+#define WEIZHI_MAX_PLUGIN_ARGS 8
+#define WEIZHI_MAX_PLUGIN_EXPORTS 32
+#define WEIZHI_MAX_CBS 64
+#define WEIZHI_TY_I32 1
+#define WEIZHI_TY_I64 2
+#define WEIZHI_TY_F64 3
+#define WEIZHI_TY_BYTES 4
+#define WEIZHI_TY_CB 5
+#define WEIZHI_TY_VOID 6
+
+typedef struct WeizhiPluginExport {
+    char *name;
+    char *symbol;
+    int args[WEIZHI_MAX_PLUGIN_ARGS];
+    int nargs;
+    int ret;
+    void *fn;
+} WeizhiPluginExport;
+
+typedef struct WeizhiLoadedPlugin {
+    char *name;
+    char *version;
+    void *handle;
+    WeizhiPluginExport exports[WEIZHI_MAX_PLUGIN_EXPORTS];
+    int nexports;
+    struct WeizhiLoadedPlugin *next;
+} WeizhiLoadedPlugin;
+
+typedef struct WeizhiCbSlot {
+    int in_use;
+    JSValue fn;
+} WeizhiCbSlot;
+
+typedef struct WeizhiCbEvent {
+    uint32_t cb_id;
+    int32_t v0;
+    int ready;
+} WeizhiCbEvent;
 
 typedef struct HostFn {
     char *name;
@@ -76,6 +114,11 @@ struct WeizhiEngine {
     WeizhiNativeEnsureFn native_ensure;
     WeizhiNativeCallFn native_call;
     void *native_ud;
+    char *plugin_dir;
+    WeizhiLoadedPlugin *plugins;
+    WeizhiCbSlot cbs[WEIZHI_MAX_CBS];
+    WeizhiCbEvent cb_queue[WEIZHI_MAX_PENDING];
+    int cb_queue_len;
     int seq;
     int64_t deadline_ms;
     pthread_t owner;
@@ -124,5 +167,14 @@ JSValue weizhi_make_fetch_response(JSContext *ctx, int status, const char *heade
 JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json);
 /* Refresh process.weizhiCaps after host installs HTTP/NATIVE. */
 void weizhi_refresh_caps(Engine *engine);
+/* Buffer helpers for typed plugins. */
+int weizhi_js_is_buffer(JSContext *ctx, JSValueConst val);
+int weizhi_js_buffer_data(JSContext *ctx, JSValueConst val, uint8_t **data, size_t *len);
+JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len);
+WeizhiLoadedPlugin *weizhi_find_plugin(Engine *engine, const char *name);
+uint32_t weizhi_cb_register(Engine *engine, JSValue fn);
+void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0);
+int weizhi_drain_cb_queue(Engine *engine);
+void weizhi_plugins_clear(Engine *engine);
 
 #endif

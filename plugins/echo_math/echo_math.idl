@@ -1,0 +1,7 @@
+plugin echo_math
+version 1.0.0
+min_host_abi 1
+
+fn add(a: i32, b: i32) -> i32
+fn echo_bytes(data: bytes) -> bytes
+fn count_with_cb(n: i32, on_i: cb(i: i32)) -> i32

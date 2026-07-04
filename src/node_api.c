@@ -1,4 +1,5 @@
 #include "engine_internal.h"
+#include "weizhi_plugin.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -158,6 +159,60 @@ static JSValue make_buffer(JSContext *ctx, const uint8_t *bytes, size_t len) {
 
 JSValue weizhi_bytes_to_buffer(JSContext *ctx, const unsigned char *bytes, size_t len) {
     return make_buffer(ctx, bytes, len);
+}
+
+int weizhi_js_is_buffer(JSContext *ctx, JSValueConst val) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    return engine != NULL && JS_GetOpaque(val, engine->buffer_class_id) != NULL;
+}
+
+int weizhi_js_buffer_data(JSContext *ctx, JSValueConst val, uint8_t **data, size_t *len) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    BufferData *buf;
+    if (engine == NULL) {
+        return -1;
+    }
+    buf = JS_GetOpaque(val, engine->buffer_class_id);
+    if (buf == NULL) {
+        return -1;
+    }
+    if (data) {
+        *data = buf->bytes;
+    }
+    if (len) {
+        *len = buf->len;
+    }
+    return 0;
+}
+
+JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    BufferData *data;
+    JSValue obj;
+    JSValue len_val;
+    if (engine == NULL) {
+        free(bytes);
+        return JS_ThrowInternalError(ctx, "no engine");
+    }
+    data = calloc(1, sizeof(*data));
+    if (data == NULL) {
+        free(bytes);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    data->bytes = bytes;
+    data->len = len;
+    obj = JS_NewObjectClass(ctx, engine->buffer_class_id);
+    if (JS_IsException(obj)) {
+        free(data->bytes);
+        free(data);
+        return obj;
+    }
+    JS_SetOpaque(obj, data);
+    len_val = JS_NewUint32(ctx, (uint32_t)len);
+    JS_DefinePropertyValueStr(ctx, obj, "length", len_val, JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, obj, "toString", JS_NewCFunction(ctx, buffer_to_string, "toString", 1),
+                              JS_PROP_C_W_E);
+    return obj;
 }
 
 static int is_buffer(JSContext *ctx, JSValueConst val) {
@@ -1479,14 +1534,146 @@ static JSValue js_native_export_call(JSContext *ctx, JSValueConst this_val, int 
     return parsed;
 }
 
+typedef int32_t (*weizhi_fn_ii_i)(int32_t, int32_t);
+typedef WeizhiBuf (*weizhi_fn_b_b)(WeizhiBuf);
+typedef int32_t (*weizhi_fn_i_cb_i)(int32_t, uint32_t);
+
+static WeizhiPluginExport *find_export(WeizhiLoadedPlugin *plugin, const char *name) {
+    int i;
+    for (i = 0; i < plugin->nexports; i++) {
+        if (strcmp(plugin->exports[i].name, name) == 0) {
+            return &plugin->exports[i];
+        }
+    }
+    return NULL;
+}
+
+static JSValue js_typed_export_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                    int magic, JSValue *func_data) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    const char *plugin_name;
+    const char *export_name;
+    WeizhiLoadedPlugin *plugin;
+    WeizhiPluginExport *ex;
+    JSValue result = JS_UNDEFINED;
+    int cbd;
+    (void)this_val;
+    (void)magic;
+    if (engine == NULL) {
+        return JS_ThrowInternalError(ctx, "no engine");
+    }
+    plugin_name = JS_ToCString(ctx, func_data[0]);
+    export_name = JS_ToCString(ctx, func_data[1]);
+    if (plugin_name == NULL || export_name == NULL) {
+        if (plugin_name) {
+            JS_FreeCString(ctx, plugin_name);
+        }
+        if (export_name) {
+            JS_FreeCString(ctx, export_name);
+        }
+        return JS_EXCEPTION;
+    }
+    plugin = weizhi_find_plugin(engine, plugin_name);
+    if (plugin == NULL) {
+        JS_FreeCString(ctx, plugin_name);
+        JS_FreeCString(ctx, export_name);
+        return weizhi_throw_unsupported(ctx, "native (plugin not loaded)");
+    }
+    ex = find_export(plugin, export_name);
+    if (ex == NULL || ex->fn == NULL) {
+        JS_FreeCString(ctx, plugin_name);
+        JS_FreeCString(ctx, export_name);
+        return weizhi_throw_unsupported(ctx, "native export missing");
+    }
+    /* Fixed stubs for first-wave signatures (IDL-driven; see NATIVE_PLUGIN_IDL.md). */
+    if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I32 && ex->args[1] == WEIZHI_TY_I32 &&
+        ex->ret == WEIZHI_TY_I32) {
+        int32_t a = 0;
+        int32_t b = 0;
+        int32_t r;
+        if (argc < 2) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i32, i32)");
+        }
+        if (JS_ToInt32(ctx, &a, argv[0]) || JS_ToInt32(ctx, &b, argv[1])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        r = ((weizhi_fn_ii_i)ex->fn)(a, b);
+        result = JS_NewInt32(ctx, r);
+    } else if (ex->nargs == 1 && ex->args[0] == WEIZHI_TY_BYTES && ex->ret == WEIZHI_TY_BYTES) {
+        WeizhiBuf in;
+        WeizhiBuf out;
+        uint8_t *data = NULL;
+        size_t len = 0;
+        memset(&in, 0, sizeof(in));
+        if (argc < 1 || !weizhi_js_is_buffer(ctx, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (Buffer)");
+        }
+        if (weizhi_js_buffer_data(ctx, argv[0], &data, &len) != 0) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "invalid Buffer");
+        }
+        in.data = data;
+        in.len = len;
+        out = ((weizhi_fn_b_b)ex->fn)(in);
+        result = weizhi_buffer_adopt(ctx, out.data, out.len);
+    } else if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I32 && ex->args[1] == WEIZHI_TY_CB &&
+               ex->ret == WEIZHI_TY_I32) {
+        int32_t n = 0;
+        uint32_t cb_id;
+        int32_t r;
+        if (argc < 2 || !JS_IsFunction(ctx, argv[1])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i32, function)");
+        }
+        if (JS_ToInt32(ctx, &n, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        cb_id = weizhi_cb_register(engine, argv[1]);
+        if (cb_id == 0) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_ThrowRangeError(ctx, "too many native callbacks");
+        }
+        r = ((weizhi_fn_i_cb_i)ex->fn)(n, cb_id);
+        /* Same-turn flush (D3 default). */
+        cbd = weizhi_drain_cb_queue(engine);
+        if (cbd < 0) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        result = JS_NewInt32(ctx, r);
+    } else {
+        JS_FreeCString(ctx, plugin_name);
+        JS_FreeCString(ctx, export_name);
+        return weizhi_throw_unsupported(ctx, "native signature not implemented in this build");
+    }
+    JS_FreeCString(ctx, plugin_name);
+    JS_FreeCString(ctx, export_name);
+    return result;
+}
+
 JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json) {
     JSValue info;
     JSValue name_val;
     JSValue exports_val;
+    JSValue abi_val;
     JSValue obj;
     const char *name;
+    const char *abi = NULL;
     uint32_t i;
     uint32_t len;
+    int typed = 0;
 
     if (plugin_json == NULL) {
         return JS_ThrowInternalError(ctx, "native ensure failed: empty plugin json");
@@ -1497,13 +1684,24 @@ JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json) {
     }
     name_val = JS_GetPropertyStr(ctx, info, "name");
     exports_val = JS_GetPropertyStr(ctx, info, "exports");
+    abi_val = JS_GetPropertyStr(ctx, info, "abi");
     name = JS_ToCString(ctx, name_val);
+    if (!JS_IsUndefined(abi_val) && JS_IsString(abi_val)) {
+        abi = JS_ToCString(ctx, abi_val);
+        if (abi != NULL && strcmp(abi, "weizhi_plugin_v1") == 0) {
+            typed = 1;
+        }
+    }
     if (name == NULL || !JS_IsArray(ctx, exports_val)) {
         if (name != NULL) {
             JS_FreeCString(ctx, name);
         }
+        if (abi != NULL) {
+            JS_FreeCString(ctx, abi);
+        }
         JS_FreeValue(ctx, name_val);
         JS_FreeValue(ctx, exports_val);
+        JS_FreeValue(ctx, abi_val);
         JS_FreeValue(ctx, info);
         return JS_ThrowTypeError(ctx, "native plugin json must include name and exports[]");
     }
@@ -1523,8 +1721,12 @@ JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json) {
         if (JS_ToInt32(ctx, &len32, len_val) != 0) {
             JS_FreeValue(ctx, len_val);
             JS_FreeCString(ctx, name);
+            if (abi) {
+                JS_FreeCString(ctx, abi);
+            }
             JS_FreeValue(ctx, name_val);
             JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, abi_val);
             JS_FreeValue(ctx, info);
             JS_FreeValue(ctx, obj);
             return JS_EXCEPTION;
@@ -1537,38 +1739,61 @@ JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json) {
     }
     for (i = 0; i < len; i++) {
         JSValue exp = JS_GetPropertyUint32(ctx, exports_val, i);
-        const char *exp_name;
+        const char *exp_name = NULL;
         JSValue data[2];
         JSValue fn;
+        JSValue exp_name_val;
         if (JS_IsException(exp)) {
             JS_FreeCString(ctx, name);
+            if (abi) {
+                JS_FreeCString(ctx, abi);
+            }
             JS_FreeValue(ctx, name_val);
             JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, abi_val);
             JS_FreeValue(ctx, info);
             JS_FreeValue(ctx, obj);
             return exp;
         }
-        exp_name = JS_ToCString(ctx, exp);
+        if (typed && JS_IsObject(exp)) {
+            exp_name_val = JS_GetPropertyStr(ctx, exp, "name");
+            exp_name = JS_ToCString(ctx, exp_name_val);
+            JS_FreeValue(ctx, exp_name_val);
+        } else {
+            exp_name = JS_ToCString(ctx, exp);
+        }
         JS_FreeValue(ctx, exp);
         if (exp_name == NULL) {
             JS_FreeCString(ctx, name);
+            if (abi) {
+                JS_FreeCString(ctx, abi);
+            }
             JS_FreeValue(ctx, name_val);
             JS_FreeValue(ctx, exports_val);
+            JS_FreeValue(ctx, abi_val);
             JS_FreeValue(ctx, info);
             JS_FreeValue(ctx, obj);
             return JS_EXCEPTION;
         }
         data[0] = JS_NewString(ctx, name);
         data[1] = JS_NewString(ctx, exp_name);
-        fn = JS_NewCFunctionData(ctx, js_native_export_call, 1, 0, 2, data);
+        if (typed) {
+            fn = JS_NewCFunctionData(ctx, js_typed_export_call, 8, 0, 2, data);
+        } else {
+            fn = JS_NewCFunctionData(ctx, js_native_export_call, 1, 0, 2, data);
+        }
         JS_FreeValue(ctx, data[0]);
         JS_FreeValue(ctx, data[1]);
         JS_DefinePropertyValueStr(ctx, obj, exp_name, fn, JS_PROP_C_W_E);
         JS_FreeCString(ctx, exp_name);
     }
     JS_FreeCString(ctx, name);
+    if (abi) {
+        JS_FreeCString(ctx, abi);
+    }
     JS_FreeValue(ctx, name_val);
     JS_FreeValue(ctx, exports_val);
+    JS_FreeValue(ctx, abi_val);
     JS_FreeValue(ctx, info);
     return obj;
 }

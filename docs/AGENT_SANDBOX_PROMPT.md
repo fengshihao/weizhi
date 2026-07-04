@@ -63,6 +63,7 @@
 
 - C：`weizhi_set_http` + `weizhi_complete_fetch`；脚本库目录：`weizhi_set_script_folder`。
 - Java：`engine.enableFetch()` 或 `enableFetch(new String[]{"example.com"})`；`setScriptFolder`。
-- 原生插件：Java `engine.enableNativeMock()`（模拟目录/验签）；C `weizhi_set_native` + `weizhi_complete_native`。详见 [HOST_ABI.md](HOST_ABI.md)。
+- 原生插件（typed IDL）：`engine.enableNativePlugins(dir)` 后 `const p = await host.ensureNative("echo_math"); p.add(20,22)`；`bytes` 用 `Buffer`。详见 [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)。
+- Mock（无 .so）：`enableNativeMock()`。
 - 真机冒烟：`./scripts/test.sh android`。
 - Wasm 历史能力在 git 分支 `archive/wamr-packs`。

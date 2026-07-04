@@ -11,6 +11,7 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
@@ -146,6 +147,44 @@ public final class WeizhiJniInstrumentedTest {
             } catch (RuntimeException e) {
                 assertTrue(e.getMessage() != null && e.getMessage().contains("unsupported: native"));
                 assertTrue(e.getMessage().contains("enableNativeMock") || e.getMessage().contains("weizhi_set_native"));
+            }
+        }
+    }
+
+    @Test
+    public void typedPluginLoader() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File pluginRoot = new File(context.getCacheDir(), "weizhi-plugins-" + System.currentTimeMillis());
+        File echoDir = new File(pluginRoot, "echo_math");
+        assertTrue(echoDir.mkdirs());
+        copyAssetTo("plugins/echo_math/manifest.json", new File(echoDir, "manifest.json"));
+        copyAssetTo("plugins/echo_math/libecho_math.so", new File(echoDir, "libecho_math.so"));
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.enableNativePlugins(pluginRoot.getAbsolutePath());
+            String out = engine.runJs(
+                    "const p = await host.ensureNative('echo_math');"
+                            + "const sum = p.add(20, 22);"
+                            + "const e = p.echo_bytes(Buffer.from('ab'));"
+                            + "let seen = 0;"
+                            + "const n = p.count_with_cb(3, (i) => { seen += i; });"
+                            + "({sum, elen:e.length, n, seen})",
+                    8000);
+            assertTrue(out.contains("\"sum\":42"));
+            assertTrue(out.contains("\"elen\":2"));
+            assertTrue(out.contains("\"n\":3"));
+            assertTrue(out.contains("\"seen\":3"));
+        }
+    }
+
+    private static void copyAssetTo(String assetPath, File dest) throws IOException {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
+        try (InputStream in = ctx.getAssets().open(assetPath);
+                FileOutputStream out = new FileOutputStream(dest)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
             }
         }
     }
