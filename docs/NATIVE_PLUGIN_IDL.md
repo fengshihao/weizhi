@@ -1,9 +1,10 @@
-# Native 插件：IDL / 近原生绑定（实施中）
+# Native 插件：IDL / 近原生绑定
 
 本文落实「SO 定制到底」方案：AI 友好 JS API、接近原生性能、`Buffer` 传二进制、C→JS 回调。  
 与 [HOST_ABI.md](HOST_ABI.md) 目录/验签/生命周期配合；**调用面**不再以 JSON RPC 为主。
 
-状态（2026-09-24）：设计锁定并开始落地；`enableNativeMock` 仍保留作无 SO 冒烟。
+状态（2026-09-24）：**已落地**；桌面 + 真机 `./scripts/test.sh android` 通过。  
+§7 决策项已按推荐默认**锁定**（产品确认）。
 
 ---
 
@@ -35,7 +36,7 @@ fn count_with_cb(n: i32, on_i: cb(i: i32)) -> i32
 | IDL | JS | C |
 | --- | --- | --- |
 | `i32` | number（截断为 int32） | `int32_t` |
-| `i64` | number（注意精度）或后期 BigInt | `int64_t` |
+| `i64` | number（大整数有精度损失；见 D5） | `int64_t` |
 | `f64` | number | `double` |
 | `bytes` | `Buffer` | `WeizhiBuf { data, len }` |
 | `cb(...)` | function | `uint32_t cb_id`（宿主/引擎分配） |
@@ -63,12 +64,12 @@ SO 作者只实现生成头文件里的符号；**不解析 JSON**。
 
 ## 4. 引擎加载与调用
 
-1. `weizhi_set_plugin_dir(engine, dir)` + 内置 loader（或宿主 `ensure` 自己 dlopen 后注册 typed 表）。
+1. `weizhi_enable_plugin_loader(engine, dir)` / Java `enableNativePlugins(dir)`。
 2. `host.ensureNative("echo_math")` → 读 `dir/echo_math/manifest.json` → `dlopen` → 缓存符号 → 按类型挂 JS 方法。
 3. JS `p.add(20,22)` → 校验 → 调 `int32_t(*)(int32_t,int32_t)`。
 4. JS `p.echo_bytes(buf)` → `WeizhiBuf` 借阅 → 返回新 `Buffer`。
 
-**Mock**：`enableNativeMock()` 仍走旧 JSON complete，便于无 .so 的 CI。
+**Mock**：`enableNativeMock()` 仍走旧 JSON complete，便于无 .so 的 CI（D7）。
 
 ## 5. C→JS 回调
 
@@ -78,7 +79,7 @@ SO: weizhi_cb_invoke_i32(cb_id, i)
   → JS 线程 drain → 调用注册的 JS Function
 ```
 
-第一期：回调参数仅 `i32`（可多个固定 arity 的 helper）。  
+第一期：回调参数仅 `i32`；**同轮 flush**（D3）。  
 复杂回调后续用 IDL 生成 `weizhi_cb_invoke_<sig>`。
 
 ## 6. 目录布局（实现）
@@ -87,35 +88,31 @@ SO: weizhi_cb_invoke_i32(cb_id, i)
 plugins/echo_math/
   echo_math.idl
   echo_math.c
-  manifest.json          # bindgen 生成或手写保底
-  CMakeLists.txt         # 产出 libecho_math.so / .dylib
+  generated/manifest.json
+  generated/weizhi_echo_math_api.h
 ```
 
-Android：编进 `jniLibs` 或测试时拷到 app files，loader 从 `plugin_dir` 加载。
+Android：构建时拷到 androidTest assets，测试解压到 app 私有 `plugin_dir` 再 `enableNativePlugins`（D6）。
 
-## 7. 待你决策（晚上对齐）
+## 7. 已锁定决策（2026-09-24 确认）
 
-下列项已按**推荐默认**开工；若要改，改文档默认并告知即可。
+| ID | 议题 | 锁定 |
+| --- | --- | --- |
+| D1 | libffi vs 专用 stub | **按签名手写/生成固定 stub 表**（不链 libffi） |
+| D2 | `bytes` 零拷贝 | **同步允许借阅**；SO 返回后不得再持有指针 |
+| D3 | 回调时机 | **同轮 flush** |
+| D4 | 崩溃隔离 | **同进程**（靠验签）；独立进程以后再说 |
+| D5 | `i64` | **JS number**（大整数精度在文档/提示词里说明） |
+| D6 | Android 存放 | **app 私有 `plugin_dir`**，可由 assets 解压 |
+| D7 | JSON `native_call` | **保留给 mock/调试**；正式插件走 typed |
+| D8 | OpenCV | **本阶段不做整库**；用 IDL `bytes` 等契约后续接薄封装 |
 
-| ID | 议题 | 推荐默认 | 备选 |
-| --- | --- | --- | --- |
-| D1 | 通用 libffi vs 按 IDL 生成专用 stub | **按签名生成/手写固定 stub 表**（少 ROM、快） | 链 libffi |
-| D2 | 同步调用时 `bytes` 零拷贝借阅 | **允许借阅**；SO 不得在返回后持有指针 | 一律拷贝（更安全更慢） |
-| D3 | 回调默认同轮 flush 还是下一 tick | **同轮 flush**（detect 类 API 好写） | 一律异步排队 |
-| D4 | 插件崩溃隔离 | **同进程**（第一期）；靠验签 | 独立进程（工期大） |
-| D5 | `i64` 在 JS 的表示 | **number**（大整数精度告警写进文档） | 强制 BigInt |
-| D6 | Android 插件存放 | **app 私有 `plugin_dir`** + 可从 assets 解压 | 仅 `jniLibs` 预置 |
-| D7 | 是否保留 JSON `native_call` | **保留给 mock/调试**；正式插件走 typed | 删除 JSON 路径 |
-| D8 | OpenCV | **不进本阶段**；契约按 IDL 预留 `bytes` | 立刻嵌 opencv 官方包 |
+## 8. 验收清单
 
-有异议的项请直接改推荐列或批注。
-
-## 8. 验收清单（本迭代）
-
-- [x] 文档 + 待决表（本文 §7）
+- [x] 文档 + 决策锁定（本文 §7）
 - [x] `weizhi_plugin.h` + `echo_math` 真 SO（桌面 dylib / Android so）
 - [x] 桌面：`ensureNative` + `add` / `echo_bytes` / `count_with_cb` 单测
-- [x] Android：编进 assets、instrumented 用例已写（需连真机跑 `./scripts/test.sh android`）
+- [x] Android：`./scripts/test.sh android` 真机通过
 - [x] C→JS 回调（`cb(i: i32)` + 同轮 flush）
 - [x] Agent 提示词补充 typed 插件用法
 
