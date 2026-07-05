@@ -4,7 +4,7 @@ When people step away, work continues against the agreed design. Below are the s
 
 - Agent-facing sandbox contract: [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)
 - Host / native plugin ABI: [HOST_ABI.md](HOST_ABI.md)
-- Typed SO / IDL (近原生、Buffer、回调): [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)
+- Typed SO / IDL (近原生、Buffer、回调): [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) — 决策 D1–D8 已锁定；真机 android 测通过。
 
 ## Product boundaries
 
