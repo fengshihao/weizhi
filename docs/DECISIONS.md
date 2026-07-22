@@ -15,20 +15,23 @@ When people step away, work continues against the agreed design. Below are the s
 - **Wasm / WAMR / `loadPack` are archived** on branch `archive/wamr-packs`. Trunk does not link WAMR. Restore from that branch if needed later.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
+- **Android delivery**: Gradle module `:weizhi` (`com.android.library`) packages `WeizhiEngine` + `libweizhijni.so` as an **AAR**. `:caps` packages the Android productivity surface (`android.ui` / `android.files` / `android.media` / `android.share` / `android.reminders`). Demo `:app` depends on both. Desktop hosts install `mac` (macOS) or `linux` (Ubuntu and other Linux) via `DesktopCaps` — same method shape, unavailable ops return `unsupported`. Exactly one platform object is live; the other names throw. Build native first (`./scripts/build-android.sh`), then `cd android && gradle :weizhi:assembleRelease :caps:assembleRelease`.
 - **`fetch`**: C provides `globalThis.fetch` (Promise + Response-like `text`/`json`/`arrayBuffer`). Real HTTP is host-installed via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
 - **`host.ensureNative`**: async plugin load via Host ABI NATIVE. Host does catalog/download/verify/dlopen (Android mock: `enableNativeMock()`). See [HOST_ABI.md](HOST_ABI.md).
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
 
 ## Memory
 
+Third-party JS library fit (bundle, slim, or native SO): [QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md).
+
 Default per-engine caps:
 
 | Item | Default | Meaning |
 |---|---|---|
-| JS heap | 8 MB | Strings and objects in the script count here. Over limit stops with `memory` in the error |
+| JS heap | 32 MB | Strings and objects in the script count here. Over limit stops with `memory` in the error |
 | JS stack | 256 KB | Deep recursion stops with `stack` in the error |
 | Registered host functions | 32 | Beyond this, `addFunction` fails |
-| Single fs read/write payload | 1 MB | Cap on **one** `read`/`write` byte count, not total workspace size. Over limit fails with `too large` |
+| Single fs read/write payload | 32 MB | Cap on **one** `read`/`write` byte count, not total workspace size. Over limit fails with `too large` |
 | In-flight async I/O workers | 16 | Default async VFS / Java pool concurrency. Excess **queues** (no error). Set via `max_async_io` / `maxAsyncIo`. |
 
 Set at engine creation via `WeizhiLimits` (C: `weizhi_open`; Java: `new WeizhiEngine(limits)`). Field `0` means use the default. Cannot change after open.

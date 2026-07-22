@@ -40,6 +40,40 @@ public final class SmokeTest {
         }
 
         System.out.println("JNI smoke OK");
+        desktopCaps();
+    }
+
+    private static void desktopCaps() throws Exception {
+        String platform = com.weizhi.desktop.DesktopCaps.platformObjectName();
+        if (platform == null) {
+            throw new AssertionError("desktop platform object missing");
+        }
+        Path root = Files.createTempDirectory("weizhi-caps-");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            com.weizhi.desktop.DesktopCaps.install(engine, root, message -> true);
+            String out = engine.runJs(
+                    platform + ".files.write('a.txt','hi'); " + platform + ".files.read('a.txt')", 3000);
+            expectEq("\"hi\"", out);
+            expectEq("true", engine.runJs(platform + ".ui.confirm('go')", 3000));
+            String other = "mac".equals(platform) ? "linux" : "mac";
+            try {
+                engine.runJs(other + ".files.read('a.txt')", 2000);
+                fail("expected other platform to be unsupported");
+            } catch (RuntimeException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("unsupported")) {
+                    throw e;
+                }
+            }
+            try {
+                engine.runJs(platform + ".media.resize('a.txt', 32)", 2000);
+                fail("expected media.resize unsupported on desktop");
+            } catch (RuntimeException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("unsupported")) {
+                    throw e;
+                }
+            }
+        }
+        System.out.println("Desktop caps OK (" + platform + ")");
     }
 
     private static void expectEq(String want, String got) {

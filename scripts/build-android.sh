@@ -76,13 +76,22 @@ if [ -f "$plugin_out/libecho_math.so" ]; then
     cp -f "$plugin_out/libecho_math.so" "$assets_plugin/" || true
 fi
 
+# Stage JNI into the :weizhi Android library (AAR packaging).
+if [ -f "$out/libweizhijni.so" ]; then
+    jni_dir="$root/android/weizhi/src/main/jniLibs/$abi"
+    mkdir -p "$jni_dir"
+    cp -f "$out/libweizhijni.so" "$jni_dir/libweizhijni.so"
+fi
+
 echo "NDK: $ndk"
 echo "ABI: $abi  API: $api"
 echo "artifacts: $out/libweizhi.a  $out/weizhi_tests"
 if [ -f "$out/libweizhijni.so" ]; then
     echo "JNI:  $out/libweizhijni.so"
+    echo "AAR jniLibs: $root/android/weizhi/src/main/jniLibs/$abi/libweizhijni.so"
 fi
 if [ -f "$plugin_out/libecho_math.so" ]; then
     echo "plugin: $plugin_out/libecho_math.so"
 fi
 echo "Java: $root/java/com/weizhi/WeizhiEngine.java"
+echo "Gradle AAR: cd android && gradle :weizhi:assembleRelease"

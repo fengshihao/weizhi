@@ -14,5 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "weizhi-android-smoke"
+rootProject.name = "weizhi-android"
+include(":weizhi")
+include(":caps")
 include(":app")

@@ -22,6 +22,11 @@ mkdir -p "$outdir"
 javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/WeizhiLimits.java" \
     "$root/java/com/weizhi/WeizhiEngine.java" \
+    "$root/java/com/weizhi/platform/MiniJson.java" \
+    "$root/java/com/weizhi/platform/LocalWorkspace.java" \
+    "$root/java/com/weizhi/platform/PlatformScripts.java" \
+    "$root/java/com/weizhi/platform/PlatformHost.java" \
+    "$root/java/com/weizhi/desktop/DesktopCaps.java" \
     "$root/tests/java/SmokeTest.java"
 
 echo "Running JNI smoke ($lib)..."

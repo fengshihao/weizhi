@@ -21,7 +21,8 @@ import java.util.concurrent.Executors;
 public final class WeizhiEngine implements AutoCloseable {
     /** Matches WEIZHI_DEFAULT_MAX_ASYNC_IO in weizhi.h. */
     private static final int DEFAULT_MAX_ASYNC_IO = 16;
-    private static final long DEFAULT_FS_IO = 1024L * 1024L;
+    /** Matches WEIZHI_DEFAULT_FS_IO_BYTES in weizhi.h. */
+    private static final long DEFAULT_FS_IO = 32L * 1024L * 1024L;
 
     static {
         System.loadLibrary("weizhijni");
@@ -34,6 +35,13 @@ public final class WeizhiEngine implements AutoCloseable {
     private String fsRoot;
     private String[] fetchHostAllowlist;
     private boolean fetchEnabled;
+    private boolean hostCallInstalled;
+    private HostCall hostCall;
+
+    /** Sync host bridge used by platform objects (`android` / `mac` / `linux`). Args and return are JSON. */
+    public interface HostCall {
+        String call(String argsJson);
+    }
 
     public WeizhiEngine() {
         this(null, null);
@@ -124,6 +132,65 @@ public final class WeizhiEngine implements AutoCloseable {
         if (nativeEnablePluginLoader(nativeHandle, pluginDir) != 0) {
             throw new IllegalArgumentException("enableNativePlugins failed");
         }
+    }
+
+    /**
+     * Install the single sync host entry {@code __caps(args)} used by a platform object.
+     * Call while idle (before or between {@code runJs}). The Java callback may be replaced later;
+     * the native binding is installed once per engine.
+     */
+    public void setHostCall(HostCall call) {
+        this.hostCall = call;
+        if (!hostCallInstalled) {
+            if (nativeInstallHostCall(nativeHandle) != 0) {
+                throw new IllegalStateException("setHostCall failed");
+            }
+            hostCallInstalled = true;
+        }
+    }
+
+    /** Called from JNI on the JS thread. */
+    @SuppressWarnings("unused")
+    String onHostCall(String argsJson) {
+        HostCall call = this.hostCall;
+        if (call == null) {
+            return "{\"error\":\"unsupported: host call\"}";
+        }
+        try {
+            String out = call.call(argsJson);
+            return out == null ? "null" : out;
+        } catch (Exception e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            return "{\"error\":" + quoteJson(msg) + "}";
+        }
+    }
+
+    static String quoteJson(String s) {
+        StringBuilder sb = new StringBuilder(s.length() + 2);
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':
+                case '\\':
+                    sb.append('\\').append(c);
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format(Locale.US, "\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        sb.append('"');
+        return sb.toString();
     }
 
     /** Called from JNI: mock catalog → verify → complete_native on the pool thread. */
@@ -427,6 +494,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private native void nativeInstallJavaNative(long handle);
 
     private static native int nativeEnablePluginLoader(long handle, String pluginDir);
+
+    private native int nativeInstallHostCall(long handle);
 
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
 

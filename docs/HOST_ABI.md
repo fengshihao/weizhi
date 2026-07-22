@@ -168,6 +168,9 @@ flowchart TD
 | Agent 可用网络 | + HTTP |
 | 插件生态 | + NATIVE + HASH + 目录 URL/公钥 |
 | 会话结束 | 务必 `close` 引擎 |
+| **Android App 集成** | 依赖 `:weizhi` AAR（或将来 Maven 坐标）；`new WeizhiEngine()`；`enableFetch` 时宿主 Manifest 声明 `INTERNET` |
+
+构建：`./scripts/build-android.sh` → `cd android && gradle :weizhi:assembleRelease` → `weizhi/build/outputs/aar/weizhi-release.aar`。
 
 ## 8. Wasm 归档说明
 

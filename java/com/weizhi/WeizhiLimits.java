@@ -5,7 +5,7 @@ package com.weizhi;
  * See include/weizhi.h and docs/DECISIONS.md for meanings.
  */
 public final class WeizhiLimits {
-    /** JS heap (strings/objects). Default 8 MiB. */
+    /** JS heap (strings/objects). Default 32 MiB. */
     public long jsHeapBytes;
     /** JS stack. Default 256 KiB. */
     public long jsStackBytes;
@@ -13,7 +13,7 @@ public final class WeizhiLimits {
     public int maxHostFunctions;
     /**
      * Max bytes for a single fs read or write payload (not total disk quota).
-     * Default 1 MiB. Over limit → error contains "too large".
+     * Default 32 MiB. Over limit → error contains "too large".
      */
     public long fsIoBytes;
     /**

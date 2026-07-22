@@ -5,12 +5,12 @@
 #include <stdint.h>
 
 /* Default engine limits. Tests assert these; change numbers and tests together. */
-#define WEIZHI_DEFAULT_JS_HEAP_BYTES (8u * 1024u * 1024u)
+#define WEIZHI_DEFAULT_JS_HEAP_BYTES (32u * 1024u * 1024u)
 #define WEIZHI_DEFAULT_JS_STACK_BYTES (256u * 1024u)
 #define WEIZHI_DEFAULT_TIMEOUT_MS 3000
 #define WEIZHI_DEFAULT_MAX_HOST_FUNCTIONS 32
 /* Max bytes for one fs read OR one fs write payload (not workspace total size). */
-#define WEIZHI_DEFAULT_FS_IO_BYTES (1u * 1024u * 1024u)
+#define WEIZHI_DEFAULT_FS_IO_BYTES (32u * 1024u * 1024u)
 /* Max in-flight default async VFS jobs (extra work queues; does not fail). */
 #define WEIZHI_DEFAULT_MAX_ASYNC_IO 16
 
@@ -21,10 +21,10 @@ typedef struct WeizhiEngine WeizhiEngine;
 
 /* Pass to weizhi_open / Java WeizhiLimits. 0 = use default above. Immutable after open. */
 typedef struct WeizhiLimits {
-    size_t js_heap_bytes;         /* JS heap (strings/objects). Default 8MB. Over → "memory" */
+    size_t js_heap_bytes;         /* JS heap (strings/objects). Default 32MB. Over → "memory" */
     size_t js_stack_bytes;        /* JS stack. Default 256KB. Over → "stack" */
     int max_host_functions;       /* addFunction cap. Default 32 */
-    size_t fs_io_bytes;           /* Single fs read/write size. Default 1MB. Over → "too large" */
+    size_t fs_io_bytes;           /* Single fs read/write size. Default 32MB. Over → "too large" */
     int max_async_io;             /* In-flight default async I/O workers. Default 16. Excess queues. */
 } WeizhiLimits;
 

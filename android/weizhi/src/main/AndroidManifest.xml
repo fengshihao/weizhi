@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Core engine AAR. Host apps that call enableFetch() must declare INTERNET themselves.
+  Productivity caps (SAF / share / reminders) live in the demo or a future caps module.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

@@ -379,6 +379,65 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeEnablePluginLoader(JNI
     return rc;
 }
 
+static jmethodID g_host_mid = NULL;
+
+static char *java_host_call(const char *args_json, void *userdata) {
+    JNIEnv *env = NULL;
+    jobject engine_obj = (jobject)userdata;
+    int attached = 0;
+    jstring jargs;
+    jstring jret;
+    char *out;
+    if (g_vm == NULL || engine_obj == NULL || g_host_mid == NULL) {
+        return strdup("{\"error\":\"unsupported: host call\"}");
+    }
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*g_vm)->AttachCurrentThread(g_vm, (void **)&env, NULL) != 0) {
+            return strdup("{\"error\":\"host call attach failed\"}");
+        }
+        attached = 1;
+    }
+    jargs = (*env)->NewStringUTF(env, args_json != NULL ? args_json : "null");
+    jret = (jstring)(*env)->CallObjectMethod(env, engine_obj, g_host_mid, jargs);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        out = strdup("{\"error\":\"host call threw\"}");
+    } else if (jret == NULL) {
+        out = strdup("null");
+    } else {
+        out = jstring_to_utf8(env, jret);
+        if (out == NULL) {
+            out = strdup("null");
+        }
+    }
+    if (attached) {
+        (*g_vm)->DetachCurrentThread(g_vm);
+    }
+    return out;
+}
+
+JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeInstallHostCall(JNIEnv *env, jobject thiz, jlong handle) {
+    WeizhiEngine *engine = (WeizhiEngine *)(intptr_t)handle;
+    jclass cls;
+    jobject global_thiz;
+    if (engine == NULL) {
+        return -1;
+    }
+    cls = (*env)->GetObjectClass(env, thiz);
+    g_host_mid = (*env)->GetMethodID(env, cls, "onHostCall", "(Ljava/lang/String;)Ljava/lang/String;");
+    if (g_host_mid == NULL) {
+        return -1;
+    }
+    global_thiz = (*env)->NewGlobalRef(env, thiz);
+    if (global_thiz == NULL || weizhi_add_function(engine, "__caps", java_host_call, global_thiz) != 0) {
+        if (global_thiz != NULL) {
+            (*env)->DeleteGlobalRef(env, global_thiz);
+        }
+        return -1;
+    }
+    return 0;
+}
+
 JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteNative(JNIEnv *env, jclass clazz, jlong handle,
                                                                         jlong request_id, jboolean ok,
                                                                         jstring plugin_json, jstring error) {

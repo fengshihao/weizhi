@@ -1,9 +1,10 @@
 /.gradle/
 **/build/
 local.properties
+# Staged native libs / plugins (copied by scripts/build-android.sh)
+weizhi/src/main/jniLibs/
 app/src/main/jniLibs/
 app/src/androidTest/assets/plugins/
-
 app/src/androidTest/assets/
 *.iml
 .idea/
