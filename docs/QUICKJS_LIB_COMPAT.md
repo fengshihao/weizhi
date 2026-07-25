@@ -9,7 +9,7 @@
 这些库大多不用改 QuickJS 本身，也不该整包塞进引擎。
 
 - 文本和数据工具打成单个脚本就能跑。
-- ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。`HOST_ABI` 里已规划的 COMPRESS 就是这一层。
+- ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）。
 - 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `media.resize` 同一条路。
 
 QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，再用 `loadScript` 加载。

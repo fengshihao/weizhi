@@ -68,7 +68,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 ## Node-style built-ins (phase 1)
 
 - Prefer `import fs from "fs"`; `require("fs")` is compatible. Built-in names only, no npm.
-- Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`.
+- Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`).
 - `Buffer` / `path` / module table / `fs` surface: C implementation.
 - Filesystem: host sandbox root; relative paths; escape fails with `path` or `escape` in the error.
 - Missing module / missing member: fails with `unsupported` and a clear name (see next section).
@@ -79,7 +79,7 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 
 | Case | Keyword / shape that must appear in the error |
 |---|---|
-| Missing module | `unsupported: module "http" (available: buffer, fs, path, process)` |
+| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib)` |
 | Missing API on a module | `unsupported: fs.watch` (via Proxy, avoid `undefined is not a function`) |
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |

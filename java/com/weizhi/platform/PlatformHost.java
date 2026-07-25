@@ -51,6 +51,9 @@ public class PlatformHost implements WeizhiEngine.HostCall {
                 case "files.write":
                     workspace.write(MiniJson.str(args, "path"), MiniJson.str(args, "text"));
                     return "{\"ok\":true}";
+                case "files.mkdir":
+                    workspace.mkdir(MiniJson.str(args, "dir"));
+                    return "{\"ok\":true}";
                 case "files.rename":
                     workspace.rename(MiniJson.str(args, "path"), MiniJson.str(args, "name"));
                     return "{\"ok\":true}";

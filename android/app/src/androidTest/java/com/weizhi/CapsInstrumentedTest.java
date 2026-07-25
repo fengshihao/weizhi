@@ -8,6 +8,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import com.weizhi.caps.AndroidCaps;
+import com.weizhi.platform.OrganizeFiles;
 import com.weizhi.platform.PlatformHost;
 
 import org.junit.Test;
@@ -84,6 +85,12 @@ public final class CapsInstrumentedTest {
 
         String[] shared = new String[2];
         try (WeizhiEngine engine = new WeizhiEngine()) {
+            File pluginRoot = new File(context().getCacheDir(), "caps-plugins-" + System.currentTimeMillis());
+            File imageDir = new File(pluginRoot, "image_resize");
+            assertTrue(imageDir.mkdirs());
+            copyAsset("plugins/image_resize/manifest.json", new File(imageDir, "manifest.json"));
+            copyAsset("plugins/image_resize/libimage_resize.so", new File(imageDir, "libimage_resize.so"));
+            engine.enableNativePlugins(pluginRoot.getAbsolutePath());
             AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
             session.shareSink = new PlatformHost.ShareSink() {
                 @Override
@@ -99,7 +106,8 @@ public final class CapsInstrumentedTest {
                 }
             };
             AndroidCaps.install(engine, session);
-            String resized = engine.runJs("android.media.resize('in.png', 20)", 8000);
+            String resized = engine.runJs(
+                    "await host.ensureNative('image_resize'); android.media.resize('in.png', 20)", 8000);
             assertTrue(resized.contains("\"width\":20"));
             assertTrue(resized.contains("\"height\":10"));
 
@@ -123,6 +131,93 @@ public final class CapsInstrumentedTest {
                 assertTrue(e.getMessage() != null && e.getMessage().contains("denied"));
             }
         }
+    }
+
+    @Test
+    public void organizeConfirmsMovesAndUndoesOnConflict() throws Exception {
+        File workspace = workspace("organize");
+        write(new File(workspace, "a.txt"), "A");
+        write(new File(workspace, "b.pdf"), "B");
+        File nested = new File(workspace, "文档");
+        assertTrue(nested.mkdirs());
+        write(new File(nested, "b.pdf"), "EXIST");
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
+            session.confirmer = new PlatformHost.Confirmer() {
+                @Override
+                public boolean confirm(String message) {
+                    return false;
+                }
+            };
+            AndroidCaps.install(engine, session);
+            String cancelled = engine.runJs(OrganizeFiles.run("android"), 8000);
+            assertTrue(cancelled.contains("\"cancelled\":true"));
+            assertEquals("A", read(new File(workspace, "a.txt")));
+        }
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
+            session.confirmer = new PlatformHost.Confirmer() {
+                @Override
+                public boolean confirm(String message) {
+                    return message.contains("整理");
+                }
+            };
+            AndroidCaps.install(engine, session);
+            try {
+                engine.runJs(OrganizeFiles.run("android"), 8000);
+                fail("expected move conflict");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage() != null && e.getMessage().length() > 0);
+            }
+            assertEquals("A", read(new File(workspace, "a.txt")));
+            assertEquals("B", read(new File(workspace, "b.pdf")));
+            assertEquals("EXIST", read(new File(nested, "b.pdf")));
+        }
+    }
+
+    @Test
+    public void organizeSortsSandboxFiles() throws Exception {
+        File workspace = workspace("sorted");
+        write(new File(workspace, "笔记.txt"), "笔记");
+        write(new File(workspace, "封面.jpg"), "图");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
+            session.confirmer = new PlatformHost.Confirmer() {
+                @Override
+                public boolean confirm(String message) {
+                    return true;
+                }
+            };
+            AndroidCaps.install(engine, session);
+            String out = engine.runJs(OrganizeFiles.run("android"), 8000);
+            assertTrue(out.contains("\"moved\":2"));
+            assertEquals("笔记", read(new File(workspace, "文档/笔记.txt")));
+            assertEquals("图", read(new File(workspace, "图片/封面.jpg")));
+        }
+    }
+
+    private static void copyAsset(String assetPath, File dest) throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
+        try (java.io.InputStream in = ctx.getAssets().open(assetPath);
+                java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+        }
+    }
+
+    private static void write(File file, String text) throws Exception {
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(file)) {
+            out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    private static String read(File file) throws Exception {
+        return new String(java.nio.file.Files.readAllBytes(file.toPath()), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static Context context() {

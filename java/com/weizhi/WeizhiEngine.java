@@ -497,6 +497,13 @@ public final class WeizhiEngine implements AutoCloseable {
 
     private native int nativeInstallHostCall(long handle);
 
+    private static native byte[] nativeResizeRgba(long handle, byte[] rgba, int width, int height, int maxEdge);
+
+    /** Scale RGBA through the loaded {@code image_resize} plugin. Null when that plugin is not ensured. */
+    public byte[] resizeRgba(byte[] rgba, int width, int height, int maxEdge) {
+        return nativeResizeRgba(nativeHandle, rgba, width, height, maxEdge);
+    }
+
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
 
     private static native void nativeCompleteFetch(long handle, long requestId, int status, String headersJson,

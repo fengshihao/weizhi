@@ -545,3 +545,42 @@ int weizhi_enable_plugin_loader(WeizhiEngine *engine, const char *plugin_dir) {
     weizhi_set_native(engine, loader_ensure, NULL, engine);
     return 0;
 }
+
+int weizhi_plugin_resize_rgba(WeizhiEngine *engine, const uint8_t *rgba, size_t len, int32_t width, int32_t height,
+                              int32_t max_edge, uint8_t **out, size_t *out_len) {
+    Engine *eng = (Engine *)engine;
+    WeizhiLoadedPlugin *plugin;
+    WeizhiPluginExport *ex;
+    WeizhiBuf in;
+    WeizhiBuf produced;
+    typedef WeizhiBuf (*resize_fn)(WeizhiBuf, int32_t, int32_t, int32_t);
+    int i;
+    if (eng == NULL || out == NULL || out_len == NULL) {
+        return -1;
+    }
+    plugin = weizhi_find_plugin(eng, "image_resize");
+    if (plugin == NULL) {
+        return -1;
+    }
+    ex = NULL;
+    for (i = 0; i < plugin->nexports; i++) {
+        if (strcmp(plugin->exports[i].name, "resize_rgba") == 0) {
+            ex = &plugin->exports[i];
+            break;
+        }
+    }
+    if (ex == NULL || ex->fn == NULL) {
+        return -1;
+    }
+    memset(&in, 0, sizeof(in));
+    in.data = (uint8_t *)rgba;
+    in.len = len;
+    produced = ((resize_fn)ex->fn)(in, width, height, max_edge);
+    if (produced.data == NULL || produced.len < 8) {
+        free(produced.data);
+        return -1;
+    }
+    *out = produced.data;
+    *out_len = produced.len;
+    return 0;
+}

@@ -23,6 +23,12 @@ public final class SmokeTest {
                             + "(await fs.promises.readFile('b.txt')).toString()",
                     5000);
             expectEq("\"world\"", out);
+
+            out = engine.runJs(
+                    "const z = require('zlib');"
+                            + "z.gunzipSync(z.gzipSync(Buffer.from('hello zlib'))).toString()",
+                    3000);
+            expectEq("\"hello zlib\"", out);
         }
 
         WeizhiLimits limits = new WeizhiLimits();

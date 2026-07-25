@@ -1,0 +1,19 @@
+{
+  "name": "image_resize",
+  "version": "1.0.0",
+  "min_host_abi": 1,
+  "abi": "weizhi_plugin_v1",
+  "exports": [
+    {
+      "name": "resize_rgba",
+      "symbol": "weizhi_image_resize_resize_rgba",
+      "args": [
+        "bytes",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "ret": "bytes"
+    }
+  ]
+}

@@ -17,8 +17,11 @@ import android.widget.TextView;
 
 import com.weizhi.WeizhiEngine;
 import com.weizhi.caps.AndroidCaps;
+import com.weizhi.platform.OrganizeFiles;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -45,6 +48,8 @@ public final class MainActivity extends Activity {
         if (!workspace.exists() && !workspace.mkdirs()) {
             throw new IllegalStateException("workspace");
         }
+        seed(new File(workspace, "发票.txt"), "发票草稿");
+        seed(new File(workspace, "封面.jpg"), "photo");
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 1);
@@ -63,7 +68,9 @@ public final class MainActivity extends Activity {
                         + "android.files.move('合同.txt','keep');"
                         + "var u = android.files.undo();"
                         + "({undo:u.ok, text:android.files.read('合同.txt'), audit:android.audit.recent().length})");
-        addButton(column, "选择文件夹并列出", "var u = android.files.pickDirectory(); android.files.list('.')");
+        addButton(column, "整理沙箱文档", OrganizeFiles.run("android"));
+        addButton(column, "整理所选文件夹",
+                "android.files.pickDirectory(); " + OrganizeFiles.run("android"));
         addButton(column, "分享文案", "android.share.send({title:'朋友圈草稿', text:'今天的行程已排好'})");
         addButton(column, "5 秒后提醒",
                 "var s = android.reminders.schedule({title:'出发', body:'检查证件', atMs: Date.now()+5000}); s");
@@ -76,13 +83,24 @@ public final class MainActivity extends Activity {
         setContentView(scroll);
     }
 
+    private static void seed(File file, String text) {
+        if (file.exists()) {
+            return;
+        }
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(text.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+            // The organize button reports a clear script error if the sample files are missing.
+        }
+    }
+
     private void addButton(LinearLayout column, String label, String js) {
         Button button = new Button(this);
         button.setText(label);
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                runSnippet(label, js, "选择文件夹并列出".equals(label), "分享文案".equals(label));
+                runSnippet(label, js, "整理所选文件夹".equals(label), "分享文案".equals(label));
             }
         });
         column.addView(button);

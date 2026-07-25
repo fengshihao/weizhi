@@ -438,6 +438,36 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeInstallHostCall(JNIEnv
     return 0;
 }
 
+JNIEXPORT jbyteArray JNICALL Java_com_weizhi_WeizhiEngine_nativeResizeRgba(JNIEnv *env, jclass clazz, jlong handle,
+                                                                          jbyteArray rgba, jint width, jint height,
+                                                                          jint max_edge) {
+    jbyte *in = NULL;
+    jsize in_len = 0;
+    uint8_t *out = NULL;
+    size_t out_len = 0;
+    jbyteArray result = NULL;
+    (void)clazz;
+    if (rgba != NULL) {
+        in_len = (*env)->GetArrayLength(env, rgba);
+        in = (*env)->GetByteArrayElements(env, rgba, NULL);
+    }
+    if (weizhi_plugin_resize_rgba((WeizhiEngine *)(intptr_t)handle, (const uint8_t *)in, (size_t)in_len, (int32_t)width,
+                                  (int32_t)height, (int32_t)max_edge, &out, &out_len) == 0 &&
+        out != NULL) {
+        if (out_len <= 0x7fffffff) {
+            result = (*env)->NewByteArray(env, (jsize)out_len);
+            if (result != NULL) {
+                (*env)->SetByteArrayRegion(env, result, 0, (jsize)out_len, (const jbyte *)out);
+            }
+        }
+        free(out);
+    }
+    if (in != NULL) {
+        (*env)->ReleaseByteArrayElements(env, rgba, in, JNI_ABORT);
+    }
+    return result;
+}
+
 JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCompleteNative(JNIEnv *env, jclass clazz, jlong handle,
                                                                         jlong request_id, jboolean ok,
                                                                         jstring plugin_json, jstring error) {

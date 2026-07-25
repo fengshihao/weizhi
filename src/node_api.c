@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <zlib.h>
 
 typedef struct BufferData {
     uint8_t *bytes;
@@ -1016,6 +1017,7 @@ static JSValue make_caps_object(JSContext *ctx, Engine *engine) {
     JS_SetPropertyStr(ctx, caps, "vfs", JS_TRUE);
     JS_SetPropertyStr(ctx, caps, "http", JS_NewBool(ctx, engine != NULL && engine->http_async != NULL));
     JS_SetPropertyStr(ctx, caps, "native", JS_NewBool(ctx, engine != NULL && engine->native_ensure != NULL));
+    JS_SetPropertyStr(ctx, caps, "compress", JS_TRUE);
     return caps;
 }
 
@@ -1108,6 +1110,174 @@ static JSValue js_console_log(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+static int zlib_convert(const uint8_t *in, size_t in_len, int window_bits, int decompress, size_t limit,
+                         uint8_t **out_bytes, size_t *out_len) {
+    z_stream strm;
+    uint8_t *buf;
+    size_t cap;
+    size_t produced = 0;
+    int ret;
+    if (in_len > limit || in_len > 0xffffffffu) {
+        return -2;
+    }
+    memset(&strm, 0, sizeof(strm));
+    if (decompress) {
+        if (inflateInit2(&strm, window_bits) != Z_OK) {
+            return -1;
+        }
+    } else if (deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, window_bits, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        return -1;
+    }
+    cap = in_len + 64;
+    if (cap < 128) {
+        cap = 128;
+    }
+    if (cap > limit) {
+        cap = limit;
+    }
+    buf = malloc(cap ? cap : 1);
+    if (buf == NULL) {
+        if (decompress) {
+            inflateEnd(&strm);
+        } else {
+            deflateEnd(&strm);
+        }
+        return -1;
+    }
+    strm.next_in = (Bytef *)in;
+    strm.avail_in = (uInt)in_len;
+    for (;;) {
+        size_t used;
+        if (produced >= cap) {
+            size_t next = cap * 2;
+            uint8_t *grown;
+            if (next > limit) {
+                next = limit;
+            }
+            if (next <= cap) {
+                free(buf);
+                if (decompress) {
+                    inflateEnd(&strm);
+                } else {
+                    deflateEnd(&strm);
+                }
+                return -2;
+            }
+            grown = realloc(buf, next);
+            if (grown == NULL) {
+                free(buf);
+                if (decompress) {
+                    inflateEnd(&strm);
+                } else {
+                    deflateEnd(&strm);
+                }
+                return -1;
+            }
+            buf = grown;
+            cap = next;
+        }
+        strm.next_out = buf + produced;
+        strm.avail_out = (uInt)(cap - produced);
+        ret = decompress ? inflate(&strm, Z_NO_FLUSH) : deflate(&strm, Z_FINISH);
+        used = (cap - produced) - strm.avail_out;
+        produced += used;
+        if (ret == Z_STREAM_END) {
+            break;
+        }
+        if ((ret == Z_OK || ret == Z_BUF_ERROR) && used == 0 && strm.avail_out > 0) {
+            free(buf);
+            if (decompress) {
+                inflateEnd(&strm);
+            } else {
+                deflateEnd(&strm);
+            }
+            return -1;
+        }
+        if (ret == Z_OK || ret == Z_BUF_ERROR) {
+            continue;
+        }
+        free(buf);
+        if (decompress) {
+            inflateEnd(&strm);
+        } else {
+            deflateEnd(&strm);
+        }
+        return -1;
+    }
+    if (decompress) {
+        inflateEnd(&strm);
+    } else {
+        deflateEnd(&strm);
+    }
+    *out_bytes = buf;
+    *out_len = produced;
+    return 0;
+}
+
+static JSValue js_zlib_convert(JSContext *ctx, JSValueConst input, int window_bits, int decompress, const char *name) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    uint8_t *in = NULL;
+    size_t in_len = 0;
+    uint8_t *out = NULL;
+    size_t out_len = 0;
+    int rc;
+    if (engine == NULL) {
+        return JS_ThrowInternalError(ctx, "no engine");
+    }
+    if (!weizhi_js_is_buffer(ctx, input) || weizhi_js_buffer_data(ctx, input, &in, &in_len) != 0) {
+        return weizhi_throw_bad_arg(ctx, name, "expected Buffer");
+    }
+    rc = zlib_convert(in, in_len, window_bits, decompress, engine->limits.fs_io_bytes, &out, &out_len);
+    if (rc == -2) {
+        return JS_ThrowRangeError(ctx, "too large: zlib");
+    }
+    if (rc != 0) {
+        return weizhi_throw_bad_arg(ctx, name, "zlib failed");
+    }
+    return weizhi_buffer_adopt(ctx, out, out_len);
+}
+
+static JSValue js_gzip_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "zlib.gzipSync", "expected Buffer");
+    }
+    return js_zlib_convert(ctx, argv[0], 15 + 16, 0, "zlib.gzipSync");
+}
+
+static JSValue js_gunzip_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "zlib.gunzipSync", "expected Buffer");
+    }
+    return js_zlib_convert(ctx, argv[0], 15 + 16, 1, "zlib.gunzipSync");
+}
+
+static JSValue js_deflate_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "zlib.deflateSync", "expected Buffer");
+    }
+    return js_zlib_convert(ctx, argv[0], 15, 0, "zlib.deflateSync");
+}
+
+static JSValue js_inflate_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "zlib.inflateSync", "expected Buffer");
+    }
+    return js_zlib_convert(ctx, argv[0], 15, 1, "zlib.inflateSync");
+}
+
+static JSValue make_zlib_module(JSContext *ctx) {
+    JSValue mod = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, mod, "gzipSync", JS_NewCFunction(ctx, js_gzip_sync, "gzipSync", 1));
+    JS_SetPropertyStr(ctx, mod, "gunzipSync", JS_NewCFunction(ctx, js_gunzip_sync, "gunzipSync", 1));
+    JS_SetPropertyStr(ctx, mod, "deflateSync", JS_NewCFunction(ctx, js_deflate_sync, "deflateSync", 1));
+    JS_SetPropertyStr(ctx, mod, "inflateSync", JS_NewCFunction(ctx, js_inflate_sync, "inflateSync", 1));
+    return weizhi_guard_module(ctx, mod, "zlib");
+}
+
 static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *id;
     (void)this_val;
@@ -1134,9 +1304,13 @@ static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         JS_FreeCString(ctx, id);
         return make_process_object(ctx);
     }
+    if (strcmp(id, "zlib") == 0) {
+        JS_FreeCString(ctx, id);
+        return make_zlib_module(ctx);
+    }
     {
         char msg[192];
-        snprintf(msg, sizeof(msg), "module \"%s\" (available: buffer, fs, path, process)", id);
+        snprintf(msg, sizeof(msg), "module \"%s\" (available: buffer, fs, path, process, zlib)", id);
         JS_FreeCString(ctx, id);
         return weizhi_throw_unsupported(ctx, msg);
     }
@@ -1209,7 +1383,7 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
         }
         return m;
     }
-    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process)", module_name);
+    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib)", module_name);
     return NULL;
 }
 
@@ -1622,6 +1796,32 @@ static JSValue js_typed_export_call(JSContext *ctx, JSValueConst this_val, int a
         in.data = data;
         in.len = len;
         out = ((weizhi_fn_b_b)ex->fn)(in);
+        result = weizhi_buffer_adopt(ctx, out.data, out.len);
+    } else if (ex->nargs == 4 && ex->args[0] == WEIZHI_TY_BYTES && ex->args[1] == WEIZHI_TY_I32 &&
+               ex->args[2] == WEIZHI_TY_I32 && ex->args[3] == WEIZHI_TY_I32 && ex->ret == WEIZHI_TY_BYTES) {
+        WeizhiBuf in;
+        WeizhiBuf out;
+        uint8_t *data = NULL;
+        size_t len = 0;
+        int32_t width = 0;
+        int32_t height = 0;
+        int32_t max_edge = 0;
+        typedef WeizhiBuf (*weizhi_fn_biii_b)(WeizhiBuf, int32_t, int32_t, int32_t);
+        memset(&in, 0, sizeof(in));
+        if (argc < 4 || !weizhi_js_is_buffer(ctx, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (Buffer, i32, i32, i32)");
+        }
+        if (weizhi_js_buffer_data(ctx, argv[0], &data, &len) != 0 || JS_ToInt32(ctx, &width, argv[1]) ||
+            JS_ToInt32(ctx, &height, argv[2]) || JS_ToInt32(ctx, &max_edge, argv[3])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (Buffer, i32, i32, i32)");
+        }
+        in.data = data;
+        in.len = len;
+        out = ((weizhi_fn_biii_b)ex->fn)(in, width, height, max_edge);
         result = weizhi_buffer_adopt(ctx, out.data, out.len);
     } else if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I32 && ex->args[1] == WEIZHI_TY_CB &&
                ex->ret == WEIZHI_TY_I32) {

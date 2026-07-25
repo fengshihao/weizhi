@@ -35,6 +35,9 @@ final class SafStore {
             case "files.write":
                 write(tree, MiniJson.str(args, "path"), MiniJson.str(args, "text"));
                 return "{\"ok\":true}";
+            case "files.mkdir":
+                mkdir(tree, MiniJson.str(args, "dir"));
+                return "{\"ok\":true}";
             case "files.rename":
                 rename(tree, MiniJson.str(args, "path"), MiniJson.str(args, "name"));
                 return "{\"ok\":true}";
@@ -132,6 +135,33 @@ final class SafStore {
             out.write(bytes);
         }
         audit.note("files.write", path);
+    }
+
+    private void mkdir(Uri tree, String dir) throws Exception {
+        if (dir == null || dir.isEmpty() || ".".equals(dir)) {
+            audit.note("files.mkdir", dir);
+            return;
+        }
+        if (dir.startsWith("/") || dir.contains("..")) {
+            throw new IllegalArgumentException("path escape");
+        }
+        String docId = DocumentsContract.getTreeDocumentId(tree);
+        for (String part : dir.split("/")) {
+            if (part.isEmpty() || ".".equals(part)) {
+                continue;
+            }
+            String child = findChild(tree, docId, part);
+            if (child == null) {
+                Uri created = DocumentsContract.createDocument(context.getContentResolver(),
+                        documentUri(tree, docId), DocumentsContract.Document.MIME_TYPE_DIR, part);
+                if (created == null) {
+                    throw new IllegalArgumentException("files.mkdir failed");
+                }
+                child = DocumentsContract.getDocumentId(created);
+            }
+            docId = child;
+        }
+        audit.note("files.mkdir", dir);
     }
 
     private void rename(Uri tree, String path, String name) throws Exception {

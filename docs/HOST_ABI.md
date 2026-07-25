@@ -33,7 +33,7 @@ flowchart TB
 | HTTP | 网络 | `fetch` | 已有 `weizhi_set_http` / `enableFetch` |
 | LOG | 结构化日志 | host log | 已有 `weizhi_set_log` |
 | RANDOM | 熵 | `crypto.getRandomValues` 子集 | 建议新增 |
-| COMPRESS | gzip/deflate | 小表面 | 建议新增 |
+| COMPRESS | gzip/deflate | `require("zlib")` 的 `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync` | 已有 |
 | HASH | sha256 等 | digest / `host.hash` | 建议新增（验签插件） |
 | NATIVE | 签名原生插件 | `host.ensureNative(name)` | 已有 C API + Android `enableNativeMock`（目录/验签模拟） |
 | UI / IMAGE | 位图/相册等 | 后置 | 本阶段 out of scope |

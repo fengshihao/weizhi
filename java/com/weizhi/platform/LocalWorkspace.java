@@ -77,6 +77,12 @@ public final class LocalWorkspace {
         audit("files.write", path);
     }
 
+    public void mkdir(String dir) throws IOException {
+        Path folder = resolve(dir == null || dir.isEmpty() ? "." : dir);
+        Files.createDirectories(folder);
+        audit("files.mkdir", dir);
+    }
+
     public void rename(String path, String name) throws IOException {
         if (name == null || name.isEmpty() || name.contains("/") || name.contains("\\") || name.contains("..")) {
             throw new IllegalArgumentException("bad argument: files.rename: name");

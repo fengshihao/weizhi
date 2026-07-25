@@ -96,6 +96,9 @@ void weizhi_set_native(WeizhiEngine *engine, WeizhiNativeEnsureFn ensure_fn, Wei
                        void *userdata);
 /* Built-in typed loader (dlopen + IDL manifest). See docs/NATIVE_PLUGIN_IDL.md. */
 int weizhi_enable_plugin_loader(WeizhiEngine *engine, const char *plugin_dir);
+/* Call image_resize.resize_rgba on an already ensured plugin. Caller frees *out. Returns 0 on success. */
+int weizhi_plugin_resize_rgba(WeizhiEngine *engine, const uint8_t *rgba, size_t len, int32_t width, int32_t height,
+                              int32_t max_edge, uint8_t **out, size_t *out_len);
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error);
 /* Complete a fetch() promise. headers_json is a JSON object string (may be "{}"). */
 void weizhi_complete_fetch(WeizhiEngine *engine, int64_t request_id, int status, const char *headers_json,

@@ -14,8 +14,13 @@
 
 ### 你可以做什么
 
-- 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`。
+- 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`、`zlib`。
 - 可用 `require("fs")` 或 `import fs from "fs"` 等内置模块名；**没有 npm**。
+- 压缩：`const z = require("zlib")`。`gzipSync` / `gunzipSync`（gzip）和 `deflateSync` / `inflateSync`（raw deflate）的参数与返回值都是 `Buffer`。`process.weizhiCaps.compress` 为 `true`。单次输入或输出超过 fs 载荷上限会报 `too large: zlib`。
+- 宿主只安装一个平台对象，名字是 `android`、`mac` 或 `linux`。调用另外两个名字会抛 `unsupported: … on this host (platform is …)`。
+  - 三个平台都有：`ui.confirm`、`files.list` / `read` / `write` / `mkdir` / `rename` / `move` / `undo`、`audit.recent`。`mkdir` 不进撤销栈。
+  - 仅 Android：`files.pickDirectory`（用户选目录后，后续 `files.*` 走该目录）、`media.resize`（先 `await host.ensureNative("image_resize")`）、`share.send`、`reminders.schedule` / `cancel` / `fire`。
+  - 整理文档：只处理顶层文件，按扩展名归入 `文档` / `图片` / `视频`；先 `ui.confirm`，移动失败则对已成功的移动逐个 `undo`。
 - 用 `loadScript("file.js")` 加载脚本目录下的 JS 库（仅叶子文件名）。
 - 若宿主启用了原生插件：`const p = await host.ensureNative("echo_math")`，再调用导出（如 `p.add([1,2])`）。只传插件名，不要传 SO URL。
 - 支持 Promise、`async`/`await`、`setTimeout` / `clearTimeout`（定时器只在本轮 `runJs` 内有效）。

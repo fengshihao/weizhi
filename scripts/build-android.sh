@@ -76,6 +76,20 @@ if [ -f "$plugin_out/libecho_math.so" ]; then
     cp -f "$plugin_out/libecho_math.so" "$assets_plugin/" || true
 fi
 
+image_out="$out/plugins/image_resize"
+mkdir -p "$image_out"
+cp -f "$root/plugins/image_resize/generated/manifest.json" "$image_out/manifest.json" || true
+image_built=$(find "$out" -name 'libimage_resize.so' 2>/dev/null | head -1 || true)
+if [ -n "$image_built" ] && [ "$image_built" != "$image_out/libimage_resize.so" ]; then
+    cp -f "$image_built" "$image_out/libimage_resize.so" || true
+fi
+image_assets="$root/android/app/src/androidTest/assets/plugins/image_resize"
+mkdir -p "$image_assets"
+cp -f "$image_out/manifest.json" "$image_assets/" || true
+if [ -f "$image_out/libimage_resize.so" ]; then
+    cp -f "$image_out/libimage_resize.so" "$image_assets/" || true
+fi
+
 # Stage JNI into the :weizhi Android library (AAR packaging).
 if [ -f "$out/libweizhijni.so" ]; then
     jni_dir="$root/android/weizhi/src/main/jniLibs/$abi"
