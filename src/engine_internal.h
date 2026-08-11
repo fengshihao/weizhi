@@ -121,6 +121,7 @@ struct WeizhiEngine {
     int cb_queue_len;
     int seq;
     int64_t deadline_ms;
+    atomic_int cancel_requested;
     pthread_t owner;
     atomic_int state;
     WeizhiTimer timers[WEIZHI_MAX_TIMERS];
@@ -138,7 +139,6 @@ struct WeizhiEngine {
     pthread_cond_t async_cv;
     int async_stop;
     int async_pool_started;
-    JSClassID buffer_class_id;
 };
 
 typedef struct WeizhiEngine Engine;
@@ -167,10 +167,13 @@ JSValue weizhi_make_fetch_response(JSContext *ctx, int status, const char *heade
 JSValue weizhi_make_native_plugin(JSContext *ctx, const char *plugin_json);
 /* Refresh process.weizhiCaps after host installs HTTP/NATIVE. */
 void weizhi_refresh_caps(Engine *engine);
-/* Buffer helpers for typed plugins. */
+/* Buffer helpers for typed plugins (Buffer is a Uint8Array subclass). */
 int weizhi_js_is_buffer(JSContext *ctx, JSValueConst val);
 int weizhi_js_buffer_data(JSContext *ctx, JSValueConst val, uint8_t **data, size_t *len);
 JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len);
+/* Read a leaf .js from script_folder into *out (caller frees). Returns 0 on success. */
+int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
+                            char *errbuf, size_t errbuf_len);
 WeizhiLoadedPlugin *weizhi_find_plugin(Engine *engine, const char *name);
 uint32_t weizhi_cb_register(Engine *engine, JSValue fn);
 void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0);

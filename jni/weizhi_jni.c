@@ -82,6 +82,12 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetScriptFolder(JNIEnv
     return rc;
 }
 
+JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCancel(JNIEnv *env, jclass clazz, jlong handle) {
+    (void)env;
+    (void)clazz;
+    weizhi_cancel((WeizhiEngine *)(intptr_t)handle);
+}
+
 JNIEXPORT jstring JNICALL Java_com_weizhi_WeizhiEngine_nativeRunJs(JNIEnv *env, jclass clazz, jlong handle,
                                                                  jstring source, jint timeout_ms) {
     char *src = jstring_to_utf8(env, source);

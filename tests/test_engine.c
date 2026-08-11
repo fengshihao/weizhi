@@ -181,6 +181,49 @@ static void test_timeout(void) {
     weizhi_close(engine);
 }
 
+typedef struct CancelArg {
+    WeizhiEngine *engine;
+    const char *source;
+    WeizhiResult result;
+} CancelArg;
+
+static void *run_until_cancelled(void *arg) {
+    CancelArg *job = arg;
+    job->result = weizhi_run_js(job->engine, job->source, -1);
+    return NULL;
+}
+
+static void expect_cancelled(const char *source) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    CancelArg job;
+    pthread_t thread;
+    WeizhiResult again;
+    job.engine = engine;
+    job.source = source;
+    memset(&job.result, 0, sizeof(job.result));
+    EXPECT(pthread_create(&thread, NULL, run_until_cancelled, &job) == 0);
+    {
+        int i;
+        for (i = 0; i < 40; i++) {
+            usleep(10 * 1000);
+            weizhi_cancel(engine);
+        }
+    }
+    EXPECT(pthread_join(thread, NULL) == 0);
+    EXPECT(job.result.ok == 0);
+    EXPECT(job.result.error != NULL && strstr(job.result.error, "cancelled") != NULL);
+    weizhi_result_free(&job.result);
+    again = weizhi_run_js(engine, "3", 1000);
+    EXPECT(again.ok == 1);
+    weizhi_result_free(&again);
+    weizhi_close(engine);
+}
+
+static void test_cancel(void) {
+    expect_cancelled("while (true) {}");
+    expect_cancelled("await new Promise(() => {})");
+}
+
 static pthread_t g_main_thread;
 static int g_same_thread = 0;
 
@@ -364,6 +407,34 @@ static void test_load_script(void) {
     free(dir);
 }
 
+static void test_relative_import(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    const char *lib = "export function inc(x){ return x + 1; }\n";
+    write_file(dir, "util.js", lib, strlen(lib));
+    EXPECT(weizhi_set_script_folder(engine, dir) == 0);
+    result = weizhi_run_js(engine,
+                           "import { inc } from './util.js';\n"
+                           "export default inc(41);\n",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                           "const m = await import('./util.js');\n"
+                           "m.inc(9);\n",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "10") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "import './../util.js';\n", 1000);
+    EXPECT(result.ok == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
 static void test_promise_await(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result = weizhi_run_js(engine, "await Promise.resolve(42)", 1000);
@@ -416,6 +487,15 @@ static void test_buffer_path_require(void) {
     result = weizhi_run_js(engine, "Buffer.isBuffer(Buffer.from('x')) && !Buffer.isBuffer({})", 1000);
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                           "const b = Buffer.from('AB');"
+                           "({u8: b instanceof Uint8Array, i0: b[0], i1: b[1], len: b.length})",
+                           1000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"u8\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"i0\":65") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"i1\":66") != NULL);
     weizhi_result_free(&result);
     result = weizhi_run_js(engine, "path.join('a','b')", 1000);
     EXPECT(result.ok == 1);
@@ -755,6 +835,21 @@ static void test_fetch_with_host(void) {
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"status\":200") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "hello") != NULL);
     weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                          "const resp = await fetch('https://ok.example/api');"
+                          "({ct: resp.headers.get('Content-Type'), miss: resp.headers.get('nope')})",
+                          3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "application/json") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"miss\":null") != NULL);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                          "const q = new URLSearchParams({a:'1'});"
+                          "const resp2 = await fetch('https://ok.example/api', {method:'POST', body:q});"
+                          "resp2.ok",
+                          3000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
     result = weizhi_run_js(engine, "await fetch('https://blocked.example/')", 3000);
     EXPECT(result.ok == 0);
     EXPECT(result.error != NULL && strstr(result.error, "fetch blocked") != NULL);
@@ -927,12 +1022,14 @@ int main(void) {
     test_memory_limit();
     test_stack_limit();
     test_timeout();
+    test_cancel();
     test_host_runs_on_caller_thread();
     test_reentry_rejected();
     test_second_thread_rejected();
     test_close_while_running_fails();
     test_host_function_limit();
     test_load_script();
+    test_relative_import();
     test_promise_await();
     test_buffer_path_require();
     test_fs_sync_and_promises();

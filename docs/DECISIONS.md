@@ -16,7 +16,7 @@ When people step away, work continues against the agreed design. Below are the s
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
 - **Android delivery**: Gradle module `:weizhi` (`com.android.library`) packages `WeizhiEngine` + `libweizhijni.so` as an **AAR**. `:caps` packages the Android productivity surface (`android.ui` / `android.files` / `android.media` / `android.share` / `android.reminders`). Demo `:app` depends on both. Desktop hosts install `mac` (macOS) or `linux` (Ubuntu and other Linux) via `DesktopCaps` — same method shape, unavailable ops return `unsupported`. Exactly one platform object is live; the other names throw. Build native first (`./scripts/build-android.sh`), then `cd android && gradle :weizhi:assembleRelease :caps:assembleRelease`.
-- **`fetch`**: C provides `globalThis.fetch` (Promise + Response-like `text`/`json`/`arrayBuffer`). Real HTTP is host-installed via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
+- **`fetch`**: C provides the HTTP bridge; prelude wraps it so `body` accepts string / `Buffer` / `Uint8Array` / `Blob` / `FormData` / `URLSearchParams`, and Response has `headers.get`. Host installs via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
 - **`host.ensureNative`**: async plugin load via Host ABI NATIVE. Host does catalog/download/verify/dlopen (Android mock: `enableNativeMock()`). See [HOST_ABI.md](HOST_ABI.md).
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
 
@@ -61,15 +61,17 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 ## Time
 
-- `runJs` timeout of 0 means the default 3000 ms.
-- Negative means no limit.
+- `runJs` timeout of 0 means the default 10 minutes. Negative means no wall-clock limit.
+- Waiting on `fetch` or other host I/O counts toward that limit. Hosts stop a long request with `weizhi_cancel` / `WeizhiEngine.cancel()` from another thread; the error contains `cancelled`.
 - On timeout the error contains `timeout`; the engine can still run the next script.
 
 ## Node-style built-ins (phase 1)
 
 - Prefer `import fs from "fs"`; `require("fs")` is compatible. Built-in names only, no npm.
 - Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`).
-- `Buffer` / `path` / module table / `fs` surface: C implementation.
+- Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
+- `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
+- Relative ES modules: `import { x } from './file.js'` or `await import('./file.js')` load leaf `.js` files from the script folder (same name rules as `loadScript`). Static import scripts may `export default` as the `runJs` result. Built-in names only for bare imports (`fs`, `path`, …); no npm.
 - Filesystem: host sandbox root; relative paths; escape fails with `path` or `escape` in the error.
 - Missing module / missing member: fails with `unsupported` and a clear name (see next section).
 
@@ -79,11 +81,11 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 
 | Case | Keyword / shape that must appear in the error |
 |---|---|
-| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib)` |
+| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib, or ./file.js under script folder)` |
 | Missing API on a module | `unsupported: fs.watch` (via Proxy, avoid `undefined is not a function`) |
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |
-| Timeout / memory / stack | `timeout` / `memory` / `stack` |
+| Timeout / cancel / memory / stack | `timeout` / `cancelled` / `memory` / `stack` |
 | Fetch disabled | `unsupported: fetch (... enableFetch / weizhi_set_http ...)` |
 | Fetch host blocked | `fetch blocked: host "..." is not allowlisted ...` |
 | Fetch body/response too big | `too large: fetch ...` |
@@ -92,7 +94,7 @@ Hosts should pass the full `error` (and `error_location`) back to the orchestrat
 
 ## Script libraries
 
-- Folder is set by `weizhi_set_script_folder` / Java `setScriptFolder`. JS uses leaf names only (`loadScript("util.js")`), not paths.
+- Folder is set by `weizhi_set_script_folder` / Java `setScriptFolder`. JS uses leaf names only (`loadScript("util.js")` or `import './util.js'`), not paths with `/` or `..`.
 - Names allow only letters, digits, `.`, `_`, and `-`. Slash or `..` fails with `name` in the error.
 - Script root and workspace (`fs`) root are separate.
 - Files over 16 MB are rejected.

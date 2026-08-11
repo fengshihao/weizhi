@@ -7,7 +7,7 @@
 /* Default engine limits. Tests assert these; change numbers and tests together. */
 #define WEIZHI_DEFAULT_JS_HEAP_BYTES (32u * 1024u * 1024u)
 #define WEIZHI_DEFAULT_JS_STACK_BYTES (256u * 1024u)
-#define WEIZHI_DEFAULT_TIMEOUT_MS 3000
+#define WEIZHI_DEFAULT_TIMEOUT_MS (10 * 60 * 1000)
 #define WEIZHI_DEFAULT_MAX_HOST_FUNCTIONS 32
 /* Max bytes for one fs read OR one fs write payload (not workspace total size). */
 #define WEIZHI_DEFAULT_FS_IO_BYTES (32u * 1024u * 1024u)
@@ -113,8 +113,11 @@ void weizhi_complete_native(WeizhiEngine *engine, int64_t request_id, int ok, co
 void weizhi_bytes_free(WeizhiBytes *bytes);
 void weizhi_set_log(WeizhiEngine *engine, WeizhiLogFn fn, void *userdata);
 void weizhi_set_run_id(WeizhiEngine *engine, const char *run_id);
-/* timeout_ms 0 uses the default 3000 ms. Negative means no limit. */
+/* timeout_ms 0 uses the default (10 minutes). Negative means no wall-clock limit.
+   Network waits count toward the limit. Call weizhi_cancel from another thread to stop early. */
 WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout_ms);
+/* Abort the in-flight runJs. Safe from another thread. Idle engines ignore it. */
+void weizhi_cancel(WeizhiEngine *engine);
 void weizhi_result_free(WeizhiResult *result);
 
 #endif

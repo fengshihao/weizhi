@@ -93,6 +93,9 @@ void weizhi_emit_log(Engine *engine, const char *event, const char *data_json) {
 static int interrupt_cb(JSRuntime *rt, void *opaque) {
     Engine *engine = opaque;
     (void)rt;
+    if (atomic_load(&engine->cancel_requested)) {
+        return 1;
+    }
     if (engine->deadline_ms == 0) {
         return 0;
     }
@@ -172,13 +175,54 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     return buf;
 }
 
-static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    Engine *engine = JS_GetContextOpaque(ctx);
-    const char *name = NULL;
+int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
+                            char *errbuf, size_t errbuf_len) {
     char path[PATH_MAX];
     const char *error = NULL;
     uint8_t *bytes;
     size_t length = 0;
+    if (out == NULL || out_len == NULL) {
+        return -1;
+    }
+    *out = NULL;
+    *out_len = 0;
+    if (engine == NULL || leaf == NULL ||
+        !valid_leaf_name(leaf) || strlen(leaf) < 4 || strcmp(leaf + strlen(leaf) - 3, ".js") != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "invalid script name");
+        }
+        return -1;
+    }
+    if (engine->script_folder == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "script folder not set");
+        }
+        return -1;
+    }
+    if (resolve_under(engine->script_folder, leaf, path, sizeof(path)) != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "script not found");
+        }
+        return -1;
+    }
+    bytes = read_file(path, &length, &error);
+    if (bytes == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "script not found");
+        }
+        return -1;
+    }
+    *out = bytes;
+    *out_len = length;
+    return 0;
+}
+
+static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = JS_GetContextOpaque(ctx);
+    const char *name = NULL;
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    char errbuf[128];
     JSValue value;
     (void)this_val;
     if (argc < 1) {
@@ -188,22 +232,15 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
     if (name == NULL) {
         return JS_EXCEPTION;
     }
-    if (!valid_leaf_name(name) || strlen(name) < 4 || strcmp(name + strlen(name) - 3, ".js") != 0) {
+    if (weizhi_read_script_leaf(engine, name, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
+        JSValue err;
+        if (strstr(errbuf, "name") != NULL) {
+            err = JS_ThrowTypeError(ctx, "%s", errbuf);
+        } else {
+            err = JS_ThrowReferenceError(ctx, "%s", errbuf);
+        }
         JS_FreeCString(ctx, name);
-        return JS_ThrowTypeError(ctx, "invalid script name");
-    }
-    if (engine->script_folder == NULL) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "script folder not set");
-    }
-    if (resolve_under(engine->script_folder, name, path, sizeof(path)) != 0) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowReferenceError(ctx, "script not found");
-    }
-    bytes = read_file(path, &length, &error);
-    if (bytes == NULL) {
-        JS_FreeCString(ctx, name);
-        return JS_ThrowInternalError(ctx, "%s", error != NULL ? error : "script not found");
+        return err;
     }
     value = JS_Eval(ctx, (const char *)bytes, length, name, JS_EVAL_TYPE_GLOBAL);
     free(bytes);
@@ -301,6 +338,7 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
     engine->limits.max_async_io =
         int_or_default(limits ? limits->max_async_io : 0, WEIZHI_DEFAULT_MAX_ASYNC_IO);
     atomic_init(&engine->state, ST_IDLE);
+    atomic_init(&engine->cancel_requested, 0);
     engine->next_timer_id = 1;
     engine->next_request_id = 1;
     pthread_mutex_init(&engine->wake_mu, NULL);
@@ -449,7 +487,9 @@ static void take_exception(Engine *engine, WeizhiResult *result) {
     if (!JS_IsUndefined(stack) && !JS_IsException(stack)) {
         stack_text = JS_ToCString(engine->ctx, stack);
     }
-    if (message != NULL && strstr(message, "interrupted") != NULL) {
+    if (atomic_load(&engine->cancel_requested)) {
+        result->error = strdup("script cancelled");
+    } else if (message != NULL && strstr(message, "interrupted") != NULL) {
         result->error = strdup("script exceeded the timeout limit");
     } else if (message != NULL && strstr(message, "out of memory") != NULL) {
         result->error = strdup("script exceeded the memory limit");
@@ -505,6 +545,9 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
         return fail_immediately("engine is busy");
     }
     engine->owner = pthread_self();
+    atomic_store(&engine->cancel_requested, 0);
+    /* QuickJS stack limits are relative to the thread that last updated the stack top. */
+    JS_UpdateStackTop(engine->rt);
     started = now_ms();
     if (timeout_ms == 0) {
         timeout_ms = WEIZHI_DEFAULT_TIMEOUT_MS;
@@ -531,7 +574,9 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
         take_exception(engine, &result);
         result.ok = 0;
     } else {
+        JSModuleDef *module_def = NULL;
         if ((eval_flags & JS_EVAL_TYPE_MODULE) != 0) {
+            module_def = JS_VALUE_GET_PTR(value);
             value = JS_EvalFunction(engine->ctx, value);
             if (JS_IsException(value)) {
                 take_exception(engine, &result);
@@ -550,6 +595,20 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
                 if (!JS_IsException(inner)) {
                     JS_FreeValue(engine->ctx, value);
                     value = inner;
+                }
+            }
+            /* Module scripts: prefer export default as the runJs result. */
+            if (module_def != NULL && (JS_IsUndefined(value) || JS_IsNull(value))) {
+                JSValue ns = JS_GetModuleNamespace(engine->ctx, module_def);
+                if (!JS_IsException(ns)) {
+                    JSValue def = JS_GetPropertyStr(engine->ctx, ns, "default");
+                    JS_FreeValue(engine->ctx, ns);
+                    if (!JS_IsException(def) && !JS_IsUndefined(def)) {
+                        JS_FreeValue(engine->ctx, value);
+                        value = def;
+                    } else {
+                        JS_FreeValue(engine->ctx, def);
+                    }
                 }
             }
             {
@@ -745,6 +804,10 @@ JSValue weizhi_await_value(Engine *engine, JSValue value) {
             JS_FreeValue(engine->ctx, value);
             return JS_Throw(engine->ctx, result);
         }
+        if (atomic_load(&engine->cancel_requested)) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_ThrowInternalError(engine->ctx, "cancelled");
+        }
         if (engine->deadline_ms != 0 && now_ms() >= engine->deadline_ms) {
             JS_FreeValue(engine->ctx, value);
             return JS_ThrowInternalError(engine->ctx, "interrupted");
@@ -816,6 +879,16 @@ JSValue weizhi_await_value(Engine *engine, JSValue value) {
         pthread_cond_timedwait(&engine->wake_cv, &engine->wake_mu, &ts);
         pthread_mutex_unlock(&engine->wake_mu);
     }
+}
+
+void weizhi_cancel(WeizhiEngine *engine) {
+    if (engine == NULL) {
+        return;
+    }
+    atomic_store(&engine->cancel_requested, 1);
+    pthread_mutex_lock(&engine->wake_mu);
+    pthread_cond_broadcast(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
 }
 
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error) {

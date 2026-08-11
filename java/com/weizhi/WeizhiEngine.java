@@ -285,6 +285,17 @@ public final class WeizhiEngine implements AutoCloseable {
         return runJs(source, 0);
     }
 
+    /**
+     * Stop the script currently inside {@link #runJs}. Safe to call from another thread.
+     * The running call throws with {@code cancelled} in the message. Network waits end here
+     * rather than by the wall-clock limit.
+     */
+    public void cancel() {
+        if (nativeHandle != 0) {
+            nativeCancel(nativeHandle);
+        }
+    }
+
     /** Called from JNI: dispatch real I/O onto the thread pool. */
     @SuppressWarnings("unused")
     void onVfsAsync(long engine, long requestId, int op, String relpath, byte[] data) {
@@ -486,6 +497,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private static native int nativeSetScriptFolder(long handle, String folder);
 
     private static native String nativeRunJs(long handle, String source, int timeoutMs);
+
+    private static native void nativeCancel(long handle);
 
     private native void nativeInstallJavaAsyncVfs(long handle);
 

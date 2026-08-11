@@ -12,7 +12,7 @@
 - ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）。
 - 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `media.resize` 同一条路。
 
-QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，再用 `loadScript` 加载。
+QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，再用 `loadScript` / `import './file.js'` 加载。
 
 ## 引擎实际能跑什么
 
@@ -22,15 +22,15 @@ Weizhi 暴露给脚本的表面更窄：
 
 | 已有 | 范围 |
 | --- | --- |
-| 模块 | 只有 `buffer`、`fs`、`path`、`process`。`require` / `import` 不解析 npm |
+| 模块 | 内置 `buffer` / `fs` / `path` / `process` / `zlib`。相对 `import './file.js'` 从脚本目录加载叶子文件。`require` / `import` 不解析 npm |
 | `fs` | 读、写、存在、删除，以及 `promises` 的读和写 |
 | `path` | `join`、`basename`、`dirname`、`extname`、`sep` |
-| `Buffer` | 自有对象。`from` 只收字符串，`toString` 只有 utf8 和 hex。不是 `Uint8Array` |
-| `fetch` | body 为字符串或 `Buffer`。Response 有 `text` / `json` / `arrayBuffer` |
+| `Buffer` | `Uint8Array` 子类。`from` 收字符串 / 类型数组 / 类数组；`toString` 有 utf8、hex、base64；可 `buf[i]` |
+| `fetch` | body 为字符串、`Buffer`/`Uint8Array`、`Blob`、`FormData`、`URLSearchParams`。Response 有 `headers.get` / `text` / `json` / `arrayBuffer` |
 | 定时器 | 仅本轮 `runJs` 内的 `setTimeout` / `clearTimeout` |
-| 限额 | 堆 32MB，栈 256KB，单次 `runJs` 3 秒，单次读写 / `fetch` 载荷 32MB |
+| 限额 | 堆 32MB，栈 256KB，单次 `runJs` 默认 10 分钟（可 `cancel`），单次读写 / `fetch` 载荷 32MB |
 
-没有 zlib、`crypto`、`URL`、`TextEncoder`、Blob、FormData、流、DOM、Worker、Canvas。Wasm 已从主干移除，历史实现在分支 `archive/wamr-packs`。
+没有流、DOM、Worker、Canvas。Wasm 已从主干移除，历史实现在分支 `archive/wamr-packs`。
 
 堆和读写上限是天花板，不是预占。`JS_SetMemoryLimit` 只在分配字符串、对象、字节码、类型数组时计数。空闲引擎不占住 32MB。Bitmap、网络缓冲、原生插件不进这道堆计数。超过上限时本次 `runJs` 以 `memory` 或 `too large` 停下，引擎还可以再跑。
 
@@ -46,7 +46,7 @@ Weizhi 暴露给脚本的表面更窄：
 | --- | --- |
 | marked、markdown-it | Markdown。markdown-it 要连同 linkify-it、entities 一起打 |
 | dayjs、date-fns | 日期。date-fns 只打用到的函数 |
-| papaparse | CSV。大表仍受堆和 3 秒超时约束 |
+| `papaparse` | CSV。大表仍受堆和默认超时约束 |
 | js-yaml | YAML |
 | fast-xml-parser | XML。Office 文档拆开后的 XML 层用它，不需要 DOM |
 | nanoid、diff、lodash 子集 | 小工具。避开 `crypto.randomUUID`。lodash 不要整包 |
@@ -83,10 +83,10 @@ Weizhi 暴露给脚本的表面更窄：
 
 | 表面 | 作用 | 放在哪 |
 | --- | --- | --- |
-| `TextEncoder` / `TextDecoder` | JS 字符串和 UTF-8 字节互转。docx、XML、带二进制字段的小工具用它生成或读回 `Uint8Array` | 引擎。纯转码，各平台相同 |
-| base64（`btoa` / `atob`，或 `Buffer` 的 base64） | 字节和可放进 JSON、data URL 的 ASCII 互转。当前 `Buffer` 只有 utf8 和 hex | 引擎 |
-| `URL` / `URLSearchParams` | 解析和拼装地址。很多库使用 `new URL(...)`，而不是手写字符串。现有 `fetch` 只收一整段 URL | 引擎。不发起网络请求 |
-| `crypto.getRandomValues` | 向类型数组填入密码学安全随机字节。`uuid`、Web 版 `nanoid`、令牌生成会调用 | JS 表面在引擎。熵来自操作系统（`getrandom`、`/dev/urandom`、Android `SecureRandom`）。对应 `HOST_ABI` 的 RANDOM。不能用 `Math.random` 代替 |
+| `TextEncoder` / `TextDecoder` | JS 字符串和 UTF-8 字节互转。docx、XML、带二进制字段的小工具用它生成或读回 `Uint8Array` | 已有。只做 UTF-8 |
+| base64（`btoa` / `atob`，或 `Buffer` 的 base64） | 字节和可放进 JSON、data URL 的 ASCII 互转 | 已有。`btoa`/`atob` 是 Latin-1；`Buffer` 另有 `utf8` / `hex` / `base64` |
+| `URL` / `URLSearchParams` | 解析和拼装地址。很多库使用 `new URL(...)`，而不是手写字符串。现有 `fetch` 只收一整段 URL | 已有。精简解析，不发起网络请求 |
+| `crypto.getRandomValues` | 向类型数组填入密码学安全随机字节。`uuid`、Web 版 `nanoid`、令牌生成会调用 | 已有。熵来自 `/dev/urandom`。另有 `crypto.randomUUID()`。不能用 `Math.random` 代替 |
 
 `fetch` 要各平台接自己的网络栈，所以由宿主安装。编码、base64 和 URL 没有平台差异，写进引擎一次即可。
 
