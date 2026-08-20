@@ -174,6 +174,11 @@ JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len);
 /* Read a leaf .js from script_folder into *out (caller frees). Returns 0 on success. */
 int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
                             char *errbuf, size_t errbuf_len);
+/* Zip pack/unpack under fs root (zip-slip safe). Returns 0 on success. */
+int weizhi_zip_extract(Engine *engine, const char *zip_rel, const char *dest_rel, int *out_entries,
+                       int *out_skipped, char *errbuf, size_t errbuf_len);
+int weizhi_zip_create(Engine *engine, const char *src_rel, const char *zip_rel, int *out_files,
+                      char *errbuf, size_t errbuf_len);
 WeizhiLoadedPlugin *weizhi_find_plugin(Engine *engine, const char *name);
 uint32_t weizhi_cb_register(Engine *engine, JSValue fn);
 void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0);

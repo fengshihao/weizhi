@@ -62,6 +62,22 @@ public class PlatformHost implements WeizhiEngine.HostCall {
                     return "{\"ok\":true}";
                 case "files.undo":
                     return "{\"ok\":" + workspace.undo() + "}";
+                case "files.zipExtract": {
+                    String msg = new ZipTools(workspace).extract(MiniJson.str(args, "file"),
+                            MiniJson.str(args, "dest"));
+                    if (msg.startsWith("Error:")) {
+                        return MiniJson.error(msg.substring("Error:".length()).trim());
+                    }
+                    return "{\"message\":" + MiniJson.quote(msg) + "}";
+                }
+                case "files.zipCreate": {
+                    String msg = new ZipTools(workspace).create(MiniJson.str(args, "sourceDir"),
+                            MiniJson.str(args, "file"));
+                    if (msg.startsWith("Error:")) {
+                        return MiniJson.error(msg.substring("Error:".length()).trim());
+                    }
+                    return "{\"message\":" + MiniJson.quote(msg) + "}";
+                }
                 case "audit.recent":
                     return "{\"items\":" + workspace.auditJson() + "}";
                 default:

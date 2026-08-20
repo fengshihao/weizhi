@@ -37,7 +37,7 @@ add_library(quickjs
 target_include_directories(quickjs PUBLIC ${QUICKJS_DIR})
 target_compile_definitions(quickjs PUBLIC CONFIG_VERSION="2026-06-04")
 
-add_library(weizhi src/engine.c src/node_api.c src/plugin_loader.c)
+add_library(weizhi src/engine.c src/node_api.c src/plugin_loader.c src/zip_api.c)
 target_include_directories(weizhi PUBLIC include)
 target_include_directories(weizhi PRIVATE include src)
 target_link_libraries(weizhi PUBLIC quickjs Threads::Threads z)

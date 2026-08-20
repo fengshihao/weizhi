@@ -198,6 +198,24 @@ public final class CapsInstrumentedTest {
         }
     }
 
+    @Test
+    public void zipExtractCreateRoundTrip() throws Exception {
+        File workspace = workspace("zip");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.install(engine, new AndroidCaps.Session(context(), workspace));
+            String out = engine.runJs(
+                    "android.files.mkdir('pack');"
+                            + "android.files.write('pack/a.txt','hello zip');"
+                            + "var c = android.files.zipCreate('pack', 'out.zip');"
+                            + "var e = android.files.zipExtract('out.zip', 'unz');"
+                            + "({c:c, e:e, text:android.files.read('unz/a.txt')})",
+                    8000);
+            assertTrue(out, out.contains("1 files"));
+            assertTrue(out, out.contains("entries"));
+            assertTrue(out, out.contains("\"text\":\"hello zip\""));
+        }
+    }
+
     private static void copyAsset(String assetPath, File dest) throws Exception {
         Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
         try (java.io.InputStream in = ctx.getAssets().open(assetPath);

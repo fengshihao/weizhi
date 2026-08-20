@@ -998,6 +998,7 @@ static JSValue make_caps_object(JSContext *ctx, Engine *engine) {
     JS_SetPropertyStr(ctx, caps, "http", JS_NewBool(ctx, engine != NULL && engine->http_async != NULL));
     JS_SetPropertyStr(ctx, caps, "native", JS_NewBool(ctx, engine != NULL && engine->native_ensure != NULL));
     JS_SetPropertyStr(ctx, caps, "compress", JS_TRUE);
+    JS_SetPropertyStr(ctx, caps, "zip", JS_TRUE);
     JS_SetPropertyStr(ctx, caps, "random", JS_TRUE);
     return caps;
 }
@@ -1259,6 +1260,81 @@ static JSValue make_zlib_module(JSContext *ctx) {
     return weizhi_guard_module(ctx, mod, "zlib");
 }
 
+static JSValue js_zip_extract_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    const char *zip_rel;
+    const char *dest_rel;
+    char errbuf[128];
+    int entries = 0;
+    int skipped = 0;
+    JSValue obj;
+    (void)this_val;
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1])) {
+        return weizhi_throw_bad_arg(ctx, "zip.extractSync", "zip path and dest dir required");
+    }
+    zip_rel = JS_ToCString(ctx, argv[0]);
+    if (zip_rel == NULL) {
+        return JS_EXCEPTION;
+    }
+    dest_rel = JS_ToCString(ctx, argv[1]);
+    if (dest_rel == NULL) {
+        JS_FreeCString(ctx, zip_rel);
+        return JS_EXCEPTION;
+    }
+    errbuf[0] = '\0';
+    if (weizhi_zip_extract(engine, zip_rel, dest_rel, &entries, &skipped, errbuf, sizeof(errbuf)) != 0) {
+        JS_FreeCString(ctx, zip_rel);
+        JS_FreeCString(ctx, dest_rel);
+        return JS_ThrowReferenceError(ctx, "%s", errbuf[0] != '\0' ? errbuf : "zip extract failed");
+    }
+    JS_FreeCString(ctx, zip_rel);
+    JS_FreeCString(ctx, dest_rel);
+    obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "entries", JS_NewInt32(ctx, entries));
+    JS_SetPropertyStr(ctx, obj, "skipped", JS_NewInt32(ctx, skipped));
+    return obj;
+}
+
+static JSValue js_zip_create_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    const char *src_rel;
+    const char *zip_rel;
+    char errbuf[128];
+    int files = 0;
+    JSValue obj;
+    (void)this_val;
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1])) {
+        return weizhi_throw_bad_arg(ctx, "zip.createSync", "source dir and zip path required");
+    }
+    src_rel = JS_ToCString(ctx, argv[0]);
+    if (src_rel == NULL) {
+        return JS_EXCEPTION;
+    }
+    zip_rel = JS_ToCString(ctx, argv[1]);
+    if (zip_rel == NULL) {
+        JS_FreeCString(ctx, src_rel);
+        return JS_EXCEPTION;
+    }
+    errbuf[0] = '\0';
+    if (weizhi_zip_create(engine, src_rel, zip_rel, &files, errbuf, sizeof(errbuf)) != 0) {
+        JS_FreeCString(ctx, src_rel);
+        JS_FreeCString(ctx, zip_rel);
+        return JS_ThrowReferenceError(ctx, "%s", errbuf[0] != '\0' ? errbuf : "zip create failed");
+    }
+    JS_FreeCString(ctx, src_rel);
+    JS_FreeCString(ctx, zip_rel);
+    obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "files", JS_NewInt32(ctx, files));
+    return obj;
+}
+
+static JSValue make_zip_module(JSContext *ctx) {
+    JSValue mod = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, mod, "extractSync", JS_NewCFunction(ctx, js_zip_extract_sync, "extractSync", 2));
+    JS_SetPropertyStr(ctx, mod, "createSync", JS_NewCFunction(ctx, js_zip_create_sync, "createSync", 2));
+    return weizhi_guard_module(ctx, mod, "zip");
+}
+
 static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     const char *id;
     (void)this_val;
@@ -1289,10 +1365,14 @@ static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         JS_FreeCString(ctx, id);
         return make_zlib_module(ctx);
     }
+    if (strcmp(id, "zip") == 0) {
+        JS_FreeCString(ctx, id);
+        return make_zip_module(ctx);
+    }
     {
         char msg[192];
         snprintf(msg, sizeof(msg),
-                 "module \"%s\" (available: buffer, fs, path, process, zlib, or ./file.js under script folder)", id);
+                 "module \"%s\" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)", id);
         JS_FreeCString(ctx, id);
         return weizhi_throw_unsupported(ctx, msg);
     }
@@ -1408,7 +1488,7 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
     if (is_script_js_module_name(module_name)) {
         return load_script_js_module(ctx, engine, module_name);
     }
-    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, or ./file.js under script folder)",
+    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)",
                            module_name);
     return NULL;
 }

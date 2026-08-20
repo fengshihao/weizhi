@@ -78,6 +78,21 @@ public final class SmokeTest {
                     throw e;
                 }
             }
+            engine.runJs(platform + ".files.mkdir('pack'); " + platform + ".files.write('pack/a.txt','hello zip')",
+                    3000);
+            String zipMsg = engine.runJs(platform + ".files.zipCreate('pack', 'out.zip')", 5000);
+            if (zipMsg == null || !zipMsg.contains("1 files")) {
+                throw new AssertionError("zipCreate: " + zipMsg);
+            }
+            String extractMsg = engine.runJs(platform + ".files.zipExtract('out.zip', 'unpacked')", 5000);
+            if (extractMsg == null || !extractMsg.contains("entries")) {
+                throw new AssertionError("zipExtract: " + extractMsg);
+            }
+            expectEq("\"hello zip\"", engine.runJs(platform + ".files.read('unpacked/a.txt')", 3000));
+            String defaultDest = engine.runJs(platform + ".files.zipExtract('out.zip')", 5000);
+            if (defaultDest == null || !defaultDest.contains("tmp/out")) {
+                throw new AssertionError("zipExtract default dest: " + defaultDest);
+            }
         }
         System.out.println("Desktop caps OK (" + platform + ")");
     }

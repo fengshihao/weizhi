@@ -24,6 +24,24 @@ public final class LocalWorkspace {
         return root;
     }
 
+    /** Resolve a relative path under the workspace; escape throws {@link IllegalArgumentException}. */
+    public Path resolve(String rel) {
+        if (rel == null || rel.isEmpty()) {
+            throw new IllegalArgumentException("bad argument: empty path");
+        }
+        Path target = root.resolve(rel).normalize();
+        if (!target.startsWith(root)) {
+            throw new IllegalArgumentException("path escape");
+        }
+        return target;
+    }
+
+    /** Workspace-relative posix path ({@code "."} for the root). */
+    public String relativize(Path path) {
+        String s = root.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/');
+        return s.isEmpty() ? "." : s;
+    }
+
     public String list(String dir) throws IOException {
         Path folder = resolve(dir == null || dir.isEmpty() ? "." : dir);
         if (!Files.isDirectory(folder)) {
@@ -161,18 +179,6 @@ public final class LocalWorkspace {
     }
 
     private String rel(Path path) {
-        String s = root.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/');
-        return s.isEmpty() ? "." : s;
-    }
-
-    private Path resolve(String rel) {
-        if (rel == null || rel.isEmpty()) {
-            throw new IllegalArgumentException("bad argument: empty path");
-        }
-        Path target = root.resolve(rel).normalize();
-        if (!target.startsWith(root)) {
-            throw new IllegalArgumentException("path escape");
-        }
-        return target;
+        return relativize(path);
     }
 }

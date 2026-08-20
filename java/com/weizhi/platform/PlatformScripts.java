@@ -2,8 +2,9 @@ package com.weizhi.platform;
 
 /**
  * JS prelude that installs exactly one live platform object and stubs the others.
- * Shared shape: {@code ui.confirm}, {@code files.*}, {@code media.resize}, {@code share.send},
- * {@code reminders.*}, {@code audit.recent}. Hosts that lack a capability return {@code unsupported}.
+ * Shared shape: {@code ui.confirm}, {@code files.*} (incl. {@code zipExtract}/{@code zipCreate}),
+ * {@code media.resize}, {@code share.send}, {@code reminders.*}, {@code audit.recent}.
+ * Hosts that lack a capability return {@code unsupported}.
  */
 public final class PlatformScripts {
     private PlatformScripts() {
@@ -29,7 +30,7 @@ public final class PlatformScripts {
                 + "function stub(name){\n"
                 + "  function fail(){ throw new Error('unsupported: ' + name + '.* on this host (platform is " + platform + ")'); }\n"
                 + "  fail.ui = { confirm: fail };\n"
-                + "  fail.files = { list: fail, read: fail, write: fail, mkdir: fail, rename: fail, move: fail, undo: fail, pickDirectory: fail };\n"
+                + "  fail.files = { list: fail, read: fail, write: fail, mkdir: fail, rename: fail, move: fail, undo: fail, pickDirectory: fail, zipExtract: fail, zipCreate: fail };\n"
                 + "  fail.media = { resize: fail };\n"
                 + "  fail.share = { send: fail };\n"
                 + "  fail.reminders = { schedule: fail, cancel: fail, fire: fail };\n"
@@ -47,7 +48,9 @@ public final class PlatformScripts {
                 + "    rename: function(path, name){ return call('files.rename', {path: path, name: name}); },\n"
                 + "    move: function(path, toDir){ return call('files.move', {path: path, toDir: toDir}); },\n"
                 + "    undo: function(){ return call('files.undo', {}); },\n"
-                + "    pickDirectory: function(){ return call('files.pickDirectory', {}).uri; }\n"
+                + "    pickDirectory: function(){ return call('files.pickDirectory', {}).uri; },\n"
+                + "    zipExtract: function(file, dest){ return call('files.zipExtract', {file: file, dest: dest == null ? '' : dest}).message; },\n"
+                + "    zipCreate: function(sourceDir, file){ return call('files.zipCreate', {sourceDir: sourceDir, file: file}).message; }\n"
                 + "  },\n"
                 + "  media: { resize: function(path, maxEdge){ return call('media.resize', {path: path, maxEdge: maxEdge}); } },\n"
                 + "  share: { send: function(spec){ spec = spec || {}; return call('share.send', {text: String(spec.text||''), title: String(spec.title||'')}); } },\n"

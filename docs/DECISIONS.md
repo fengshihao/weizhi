@@ -15,10 +15,17 @@ When people step away, work continues against the agreed design. Below are the s
 - **Wasm / WAMR / `loadPack` are archived** on branch `archive/wamr-packs`. Trunk does not link WAMR. Restore from that branch if needed later.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
-- **Android delivery**: Gradle module `:weizhi` (`com.android.library`) packages `WeizhiEngine` + `libweizhijni.so` as an **AAR**. `:caps` packages the Android productivity surface (`android.ui` / `android.files` / `android.media` / `android.share` / `android.reminders`). Demo `:app` depends on both. Desktop hosts install `mac` (macOS) or `linux` (Ubuntu and other Linux) via `DesktopCaps` — same method shape, unavailable ops return `unsupported`. Exactly one platform object is live; the other names throw. Build native first (`./scripts/build-android.sh`), then `cd android && gradle :weizhi:assembleRelease :caps:assembleRelease`.
+- **Android delivery**: Gradle module `:weizhi` (`com.android.library`) packages `WeizhiEngine` + `libweizhijni.so` as an **AAR**. Release AAR ships a **stripped** `libweizhijni.so` (staged by `scripts/build-android.sh` under `jniLibs`; unstripped stays in `build-android/<abi>/` for debugging). `:caps` packages the Android productivity surface (`android.ui` / `android.files` / `android.media` / `android.share` / `android.reminders`). Demo `:app` depends on both. Desktop hosts install `mac` (macOS) or `linux` (Ubuntu and other Linux) via `DesktopCaps` — same method shape, unavailable ops return `unsupported`. Exactly one platform object is live; the other names throw. Build native first (`./scripts/build-android.sh`), then `cd android && gradle :weizhi:assembleRelease :caps:assembleRelease`.
 - **`fetch`**: C provides the HTTP bridge; prelude wraps it so `body` accepts string / `Buffer` / `Uint8Array` / `Blob` / `FormData` / `URLSearchParams`, and Response has `headers.get`. Host installs via `weizhi_set_http` / Java `enableFetch`. Without install, errors say how to enable it.
 - **`host.ensureNative`**: async plugin load via Host ABI NATIVE. Host does catalog/download/verify/dlopen (Android mock: `enableNativeMock()`). See [HOST_ABI.md](HOST_ABI.md).
 - Built-ins such as `Buffer` / `path` / `require`·`import` / Promise drain: **one C implementation** for PC and Android; platforms only swap host wiring.
+
+### Agent tools vs engine APIs
+
+- **Agent Java `@Tool`s** (read / edit with line numbers, grep, glob, agent-side `zip_extract` / `zip_create`, …) live in the **Agent host**, not in Weizhi. They serve the LLM tool loop and UX (line ranges, search hits). Do **not** reimplement those tools inside the engine.
+- **Weizhi built-ins** (`fs`, `path`, `zlib`, `zip`, …) are for **scripts** inside `runJs`: thin, program-shaped APIs (relative paths, `Buffer`). Ordinary file I/O stays on the engine; programming-agent search/edit ergonomics stay on Agent Java.
+- **Caps** (`android` / `mac` / `linux`): generic productivity surface. Shared zip lives here as `files.zipExtract` / `files.zipCreate` (Java NIO, stream-based; Agent may thin-wrap as `@Tool`). Engine `require("zip")` remains for in-script pack/unpack.
+- Grep / workspace search need **not** be C-in-engine for speed — Java NIO (or equivalent) in the Agent is enough when those tools are required.
 
 ## Memory
 
@@ -68,7 +75,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 ## Node-style built-ins (phase 1)
 
 - Prefer `import fs from "fs"`; `require("fs")` is compatible. Built-in names only, no npm.
-- Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`).
+- Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`), `zip` (`require("zip")`: `extractSync` / `createSync`; zip-slip skipped; entry cap 10000; sizes follow `fs_io_bytes`).
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
 - Relative ES modules: `import { x } from './file.js'` or `await import('./file.js')` load leaf `.js` files from the script folder (same name rules as `loadScript`). Static import scripts may `export default` as the `runJs` result. Built-in names only for bare imports (`fs`, `path`, …); no npm.
@@ -81,7 +88,7 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 
 | Case | Keyword / shape that must appear in the error |
 |---|---|
-| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib, or ./file.js under script folder)` |
+| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)` |
 | Missing API on a module | `unsupported: fs.watch` (via Proxy, avoid `undefined is not a function`) |
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |

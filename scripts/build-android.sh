@@ -90,11 +90,22 @@ if [ -f "$image_out/libimage_resize.so" ]; then
     cp -f "$image_out/libimage_resize.so" "$image_assets/" || true
 fi
 
-# Stage JNI into the :weizhi Android library (AAR packaging).
+# Stage stripped JNI into the :weizhi Android library (Release AAR).
+# Keep unstripped $out/libweizhijni.so for local debugging.
 if [ -f "$out/libweizhijni.so" ]; then
     jni_dir="$root/android/weizhi/src/main/jniLibs/$abi"
-    mkdir -p "$jni_dir"
-    cp -f "$out/libweizhijni.so" "$jni_dir/libweizhijni.so"
+    stripped_dir="$out/stripped"
+    mkdir -p "$jni_dir" "$stripped_dir"
+    strip_bin=$(find "$ndk/toolchains/llvm/prebuilt" -type f -name llvm-strip 2>/dev/null | head -1 || true)
+    if [ -n "$strip_bin" ]; then
+        "$strip_bin" --strip-unneeded -o "$stripped_dir/libweizhijni.so" "$out/libweizhijni.so"
+        cp -f "$stripped_dir/libweizhijni.so" "$jni_dir/libweizhijni.so"
+        echo "stripped SO: $(wc -c < "$stripped_dir/libweizhijni.so") bytes (unstripped $(wc -c < "$out/libweizhijni.so"))"
+    else
+        echo "warning: llvm-strip not found; packaging unstripped SO" >&2
+        cp -f "$out/libweizhijni.so" "$stripped_dir/libweizhijni.so"
+        cp -f "$out/libweizhijni.so" "$jni_dir/libweizhijni.so"
+    fi
 fi
 
 echo "NDK: $ndk"
@@ -102,6 +113,9 @@ echo "ABI: $abi  API: $api"
 echo "artifacts: $out/libweizhi.a  $out/weizhi_tests"
 if [ -f "$out/libweizhijni.so" ]; then
     echo "JNI:  $out/libweizhijni.so"
+    if [ -f "$out/stripped/libweizhijni.so" ]; then
+        echo "JNI stripped: $out/stripped/libweizhijni.so"
+    fi
     echo "AAR jniLibs: $root/android/weizhi/src/main/jniLibs/$abi/libweizhijni.so"
 fi
 if [ -f "$plugin_out/libecho_math.so" ]; then

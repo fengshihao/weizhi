@@ -9,7 +9,7 @@
 这些库大多不用改 QuickJS 本身，也不该整包塞进引擎。
 
 - 文本和数据工具打成单个脚本就能跑。
-- ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）。
+- ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）和 `require("zip")`（`extractSync` / `createSync`，可直接解压/打包 Office 类 zip）。
 - 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `media.resize` 同一条路。
 
 QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，再用 `loadScript` / `import './file.js'` 加载。
@@ -22,7 +22,7 @@ Weizhi 暴露给脚本的表面更窄：
 
 | 已有 | 范围 |
 | --- | --- |
-| 模块 | 内置 `buffer` / `fs` / `path` / `process` / `zlib`。相对 `import './file.js'` 从脚本目录加载叶子文件。`require` / `import` 不解析 npm |
+| 模块 | 内置 `buffer` / `fs` / `path` / `process` / `zlib` / `zip`。相对 `import './file.js'` 从脚本目录加载叶子文件。`require` / `import` 不解析 npm |
 | `fs` | 读、写、存在、删除，以及 `promises` 的读和写 |
 | `path` | `join`、`basename`、`dirname`、`extname`、`sep` |
 | `Buffer` | `Uint8Array` 子类。`from` 收字符串 / 类型数组 / 类数组；`toString` 有 utf8、hex、base64；可 `buf[i]` |
