@@ -96,8 +96,19 @@ if [ -f "$out/libweizhijni.so" ]; then
     jni_dir="$root/android/weizhi/src/main/jniLibs/$abi"
     stripped_dir="$out/stripped"
     mkdir -p "$jni_dir" "$stripped_dir"
-    strip_bin=$(find "$ndk/toolchains/llvm/prebuilt" -type f -name llvm-strip 2>/dev/null | head -1 || true)
-    if [ -n "$strip_bin" ]; then
+    # llvm-strip is often a symlink to llvm-objcopy; do not require -type f.
+    strip_bin=""
+    for host in darwin-arm64 darwin-x86_64 linux-x86_64; do
+        cand="$ndk/toolchains/llvm/prebuilt/$host/bin/llvm-strip"
+        if [ -x "$cand" ]; then
+            strip_bin=$cand
+            break
+        fi
+    done
+    if [ -z "$strip_bin" ]; then
+        strip_bin=$(find "$ndk/toolchains/llvm/prebuilt" -name llvm-strip 2>/dev/null | head -1 || true)
+    fi
+    if [ -n "$strip_bin" ] && [ -x "$strip_bin" ]; then
         "$strip_bin" --strip-unneeded -o "$stripped_dir/libweizhijni.so" "$out/libweizhijni.so"
         cp -f "$stripped_dir/libweizhijni.so" "$jni_dir/libweizhijni.so"
         echo "stripped SO: $(wc -c < "$stripped_dir/libweizhijni.so") bytes (unstripped $(wc -c < "$out/libweizhijni.so"))"
