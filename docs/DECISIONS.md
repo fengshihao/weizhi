@@ -6,6 +6,7 @@ When people step away, work continues against the agreed design. Below are the s
 - Host / native plugin ABI: [HOST_ABI.md](HOST_ABI.md)
 - Typed SO / IDL (近原生、Buffer、回调): [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) — 决策 D1–D8 已锁定；真机 android 测通过。
 - Product direction / priorities: [ROADMAP.md](ROADMAP.md)（安卓编程智能体、沙箱语义、技能与版本库；**近期重点是 Agent 集成**）。
+- **Integrator / AI host wiring**: [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)（最小路径、API 速查、Agent 检查清单、错误关键词）。
 
 ## Product boundaries
 
