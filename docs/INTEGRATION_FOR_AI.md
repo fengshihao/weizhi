@@ -136,13 +136,13 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 按顺序做；不要跳步发明 API。
 
-- [ ] 依赖 `:weizhi`（+ 需要时 `:caps`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
+- [ ] 依赖 `:weizhi`（+ 需要时 `:caps`、`:agent-tools`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
 - [ ] App 私有目录创建 **workspace**，`setFsRoot`（与 `AndroidCaps.Session.workspace` 同一路径）
 - [ ] （可选）`setScriptFolder` 指向 App 决定的可写技能/库目录（若与 workspace 分离）
 - [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI
 - [ ] （可选）`enableFetch(allowlist)` + Manifest `INTERNET`
 - [ ] 工具环：`run_js` 工具（或等价）把模型产出的 JS 交给 `WeizhiEngine.runJs`；超时与 `cancel` 接到会话取消
-- [ ] 行号读写 / grep / glob：**Agent `@Tool` + 自己的 Sandbox**，不要塞进 Weizhi
+- [ ] 行号读写 / grep / glob：用 **`:agent-tools`**（或自建 `@Tool` + `WorkspaceSandbox`），不要塞进 Weizhi C 引擎
 - [ ] zip：工具环可薄包 `android.files.zip*` 或继续用 Agent 自有 `ZipTools`；脚本内用 `require("zip")`
 - [ ] 每次失败把 **完整英文 error** 回传模型；系统提示贴上 AGENT_SANDBOX_PROMPT
 - [ ] 任务结束 `engine.close()`；不要假定跨多次 `runJs` 保留 timer；**注意**同引擎全局词法：`const` 不能重复声明
@@ -154,6 +154,33 @@ open → setFsRoot → [setScriptFolder] → [AndroidCaps.install] → [enableFe
   → loop: runJs / cancel
 → close
 ```
+
+### 4.1 Agent tools 模块（可选）
+
+计划与模块说明见 [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md)。
+
+| Gradle | 作用 |
+|--------|------|
+| `:agent-tools` | `AgentToolsBundle`：`read_file` / `grep` / `bash` / `run_js` / skill 等 |
+| `:agent-tools-webview` | `WebViewAgentExtension` → `webview_exec` |
+| `:agent-tools-mcp` | `McpAgentExtension` → `mcp_*`（需 `files/mcp_servers.json`，见 [examples/mcp_servers.example.json](examples/mcp_servers.example.json)） |
+
+```gradle
+dependencies {
+    implementation(project(":agent-tools"))
+    // implementation(project(":agent-tools-webview"))
+    // implementation(project(":agent-tools-mcp"))
+}
+```
+
+```java
+AgentToolkit tk = AgentToolsBundle.builder(workspace.toPath())
+    .engineConfigure(e -> AndroidCaps.install(e, session))
+    .build();
+String out = tk.call("run_js", Map.of("code", "JSON.stringify(1+2)"));
+```
+
+脚本内白名单工具：`await $tools.grep({ pattern: "foo" })`（经 `ScriptToolsBridge`，默认暴露除 `run_js` 外的已注册工具）。
 
 ---
 

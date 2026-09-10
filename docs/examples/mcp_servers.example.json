@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "servers": [
+    {
+      "name": "demo",
+      "url": "https://example.com/mcp",
+      "enabled": false,
+      "description": "示例条目；enabled 为 true 且 URL 可达时，装配 McpAgentExtension 会注册 mcp_call_tool。"
+    }
+  ]
+}
