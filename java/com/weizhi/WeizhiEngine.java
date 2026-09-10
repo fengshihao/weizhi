@@ -149,6 +149,11 @@ public final class WeizhiEngine implements AutoCloseable {
         }
     }
 
+    /** Current {@code __caps} handler; null if not installed. Used to chain agent tool bridge. */
+    public HostCall getHostCall() {
+        return hostCall;
+    }
+
     /** Called from JNI on the JS thread. */
     @SuppressWarnings("unused")
     String onHostCall(String argsJson) {

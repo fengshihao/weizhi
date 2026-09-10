@@ -1,0 +1,3 @@
+-keep class com.weizhi.agent.tool.Tool { *; }
+-keep class com.weizhi.agent.tool.ToolParam { *; }
+-keep @com.weizhi.agent.tool.Tool class * { *; }

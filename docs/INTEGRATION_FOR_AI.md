@@ -141,7 +141,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 - [ ] （可选）`setScriptFolder` 指向 App 决定的可写技能/库目录（若与 workspace 分离）
 - [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI
 - [ ] （可选）`enableFetch(allowlist)` + Manifest `INTERNET`
-- [ ] 工具环：`execute_script` / `runJs` 类工具把模型产出的 JS 交给 `runJs`；超时与 `cancel` 接到会话取消
+- [ ] 工具环：`run_js` 工具（或等价）把模型产出的 JS 交给 `WeizhiEngine.runJs`；超时与 `cancel` 接到会话取消
 - [ ] 行号读写 / grep / glob：**Agent `@Tool` + 自己的 Sandbox**，不要塞进 Weizhi
 - [ ] zip：工具环可薄包 `android.files.zip*` 或继续用 Agent 自有 `ZipTools`；脚本内用 `require("zip")`
 - [ ] 每次失败把 **完整英文 error** 回传模型；系统提示贴上 AGENT_SANDBOX_PROMPT

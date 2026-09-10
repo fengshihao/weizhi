@@ -10,6 +10,7 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 | [docs/AGENT_SANDBOX_PROMPT.md](docs/AGENT_SANDBOX_PROMPT.md) | 复制进 Agent 系统提示的脚本契约 |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 已锁定设计与限额 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 产品方向与优先级 |
+| [docs/AGENT_TOOLS_PLAN.md](docs/AGENT_TOOLS_PLAN.md) | Agent 工具环（bash/skill/MCP/WebView）分阶段计划 |
 | [docs/HOST_ABI.md](docs/HOST_ABI.md) | 宿主 / 原生插件 ABI |
 | [docs/NATIVE_PLUGIN_IDL.md](docs/NATIVE_PLUGIN_IDL.md) | 签名 SO / IDL |
 | [docs/QUICKJS_LIB_COMPAT.md](docs/QUICKJS_LIB_COMPAT.md) | 第三方 JS 库适配 |
@@ -18,7 +19,7 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 
 ```bash
 ./scripts/build-android.sh arm64-v8a
-cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease
+cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-tools:assembleRelease
 ./scripts/test.sh          # 桌面
 ./scripts/test.sh android  # 真机 instrumented
 ```

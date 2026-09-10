@@ -76,7 +76,7 @@
 
 ## 近期优先级（当前焦点）
 
-1. **把 Agent 准备好并与 Weizhi 集成**（主路径）：工作区接线、`runJs` / caps、`execute_script` 类工具、现有 Agent 文件工具对 Weizhi 沙箱。接入步骤见 [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
+1. **把 Agent 准备好并与 Weizhi 集成**（主路径）：工作区接线、`runJs` / caps、`run_js` 工具、现有 Agent 文件工具对 Weizhi 沙箱。接入步骤见 [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 2. 双根只读、技能目录约定、多级 import、快照 VCS：**写入路线图，不阻塞集成**；集成稳定后再按需开做。
 
 ## 迭代建议（集成之后）
