@@ -80,6 +80,7 @@ public final class MainActivity extends Activity {
                 "var s = android.reminders.schedule({title:'出发', body:'检查证件', atMs: Date.now()+5000}); s");
         addButton(column, "Agent bash", null);
         addButton(column, "Agent run_js", null);
+        addButton(column, "Agent skill", null);
         log = new TextView(this);
         log.setPadding(0, 24, 0, 0);
         log.setText("Weizhi Demo\n平台对象: android\n工作区: " + workspace.getAbsolutePath());
@@ -114,6 +115,11 @@ public final class MainActivity extends Activity {
                     runAgentTools("run_js", Map.of("code", "JSON.stringify(1+2)"));
                     return;
                 }
+                if ("Agent skill".equals(label)) {
+                    runAgentTools("load_skill_through_path",
+                            Map.of("skillId", "demo", "path", "SKILL.md"));
+                    return;
+                }
                 runSnippet(label, js, "整理所选文件夹".equals(label), "分享文案".equals(label));
             }
         });
@@ -127,7 +133,7 @@ public final class MainActivity extends Activity {
             public void run() {
                 try {
                     AgentToolkit tk = AgentToolsBundle.builder(Paths.get(workspace.getAbsolutePath()))
-                            .defaultSkillsDir()
+                            .compositeSkills(MainActivity.this, "agent_skills")
                             .engineConfigure(engine -> {
                                 try {
                                     AndroidCaps.Session session =

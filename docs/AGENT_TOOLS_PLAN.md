@@ -22,7 +22,7 @@
 | P1 | `:agent-tools`、bash/文件/搜索/skill、`run_js` | 已完成 |
 | P2 | `$tools` 桥、`AssetSkillRepository`、`:agent-tools-webview` | 已完成 |
 | P3 | `:agent-tools-mcp`、`McpAgentExtension` | 已完成 |
-| P4 | demo 按钮、单测/仪器测试、集成文档 | **进行中** |
+| P4 | demo 按钮、内置 demo skill assets、单测/仪器测试（含 `$tools.grep`）、集成文档 | 已完成 |
 
 ## 3. 装配示例
 

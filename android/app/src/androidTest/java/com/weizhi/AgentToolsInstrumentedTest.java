@@ -51,4 +51,32 @@ public final class AgentToolsInstrumentedTest {
         String out = tk.call("run_js", Map.of("code", "1+2", "timeout_ms", 30_000));
         assertEquals("3", out);
     }
+
+    @Test
+    public void loadBuiltinSkillFromAssets() {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(ctx.getCacheDir(), "agent-skill-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+
+        AgentToolkit tk = AgentToolsBundle.builder(Paths.get(ws.getAbsolutePath()))
+                .compositeSkills(ctx, "agent_skills")
+                .registerRunJs(false)
+                .build();
+        String body = tk.call("load_skill_through_path",
+                Map.of("skillId", "demo", "path", "SKILL.md"));
+        assertTrue(body.contains("Demo Skill"));
+    }
+
+    @Test
+    public void runJsCallsToolsBridgeGrep() {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(ctx.getCacheDir(), "agent-bridge-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+
+        AgentToolkit tk = AgentToolsBundle.builder(Paths.get(ws.getAbsolutePath())).build();
+        tk.call("write_file", Map.of("path", "hay.txt", "content", "needle in haystack\n"));
+        String code = "return await $tools.grep({pattern:'needle', path:'.'});";
+        String out = tk.call("run_js", Map.of("code", code, "timeout_ms", 60_000));
+        assertTrue(out.contains("needle"));
+    }
 }
