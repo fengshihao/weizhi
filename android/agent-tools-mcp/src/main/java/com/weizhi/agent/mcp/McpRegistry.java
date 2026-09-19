@@ -28,16 +28,25 @@ public class McpRegistry {
     private final Map<String, Integer> cachedToolCounts;
     /** 目录 JSONL 用：disableHtmlEscaping 保持描述/schema 中中文与符号原样可读。 */
     private final Gson gson = new com.google.gson.GsonBuilder().disableHtmlEscaping().create();
+    private final McpHttpClientFactory httpClientFactory;
 
     public McpRegistry(List<McpServerConfig> configs) {
-        this(configs, null, null);
+        this(configs, null, null, McpHttpClients.direct());
     }
 
     public McpRegistry(List<McpServerConfig> configs, Map<String, String> descriptions,
                        Map<String, Integer> cachedToolCounts) {
+        this(configs, descriptions, cachedToolCounts, McpHttpClients.direct());
+    }
+
+    public McpRegistry(List<McpServerConfig> configs, Map<String, String> descriptions,
+                       Map<String, Integer> cachedToolCounts,
+                       McpHttpClientFactory httpClientFactory) {
         this.configs = configs;
         this.descriptions = descriptions;
         this.cachedToolCounts = cachedToolCounts;
+        this.httpClientFactory = httpClientFactory != null
+                ? httpClientFactory : McpHttpClients.direct();
     }
 
     /** 预填工具缓存（磁盘缓存启动加载），命中后写目录不发网络请求。 */
@@ -208,7 +217,7 @@ public class McpRegistry {
                 throw new McpClient.McpException("unknown mcp server '" + parts[1]
                         + "', use mcp_list_servers to see configured servers");
             }
-            client = new McpClient(found);
+            client = new McpClient(found, httpClientFactory);
             clients.put(parts[1], client);
         }
         JsonObject args = null;
@@ -272,7 +281,7 @@ public class McpRegistry {
         }
         McpClient client = clients.get(cfg.getName());
         if (client == null) {
-            client = new McpClient(cfg);
+            client = new McpClient(cfg, httpClientFactory);
             clients.put(cfg.getName(), client);
         }
         try {

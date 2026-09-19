@@ -8,12 +8,10 @@ import com.google.gson.JsonObject;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import okhttp3.MediaType;
@@ -81,93 +79,14 @@ public class McpClient {
     private volatile boolean versionHeaderRejected;
 
     public McpClient(McpServerConfig config) {
+        this(config, McpHttpClients.direct());
+    }
+
+    public McpClient(McpServerConfig config, McpHttpClientFactory httpClientFactory) {
         this.config = config;
-        this.http = buildClient();
-    }
-
-    /**
-     * 构造 HttpClient。识别 https_proxy/HTTPS_PROXY 环境变量（公司内网代理，支持
-     * http://user:pass@host:port 认证，与 WebSearchTool/HttpRequestTool 一致）；Java
-     * 不自动读取该环境变量。外网/手机直连场景无此变量即直连；no_proxy 命中 host 直连。
-     */
-    private static OkHttpClient buildClient() {
-        OkHttpClient.Builder b = new OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        String proxyUrlStr = envFirst("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY");
-        if (proxyUrlStr != null && !proxyUrlStr.isEmpty()) {
-            try {
-                java.net.URL proxyUrl = new java.net.URL(proxyUrlStr);
-                final Proxy proxy = new Proxy(Proxy.Type.HTTP,
-                        new java.net.InetSocketAddress(proxyUrl.getHost(), proxyUrl.getPort()));
-                b.proxySelector(new java.net.ProxySelector() {
-                    @Override
-                    public java.util.List<Proxy> select(java.net.URI uri) {
-                        String h = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
-                        return java.util.Collections.singletonList(
-                                matchesNoProxy(h) ? Proxy.NO_PROXY : proxy);
-                    }
-
-                    @Override
-                    public void connectFailed(java.net.URI uri, java.net.SocketAddress sa,
-                                              IOException e) {
-                        // 连接失败交由 OkHttp 抛出，无需处理
-                    }
-                });
-                String userInfo = proxyUrl.getUserInfo();
-                if (userInfo != null) {
-                    String[] parts = userInfo.split(":", 2);
-                    final String user = urlDecode(parts[0]);
-                    final String pass = parts.length > 1 ? urlDecode(parts[1]) : "";
-                    b.proxyAuthenticator((route, response) -> response.request().newBuilder()
-                            .header("Proxy-Authorization",
-                                    okhttp3.Credentials.basic(user, pass))
-                            .build());
-                }
-            } catch (Exception e) {
-                // 代理地址非法时退回直连，但记日志（内网用户会表现为全部请求超时，无此日志无从定位）
-                McpLog.w(
-                        "https_proxy invalid, fallback to direct: " + e.getMessage());
-            }
-        }
-        return b.build();
-    }
-
-    /** no_proxy 条目匹配：精确相等或域名后缀（.example.com 同时覆盖子域）。 */
-    private static boolean matchesNoProxy(String host) {
-        String noProxy = envFirst("no_proxy", "NO_PROXY");
-        if (noProxy == null || host.isEmpty()) {
-            return false;
-        }
-        for (String entry : noProxy.split(",")) {
-            String e = entry.trim().toLowerCase();
-            if (e.isEmpty()) {
-                continue;
-            }
-            if (host.equals(e) || (e.startsWith(".") && host.endsWith(e))
-                    || host.endsWith("." + e)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static String envFirst(String... names) {
-        for (String n : names) {
-            String v = System.getenv(n);
-            if (v != null) {
-                return v;
-            }
-        }
-        return null;
-    }
-
-    private static String urlDecode(String s) {
-        try {
-            return java.net.URLDecoder.decode(s, "UTF-8");
-        } catch (Exception e) {
-            return s;
-        }
+        McpHttpClientFactory factory = httpClientFactory != null
+                ? httpClientFactory : McpHttpClients.direct();
+        this.http = factory.create(config);
     }
 
     public McpServerConfig config() {

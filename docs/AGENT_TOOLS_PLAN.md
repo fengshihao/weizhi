@@ -13,7 +13,7 @@
   └─ :agent-tools-mcp        → 可选 mcp_call_tool / mcp_list_servers
 ```
 
-详见 [INTEGRATION_FOR_AI.md §4.1](INTEGRATION_FOR_AI.md#41-agent-tools-模块可选)。
+**第三方接入教程**：[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)（主文档）。摘要见 [INTEGRATION_FOR_AI.md §4.1](INTEGRATION_FOR_AI.md#41-agent-工具环第三方必读)。
 
 ## 2. 分阶段状态
 

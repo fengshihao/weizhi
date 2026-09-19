@@ -6,7 +6,8 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 
 | 文档 | 用途 |
 |---|---|
-| **[docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)** | **集成方 / AI 接入教程（从这里开始）** |
+| **[docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)** | **集成方 / AI 接入教程（引擎 + caps，从这里开始）** |
+| **[docs/AGENT_TOOLS_INTEGRATION.md](docs/AGENT_TOOLS_INTEGRATION.md)** | **Agent 工具环**（grep/bash/run_js/MCP/WebView/Skill） |
 | [docs/AGENT_SANDBOX_PROMPT.md](docs/AGENT_SANDBOX_PROMPT.md) | 复制进 Agent 系统提示的脚本契约 |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 已锁定设计与限额 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 产品方向与优先级 |

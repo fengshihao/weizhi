@@ -12,14 +12,21 @@ import java.nio.file.Path;
 public final class McpAgentExtension implements AgentToolsExtension {
 
     private final McpServerStore store;
+    private final McpHttpClientFactory httpClientFactory;
 
     public McpAgentExtension(Path configBaseDir) {
+        this(configBaseDir, McpHttpClients.direct());
+    }
+
+    public McpAgentExtension(Path configBaseDir, McpHttpClientFactory httpClientFactory) {
         this.store = new McpServerStore(configBaseDir);
+        this.httpClientFactory = httpClientFactory != null
+                ? httpClientFactory : McpHttpClients.direct();
     }
 
     @Override
     public void register(AgentToolkit toolkit, WorkspaceSandbox sandbox) {
-        McpTools mcp = McpTools.fromStore(store);
+        McpTools mcp = McpTools.fromStore(store, httpClientFactory);
         if (mcp == null) {
             return;
         }

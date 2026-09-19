@@ -19,7 +19,11 @@ public class McpTools {
     private final McpRegistry registry;
 
     public McpTools(List<McpServerConfig> configs) {
-        this.registry = new McpRegistry(configs);
+        this(configs, McpHttpClients.direct());
+    }
+
+    public McpTools(List<McpServerConfig> configs, McpHttpClientFactory httpClientFactory) {
+        this.registry = new McpRegistry(configs, null, null, httpClientFactory);
     }
 
     /**
@@ -27,6 +31,11 @@ public class McpTools {
      * 缓存预载）。无已启用 server 返回 null（端侧据此不注册元工具）。
      */
     public static McpTools fromStore(McpServerStore store) {
+        return fromStore(store, McpHttpClients.direct());
+    }
+
+    public static McpTools fromStore(McpServerStore store,
+                                   McpHttpClientFactory httpClientFactory) {
         List<McpServerEntry> entries = store.enabledServers();
         if (entries.isEmpty()) {
             return null;
@@ -41,7 +50,9 @@ public class McpTools {
             }
             counts.put(e.getName(), e.getToolCount());
         }
-        McpRegistry registry = new McpRegistry(configs, descriptions, counts);
+        McpHttpClientFactory factory = httpClientFactory != null
+                ? httpClientFactory : McpHttpClients.direct();
+        McpRegistry registry = new McpRegistry(configs, descriptions, counts, factory);
         for (McpServerEntry e : entries) {
             List<McpClient.ToolDef> cached = store.loadToolCache(e.getName());
             if (cached != null) {

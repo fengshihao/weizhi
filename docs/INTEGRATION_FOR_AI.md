@@ -6,7 +6,9 @@
 | 文档 | 何时读 |
 |---|---|
 | **本文** | 宿主怎么开引擎、设沙箱、跑脚本、装 caps |
+| **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / MCP / Skill / `$tools`） |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
+| [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
 | [DECISIONS.md](DECISIONS.md) | 限额、错误关键词、分层边界 |
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
 | [HOST_ABI.md](HOST_ABI.md) / [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) | 签名原生插件 |
@@ -19,8 +21,8 @@
 1. **Agent 只有一个编程入口**：宿主调用 `WeizhiEngine.runJs(source[, timeoutMs])`，脚本返回值是 **JSON 文本**。
 2. **不要**把行号 `read_file` / `edit_file` / `grep` / `glob` 实现进引擎或 Caps；那些是 Agent `@Tool`。
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
-4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps`）。
-5. 当前 **一个可读写工作区**（`setFsRoot`）。额外只读根 / 技能库约定见 ROADMAP，**尚未实现**——集成时不要发明未文档化的双根 API。
+4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps` + 可选 `:agent-tools*`）。
+5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。**工具环** `:agent-tools` 另有 `WorkspaceSandbox` + 可选 `extraReadRoot`（见 [AGENT_TOOLS_INTEGRATION.md §3](AGENT_TOOLS_INTEGRATION.md#3-路径与工作区必对齐)）；技能目录用 `workspace/skills` 或 assets + `compositeSkills`，不要发明未文档化的引擎 API。
 6. `setScriptFolder` **只**服务 `loadScript("leaf.js")` / 相对 `import './leaf.js'`（叶子文件名），不是通用只读资料区。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
@@ -33,12 +35,13 @@
 ```bash
 # 在 weizhi 仓库根目录
 ./scripts/build-android.sh arm64-v8a   # 产出 stripped libweizhijni.so → android/weizhi/src/main/jniLibs/
-cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease
+cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-tools:assembleRelease
 ```
 
 - `:weizhi` → 引擎 + `WeizhiEngine` + `libweizhijni.so`（Release 应为 **stripped ~1.1MB**，不是未 strip 的 ~6MB）
 - `:caps` → `AndroidCaps`（`globalThis.android`）
-- `minSdk`：库侧 26；宿主须 `INTERNET` 若启用 `enableFetch`
+- `:agent-tools` → `AgentToolsBundle` / `AgentToolkit`（LLM 工具环 + `run_js`）；可选 `:agent-tools-webview`、`:agent-tools-mcp`
+- `minSdk`：库侧 26；宿主须 `INTERNET` 若启用 `enableFetch` / MCP / 脚本 `fetch`
 
 把 AAR 以 `project` 依赖或发布到本地 maven 均可；AI 改宿主工程时优先：
 
@@ -110,7 +113,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
 | `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
-| `setHostCall(HostCall)` | Caps 用的 `__caps` | `AndroidCaps.install` 内部会调 |
+| `setHostCall(HostCall)` / `getHostCall()` | Caps 用的 `__caps`；可链式包装 | `AndroidCaps.install` 内部会调；`run_js` 的 `$tools` 桥在 install 之后 chain |
 | `enableNativePlugins(dir)` | 真 SO 插件目录 | 见 NATIVE_PLUGIN_IDL |
 | `enableNativeMock()` | 无 SO 联调 | 仅 mock 目录 |
 
@@ -155,32 +158,26 @@ open → setFsRoot → [setScriptFolder] → [AndroidCaps.install] → [enableFe
 → close
 ```
 
-### 4.1 Agent tools 模块（可选）
+### 4.1 Agent 工具环（第三方必读）
 
-计划与模块说明见 [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md)。
+**完整步骤、工具表、Skill/MCP/WebView、LLM 对接与排错** → **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)**（本文只保留摘要）。
 
 | Gradle | 作用 |
 |--------|------|
-| `:agent-tools` | `AgentToolsBundle`：`read_file` / `grep` / `bash` / `run_js` / skill 等 |
+| `:agent-tools` | 默认工具 + `run_js` + `$tools` 桥 |
 | `:agent-tools-webview` | `WebViewAgentExtension` → `webview_exec` |
-| `:agent-tools-mcp` | `McpAgentExtension` → `mcp_*`（需 `files/mcp_servers.json`，见 [examples/mcp_servers.example.json](examples/mcp_servers.example.json)） |
+| `:agent-tools-mcp` | `McpAgentExtension` → `mcp_*` + `.mcp/tools.jsonl` |
 
-```gradle
-dependencies {
-    implementation(project(":agent-tools"))
-    // implementation(project(":agent-tools-webview"))
-    // implementation(project(":agent-tools-mcp"))
-}
-```
+检查清单补充：
 
-```java
-AgentToolkit tk = AgentToolsBundle.builder(workspace.toPath())
-    .engineConfigure(e -> AndroidCaps.install(e, session))
-    .build();
-String out = tk.call("run_js", Map.of("code", "JSON.stringify(1+2)"));
-```
+- [ ] `AgentToolsBundle` 的 `workspace` 与 `setFsRoot` / `AndroidCaps.Session.workspace` **同一路径**
+- [ ] `engineConfigure` 内 `AndroidCaps.install`（若脚本要 `android.*` 或 `$tools` 与 caps 共存）
+- [ ] Skill：`.compositeSkills(ctx, "agent_skills")` 或 `.defaultSkillsDir()`（`workspace/skills` 可写）
+- [ ] MCP：`<filesDir>/mcp_servers.json` 至少一个 `enabled: true`（见 [examples/mcp_servers.example.json](examples/mcp_servers.example.json)）
+- [ ] 把 `tk.exportSchemas()` 接到 LLM；tool 结果用 `tk.call(name, args)`，**勿吞 Error 文本**
+- [ ] 工具环调用在 **后台线程**（`bash` / `run_js` / `webview_exec`）
 
-脚本内白名单工具：`await $tools.grep({ pattern: "foo" })`（经 `ScriptToolsBridge`，默认暴露除 `run_js` 外的已注册工具）。
+模型侧工具名使用 **`run_js`**（不是 `execute_script`）。脚本内：`await $tools.grep({ pattern: "..." })`（白名单默认 = 已注册工具 − `run_js`）。
 
 ---
 
@@ -219,6 +216,11 @@ android.audit.recent()
 | `busy` / `again` | 并发/重入 `runJs` |
 | `cancelled` | 用户取消或 `cancel()`；**不要**用字符串误伤其它含 cancelled 的文案（引擎已按 flag 区分） |
 | `const` 重复声明 | 同引擎多次 `runJs` 共享全局；换名或新引擎 |
+| Agent 工具 `Error: unknown tool` | 未装可选 AAR 或扩展未 `.extension(...)` |
+| `$tools.xxx` 不可用 | 未装配 `AgentToolsBundle` / `xxx` 不在 `jsExposed` |
+| MCP 无 `mcp_call_tool` | `mcp_servers.json` 无 enabled server |
+
+更多工具环问题见 [AGENT_TOOLS_INTEGRATION.md §12](AGENT_TOOLS_INTEGRATION.md#12-常见集成问题)。
 
 ---
 
@@ -234,7 +236,7 @@ android.audit.recent()
 
 - Fork / 修改 `third_party/quickjs`
 - 在引擎里实现 Agent 编程工具（grep、带行号 edit）
-- 假设有 npm、`node_modules`、持久事件循环、双根只读 API（未落地前）
+- 假设有 npm、`node_modules`、持久事件循环、**引擎 fs 双根只读 API**（未落地前；工具环 `extraReadRoot` 除外，见 AGENT_TOOLS_INTEGRATION）
 - 吞掉 `runJs` 异常只返回 “failed”
 - 把未 strip 的 debug `.so` 当 Release 分发
 
@@ -248,6 +250,7 @@ android.audit.recent()
 4. （若开网）`enableFetch` 后 `fetch` 成功；未开则错误含 `enableFetch`
 5. 另一线程 `cancel()` 长脚本 → 错误含 `cancelled`
 6. 真机：`./scripts/test.sh android` 或宿主自有 instrumented 测试
+7. （若接 `:agent-tools`）`tk.call("bash", …)`、`tk.call("run_js", …)`、`load_skill_through_path`、可选 `$tools.grep`（见 `AgentToolsInstrumentedTest`）
 
 ---
 
