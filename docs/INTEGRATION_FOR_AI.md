@@ -43,13 +43,22 @@ cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-too
 ```bash
 ./scripts/publish-android-maven.sh arm64-v8a
 # → android/build/maven/com/weizhi/...  （坐标见 android/gradle.properties）
+```
 
+GitHub：**仓库 Settings → Actions → General** 需启用 Actions（私有仓库首次要打开）。然后在 **Actions** 里可手动运行：
+
+- **Publish Android Maven** — 只打 Maven 包并上传 artifact `weizhi-android-maven`
+- **CI** — 桌面测试；在 `master` push 或手动 **Run workflow** 时也会跑 Android Maven 任务
+
+Agent1 导入：
+
+```bash
 # Agent1 仓库根目录：
 ./import-weizhi-prebuilt.sh /path/to/weizhi/android/build/maven
 cd android_agent && ./gradlew :app:assembleDebug
 ```
 
-也可 `./scripts/package-android-maven-bundle.sh` 打 tgz，用 `WEIZHI_PREBUILT_URL` 导入。不要只拷贝裸 AAR 进 Agent1 仓库（缺 POM/transitive，Gradle 解析不稳定）。
+也可从 weizhi Actions 下载 `weizhi-android-maven` artifact，解压后 import，或配置 Agent1 Secret `WEIZHI_PREBUILT_URL`。
 
 - `:weizhi` → 引擎 + `WeizhiEngine` + `libweizhijni.so`（Release 应为 **stripped ~1.1MB**，不是未 strip 的 ~6MB）
 - `:caps` → `AndroidCaps`（`globalThis.android`）
