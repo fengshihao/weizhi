@@ -36,22 +36,27 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
+      - name: Install Android SDK + NDK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
-            "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "ndk;26.1.10909125"
+          if [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKM="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+            echo "${ANDROID_HOME}/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          else
+            SDKM="${ANDROID_HOME}/cmdline-tools/16.0/bin/sdkmanager"
+            echo "${ANDROID_HOME}/cmdline-tools/16.0/bin" >> "$GITHUB_PATH"
+          fi
+          echo "${ANDROID_HOME}/platform-tools" >> "$GITHUB_PATH"
+          yes | "$SDKM" --licenses >/dev/null
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
 
       - name: Build native + publish to android/build/maven
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
           ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
         run: |
           chmod +x scripts/publish-android-maven.sh android/gradlew
@@ -77,5 +82,7 @@ jobs:
           WEIZHI_PUBLISH_URL: https://maven.pkg.github.com/${{ github.repository }}
           WEIZHI_PUBLISH_USERNAME: ${{ github.actor }}
           WEIZHI_PUBLISH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
           ABI: ${{ github.event.inputs.abi || 'arm64-v8a' }}
         run: ./scripts/publish-android-maven.sh "${ABI}" --remote
