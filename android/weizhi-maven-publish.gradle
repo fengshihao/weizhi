@@ -1,0 +1,26 @@
+// Shared Maven publication for Agent1 `weizhi-prebuilt/maven` (group com.weizhi).
+def weizhiGroup = findProperty("weizhi.group") ?: "com.weizhi"
+def weizhiVersion = findProperty("weizhi.version") ?: "0.1.0-SNAPSHOT"
+
+group = weizhiGroup
+version = weizhiVersion
+
+android {
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = weizhiGroup
+                artifactId = project.name
+            }
+        }
+    }
+}

@@ -1,6 +1,9 @@
 plugins {
     id("com.android.library")
+    id("maven-publish")
 }
+
+apply from: rootProject.file("weizhi-maven-publish.gradle")
 
 android {
     namespace = "com.weizhi.agent.mcp"

@@ -21,6 +21,7 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 ```bash
 ./scripts/build-android.sh arm64-v8a
 cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-tools:assembleRelease
+./scripts/publish-android-maven.sh arm64-v8a   # Agent1 → import-weizhi-prebuilt.sh
 ./scripts/test.sh          # 桌面
 ./scripts/test.sh android  # 真机 instrumented
 ```
