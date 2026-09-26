@@ -2,3 +2,69 @@ plugins {
     id("com.android.application") version "8.5.2" apply false
     id("com.android.library") version "8.5.2" apply false
 }
+
+ext {
+    weizhiMavenRepoDir = file("${rootDir}/build/maven")
+}
+
+subprojects { sub ->
+    sub.plugins.withId("maven-publish") {
+        sub.publishing {
+            repositories {
+                maven {
+                    name = "weizhiRepo"
+                    url = rootProject.ext.weizhiMavenRepoDir
+                }
+                mavenLocal()
+                def remoteUrl = sub.findProperty("weizhiPublishUrl")?.toString()?.trim()
+                    ?: System.getenv("WEIZHI_PUBLISH_URL")?.trim()
+                if (remoteUrl) {
+                    maven {
+                        name = "weizhiRemote"
+                        url = uri(remoteUrl)
+                        credentials {
+                            username = sub.findProperty("weizhiPublishUsername")?.toString() ?: System.getenv("WEIZHI_PUBLISH_USERNAME") ?: ""
+                            password = sub.findProperty("weizhiPublishPassword")?.toString() ?: System.getenv("WEIZHI_PUBLISH_PASSWORD") ?: ""
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+def weizhiPublishModules = [
+    ":weizhi",
+    ":caps",
+    ":agent-tools",
+    ":agent-tools-webview",
+    ":agent-tools-mcp",
+]
+
+tasks.register("publishWeizhiAndroidLibraries") {
+    group = "publishing"
+    description = "Publish release AARs to android/build/maven (Agent1 import-weizhi-prebuilt.sh layout)"
+    weizhiPublishModules.each { path ->
+        dependsOn("${path}:publishReleasePublicationToWeizhiRepoRepository")
+    }
+}
+
+tasks.register("publishWeizhiAndroidLibrariesToMavenLocal") {
+    group = "publishing"
+    description = "Publish release AARs to ~/.m2/repository"
+    weizhiPublishModules.each { path ->
+        dependsOn("${path}:publishReleasePublicationToMavenLocal")
+    }
+}
+
+tasks.register("publishWeizhiAndroidLibrariesToRemote") {
+    group = "publishing"
+    description = "Publish release AARs to weizhiPublishUrl / WEIZHI_PUBLISH_URL (e.g. GitHub Packages)"
+    onlyIf {
+        def u = findProperty("weizhiPublishUrl")?.toString()?.trim() ?: System.getenv("WEIZHI_PUBLISH_URL")?.trim()
+        u as boolean
+    }
+    weizhiPublishModules.each { path ->
+        dependsOn("${path}:publishReleasePublicationToWeizhiRemoteRepository")
+    }
+}

@@ -1,0 +1,53 @@
+name: Publish Android Maven
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "android-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;26.1.10909125"
+
+      - name: Build native + publish to android/build/maven
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.1.10909125
+        run: |
+          chmod +x scripts/publish-android-maven.sh android/gradlew
+          ./scripts/publish-android-maven.sh arm64-v8a
+
+      - name: Package tarball for Agent1 import
+        run: |
+          chmod +x scripts/package-android-maven-bundle.sh
+          ./scripts/package-android-maven-bundle.sh dist/weizhi-android-maven.tgz
+
+      - name: Upload Maven bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weizhi-android-maven
+          path: dist/weizhi-android-maven.tgz
+
+      - name: Publish to GitHub Packages
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          WEIZHI_PUBLISH_URL: https://maven.pkg.github.com/${{ github.repository }}
+          WEIZHI_PUBLISH_USERNAME: ${{ github.actor }}
+          WEIZHI_PUBLISH_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/publish-android-maven.sh arm64-v8a --remote

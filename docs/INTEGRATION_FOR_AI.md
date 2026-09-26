@@ -38,6 +38,19 @@
 cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-tools:assembleRelease
 ```
 
+**给 Agent1 的 Maven 预编译（推荐 CI / 无源码联编时）**：
+
+```bash
+./scripts/publish-android-maven.sh arm64-v8a
+# → android/build/maven/com/weizhi/...  （坐标见 android/gradle.properties）
+
+# Agent1 仓库根目录：
+./import-weizhi-prebuilt.sh /path/to/weizhi/android/build/maven
+cd android_agent && ./gradlew :app:assembleDebug
+```
+
+也可 `./scripts/package-android-maven-bundle.sh` 打 tgz，用 `WEIZHI_PREBUILT_URL` 导入。不要只拷贝裸 AAR 进 Agent1 仓库（缺 POM/transitive，Gradle 解析不稳定）。
+
 - `:weizhi` → 引擎 + `WeizhiEngine` + `libweizhijni.so`（Release 应为 **stripped ~1.1MB**，不是未 strip 的 ~6MB）
 - `:caps` → `AndroidCaps`（`globalThis.android`）
 - `:agent-tools` → `AgentToolsBundle` / `AgentToolkit`（LLM 工具环 + `run_js`）；可选 `:agent-tools-webview`、`:agent-tools-mcp`
