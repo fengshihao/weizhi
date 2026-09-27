@@ -279,7 +279,14 @@ public final class WeizhiEngine implements AutoCloseable {
      * Run JS. Returns JSON text on success; throws on failure (error text from C).
      */
     public String runJs(String source, int timeoutMs) {
-        String out = nativeRunJs(nativeHandle, source, timeoutMs);
+        return runJs(source, timeoutMs, null);
+    }
+
+    /**
+     * @param filename QuickJS eval filename for stack traces (workspace-relative path); null uses {@code <eval>}.
+     */
+    public String runJs(String source, int timeoutMs, String filename) {
+        String out = nativeRunJs(nativeHandle, source, timeoutMs, filename);
         if (out != null && out.startsWith("!")) {
             throw new RuntimeException(out.substring(1));
         }
@@ -501,7 +508,7 @@ public final class WeizhiEngine implements AutoCloseable {
 
     private static native int nativeSetScriptFolder(long handle, String folder);
 
-    private static native String nativeRunJs(long handle, String source, int timeoutMs);
+    private static native String nativeRunJs(long handle, String source, int timeoutMs, String filename);
 
     private static native void nativeCancel(long handle);
 

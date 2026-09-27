@@ -89,24 +89,33 @@ JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCancel(JNIEnv *env, jc
 }
 
 JNIEXPORT jstring JNICALL Java_com_weizhi_WeizhiEngine_nativeRunJs(JNIEnv *env, jclass clazz, jlong handle,
-                                                                 jstring source, jint timeout_ms) {
+                                                                 jstring source, jint timeout_ms,
+                                                                 jstring filename) {
     char *src = jstring_to_utf8(env, source);
+    char *fname = filename != NULL ? jstring_to_utf8(env, filename) : NULL;
     WeizhiResult result;
     jstring out;
     (void)clazz;
     if (src == NULL) {
+        free(fname);
         return NULL;
     }
-    result = weizhi_run_js((WeizhiEngine *)(intptr_t)handle, src, (int)timeout_ms);
+    result = weizhi_run_js_ex((WeizhiEngine *)(intptr_t)handle, src, (int)timeout_ms, fname);
     free(src);
+    free(fname);
     if (result.ok && result.output_text != NULL) {
         out = (*env)->NewStringUTF(env, result.output_text);
     } else if (result.error != NULL) {
         size_t n = strlen(result.error);
-        char *msg = malloc(n + 2);
+        size_t loc = (result.error_location != NULL) ? strlen(result.error_location) : 0;
+        char *msg = malloc(n + loc + 4);
         if (msg != NULL) {
             msg[0] = '!';
             memcpy(msg + 1, result.error, n + 1);
+            if (loc > 0) {
+                strcat(msg, "\n");
+                strcat(msg, result.error_location);
+            }
             out = (*env)->NewStringUTF(env, msg);
             free(msg);
         } else {
