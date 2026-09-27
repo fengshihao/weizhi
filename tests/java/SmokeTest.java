@@ -14,6 +14,16 @@ public final class SmokeTest {
             String out = engine.runJs("1 + 2", 1000);
             expectEq("3", out);
 
+            try {
+                engine.runJs("const a=1;\nconst b=2;\nconst c=3;\nconst d=4;\n}\n", 1000, "scripts/foo.js");
+                fail("expected syntax error with filename stack");
+            } catch (RuntimeException e) {
+                String msg = e.getMessage();
+                if (msg == null || !msg.contains("scripts/foo.js") || !msg.contains(":5")) {
+                    fail("stack missing scripts/foo.js:5 in: " + msg);
+                }
+            }
+
             engine.setFsRoot(fsRoot.toString());
             out = engine.runJs("fs.writeFileSync('a.txt','hello'); fs.readFileSync('a.txt').toString()", 2000);
             expectEq("\"hello\"", out);

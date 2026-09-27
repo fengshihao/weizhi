@@ -116,6 +116,9 @@ void weizhi_set_run_id(WeizhiEngine *engine, const char *run_id);
 /* timeout_ms 0 uses the default (10 minutes). Negative means no wall-clock limit.
    Network waits count toward the limit. Call weizhi_cancel from another thread to stop early. */
 WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout_ms);
+/* filename: QuickJS eval name for stack traces (e.g. workspace-relative script path). NULL → "<eval>". */
+WeizhiResult weizhi_run_js_ex(WeizhiEngine *engine, const char *source, int timeout_ms,
+                              const char *filename);
 /* Abort the in-flight runJs. Safe from another thread. Idle engines ignore it. */
 void weizhi_cancel(WeizhiEngine *engine);
 void weizhi_result_free(WeizhiResult *result);

@@ -527,6 +527,11 @@ static WeizhiResult fail_immediately(const char *error) {
 }
 
 WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout_ms) {
+    return weizhi_run_js_ex(engine, source, timeout_ms, NULL);
+}
+
+WeizhiResult weizhi_run_js_ex(WeizhiEngine *engine, const char *source, int timeout_ms,
+                              const char *filename) {
     WeizhiResult result;
     int64_t started;
     int expected = ST_IDLE;
@@ -534,10 +539,12 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
     char *source_q;
     char *data;
     int eval_flags;
+    const char *eval_name;
     memset(&result, 0, sizeof(result));
     if (engine == NULL || source == NULL) {
         return fail_immediately("no script to run");
     }
+    eval_name = (filename != NULL && filename[0] != '\0') ? filename : "<eval>";
     if (!atomic_compare_exchange_strong(&engine->state, &expected, ST_RUNNING)) {
         if (expected == ST_RUNNING && pthread_equal(engine->owner, pthread_self())) {
             return fail_immediately("cannot run a script again from inside a script");
@@ -569,7 +576,7 @@ WeizhiResult weizhi_run_js(WeizhiEngine *engine, const char *source, int timeout
     } else {
         eval_flags = JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_ASYNC;
     }
-    value = JS_Eval(engine->ctx, source, strlen(source), "<eval>", eval_flags);
+    value = JS_Eval(engine->ctx, source, strlen(source), eval_name, eval_flags);
     if (JS_IsException(value)) {
         take_exception(engine, &result);
         result.ok = 0;

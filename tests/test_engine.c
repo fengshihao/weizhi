@@ -79,6 +79,23 @@ static void test_engine_survives_syntax_error(void) {
     weizhi_close(engine);
 }
 
+static void test_run_js_ex_filename_in_stack(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    const char *source = "const a = 1;\n"
+                         "const b = 2;\n"
+                         "const c = 3;\n"
+                         "const d = 4;\n"
+                         "}\n";
+    WeizhiResult bad = weizhi_run_js_ex(engine, source, 1000, "scripts/foo.js");
+    EXPECT(bad.ok == 0);
+    EXPECT(bad.error != NULL && bad.error[0] != '\0');
+    EXPECT(bad.error_location != NULL);
+    EXPECT(strstr(bad.error_location, "scripts/foo.js") != NULL);
+    EXPECT(strstr(bad.error_location, ":5") != NULL);
+    weizhi_result_free(&bad);
+    weizhi_close(engine);
+}
+
 static char *echo_host(const char *args_json, void *userdata) {
     (void)userdata;
     return must_dup(args_json);
@@ -1070,6 +1087,7 @@ static void test_image_resize_plugin(void) {
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
+    test_run_js_ex_filename_in_stack();
     test_host_function_receives_json();
     test_log_contains_host_call();
     test_memory_limit();
