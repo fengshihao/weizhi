@@ -110,15 +110,19 @@ zip.createSync("tmp/doc", "out/report-edited.docx");
 
 路径均在 workspace 内；**`..` 会被 fs/zip 拒绝**。与 caps 并行时，推荐 **`android.files.zipExtract` / `zipCreate`**，便于审计与 Agent1 工具对齐。
 
-### 4.2 将来推荐形态（catalog）
+### 4.2 JS 语义库（已提供 MVP：`WeizhiDocx`）
 
-| 资源 | kind | 说明 |
+AI **不应**直接改 XML；应使用封装库 **[office-js-api.md](office-js-api.md)**：
+
+| 资源 | 位置 | 说明 |
 |---|---|---|
-| `catalog/scripts/office/ooxml-edit.js` | `script` | 薄入口：unpack → 回调 → pack |
-| `catalog/modules/office-helpers.js` | `qjs_module` | 常用 XML 片段、关系 ID 递增、Markdown→段落（从 Java MVP 迁出） |
-| `catalog/skills/…` | skill | 用户可沉淀的「发票 docx」「周报 pptx」流程 |
+| `weizhi-docx.js` | `assets/office/`（可复制到 Agent1 catalog） | `setTitle` / `setBodyStyle` / `addParagraph` / `save` |
+| catalog 薄脚本 | Agent1 `catalog/scripts/office/` | 组合 host.office + WeizhiDocx 的业务流程 |
+| catalog skills | Agent1 | 用户沉淀「周报 docx」等 |
 
-AI **改 skill / 改 JS** 即可扩展版式；**不必等 Weizhi 发版**。
+后续同级增加 `weizhi-xlsx.js`、`weizhi-pptx.js`（表头、列宽、幻灯片标题等语义 API）。
+
+AI **改 catalog JS** 即可扩展版式；**不必等 Weizhi 发版**（库文件随 catalog 同步即可）。
 
 ### 4.3 与专用 API 的关系
 

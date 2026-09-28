@@ -17,6 +17,7 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 | [docs/QUICKJS_LIB_COMPAT.md](docs/QUICKJS_LIB_COMPAT.md) | 第三方 JS 库适配 |
 | [docs/office.md](docs/office.md) | **host.office**（docx / xlsx / pptx MVP） |
 | [docs/office-architecture.md](docs/office-architecture.md) | Office 分层：Java 内核 vs JS/catalog 编排 |
+| [docs/office-js-api.md](docs/office-js-api.md) | **WeizhiDocx** JS 库（标题/字体/行距等语义 API） |
 
 ## 快速构建
 

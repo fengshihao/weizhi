@@ -44,6 +44,7 @@ public final class AndroidCaps {
     public static void install(WeizhiEngine engine, Session session) throws Exception {
         LocalWorkspace files = new LocalWorkspace(session.workspace.toPath());
         session.engine = engine;
+        engine.setFsRoot(session.workspace.getAbsolutePath());
         engine.setHostCall(new AndroidHost(session, files));
         engine.runJs(PlatformScripts.install("android"), 5000);
         engine.runJs(OfficeScripts.install(), 5000);

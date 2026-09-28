@@ -20,8 +20,12 @@ public final class OfficeTest {
             throw new AssertionError("desktop platform required");
         }
         Path root = Files.createTempDirectory("weizhi-office-");
+        Path scriptDir = Path.of(System.getProperty("user.dir"), "assets", "office");
         try (WeizhiEngine engine = new WeizhiEngine()) {
             DesktopCaps.install(engine, root, message -> true);
+            if (Files.isDirectory(scriptDir)) {
+                engine.setScriptFolder(scriptDir.toString());
+            }
             write(root.resolve("notes/report.md"), "# Hello\n\n- item one\n- item two\n");
 
             String docx = engine.runJs(
@@ -54,6 +58,23 @@ public final class OfficeTest {
             assertPkZip(root.resolve("out/deck.pptx"));
             assertZipEntryExists(root.resolve("out/deck.pptx"), "ppt/presentation.xml");
             assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide1.xml", "Intro");
+
+            if (Files.isDirectory(scriptDir)) {
+                String edited = engine.runJs(
+                        "loadScript('weizhi-docx.js');"
+                                + "var doc = WeizhiDocx.open('out/report.docx');"
+                                + "doc.setTitle('Edited Title');"
+                                + "doc.setBodyStyle({font:'SimSun', sizePt:12, lineSpacing:1.5});"
+                                + "doc.save('out/report-edited.docx');"
+                                + "doc.getTitle()",
+                        10000);
+                if (!"\"Edited Title\"".equals(edited)) {
+                    throw new AssertionError("want Edited Title got " + edited);
+                }
+                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "Edited Title");
+                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "SimSun");
+                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "w:val=\"24\"");
+            }
 
             Path artifacts = Path.of(System.getProperty("user.dir"), "build", "office-artifacts");
             Files.createDirectories(artifacts);

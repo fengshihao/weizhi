@@ -43,6 +43,7 @@ public final class DesktopCaps {
             throw new IllegalStateException("unsupported: desktop caps on this host");
         }
         LocalWorkspace files = new LocalWorkspace(workspace);
+        engine.setFsRoot(workspace.toString());
         engine.setHostCall(new PlatformHost(files, platform, confirmer));
         engine.runJs(PlatformScripts.install(platform), 3000);
         engine.runJs(OfficeScripts.install(), 3000);

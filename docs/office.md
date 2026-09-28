@@ -96,7 +96,8 @@ MVP 测试只验证 **ZIP 结构 + 关键 part 路径 + 文本是否写入 XML**
 - **Java 内核（Weizhi AAR，少变）**：沙箱、unpack/pack、空 OOXML 脚手架、可选结构化读/写原语。
 - **JS / catalog（AI 可改，可热更新）**：版式、Markdown 规则、解包改 XML 再打包、复杂生成与读取流程。
 
-详细设计见 **[office-architecture.md](office-architecture.md)**（含 Phase B 原语清单与「今天就能用 fs+zip 编辑 docx」示例）。
+详细设计见 **[office-architecture.md](office-architecture.md)**。  
+**给 AI 的语义编辑库**（改标题、字体、行距等，勿手写 XML）：**[office-js-api.md](office-js-api.md)**（`assets/office/weizhi-docx.js`）。
 
 ## 后续（非 MVP，见 architecture 文档）
 
