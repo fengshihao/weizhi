@@ -25,13 +25,10 @@ public class PlatformHost implements WeizhiEngine.HostCall {
     protected final LocalWorkspace workspace;
     protected final String platform;
     protected final Confirmer confirmer;
-    private final OfficeService office;
-
     public PlatformHost(LocalWorkspace workspace, String platform, Confirmer confirmer) {
         this.workspace = workspace;
         this.platform = platform;
         this.confirmer = confirmer;
-        this.office = new OfficeService(workspace);
     }
 
     @Override
@@ -82,12 +79,6 @@ public class PlatformHost implements WeizhiEngine.HostCall {
                 }
                 case "audit.recent":
                     return "{\"items\":" + workspace.auditJson() + "}";
-                case "office.docx.fromMarkdown":
-                    return office.docxFromMarkdown(args);
-                case "office.xlsx.fromRows":
-                    return office.xlsxFromRows(args);
-                case "office.pptx.fromMarkdown":
-                    return office.pptxFromMarkdown(args);
                 default:
                     return extra(op, args);
             }

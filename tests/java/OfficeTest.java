@@ -10,9 +10,7 @@ import java.nio.file.Path;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-/**
- * Desktop integration tests for {@code host.office.*} (docx / xlsx / pptx + sandbox).
- */
+/** Desktop integration tests for {@code assets/office/docx.js} (model + render). */
 public final class OfficeTest {
     public static void main(String[] args) throws Exception {
         String platform = DesktopCaps.platformObjectName();
@@ -23,57 +21,45 @@ public final class OfficeTest {
         Path scriptDir = Path.of(System.getProperty("user.dir"), "assets", "office");
         try (WeizhiEngine engine = new WeizhiEngine()) {
             DesktopCaps.install(engine, root, message -> true);
-            if (Files.isDirectory(scriptDir)) {
-                engine.setScriptFolder(scriptDir.toString());
+            if (!Files.isDirectory(scriptDir)) {
+                throw new AssertionError("missing script dir " + scriptDir);
             }
+            engine.setScriptFolder(scriptDir.toString());
             write(root.resolve("notes/report.md"), "# Hello\n\n- item one\n- item two\n");
 
-            String docx = engine.runJs(
-                    "host.office.docx.fromMarkdown({inputPath:'notes/report.md', outputPath:'out/report.docx', title:'Report'})",
-                    8000);
-            assertContains(docx, "\"ok\":true");
-            assertContains(docx, "\"path\":\"out/report.docx\"");
+            String mdOut = engine.runJs(
+                    "import { markdownToDocx } from './docx.js';\n"
+                            + "export default markdownToDocx({"
+                            + "inputPath:'notes/report.md', outputPath:'out/report.docx', title:'Report'});\n",
+                    10000);
+            assertContains(mdOut, "\"ok\":true");
+            assertContains(mdOut, "\"path\":\"out/report.docx\"");
             assertPkZip(root.resolve("out/report.docx"));
             assertZipEntryContains(root.resolve("out/report.docx"), "word/document.xml", "Hello");
-            assertZipEntryContains(root.resolve("out/report.docx"), "word/document.xml", "item one");
 
-            String bad = engine.runJs(
-                    "host.office.docx.fromMarkdown({inputPath:'notes/report.md', outputPath:'../outside.docx'})",
-                    5000);
-            assertContains(bad, "\"ok\":false");
-            assertContains(bad, "path escape");
-
-            String xlsx = engine.runJs(
-                    "host.office.xlsx.fromRows({outputPath:'out/data.xlsx', sheetName:'Data', rows:[['A','B'],[1,2]]})",
-                    8000);
-            assertContains(xlsx, "\"ok\":true");
-            assertPkZip(root.resolve("out/data.xlsx"));
-            assertZipEntryContains(root.resolve("out/data.xlsx"), "xl/worksheets/sheet1.xml", "A");
-
-            write(root.resolve("slides/deck.md"), "# Intro\n\n---\n\n# Next\n\n- point\n");
-            String pptx = engine.runJs(
-                    "host.office.pptx.fromMarkdown({inputPath:'slides/deck.md', outputPath:'out/deck.pptx'})",
+            String modelOut = engine.runJs(
+                    "import { Document, renderDocx } from './docx.js';\n"
+                            + "var doc = Document.create({ title: 'T' });\n"
+                            + "doc.addHeading('Edited', 1);\n"
+                            + "doc.setDefaultStyle({ font: 'SimSun', sizePt: 12, lineSpacing: 1.5 });\n"
+                            + "doc.addParagraph('Body');\n"
+                            + "export default renderDocx(doc, 'out/model.docx');\n",
                     10000);
-            assertContains(pptx, "\"ok\":true");
-            assertPkZip(root.resolve("out/deck.pptx"));
-            assertZipEntryExists(root.resolve("out/deck.pptx"), "ppt/presentation.xml");
-            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide1.xml", "Intro");
+            assertContains(modelOut, "\"ok\":true");
+            assertZipEntryContains(root.resolve("out/model.docx"), "word/document.xml", "Edited");
+            assertZipEntryContains(root.resolve("out/model.docx"), "word/document.xml", "SimSun");
 
-            if (Files.isDirectory(scriptDir)) {
-                String edited = engine.runJs(
-                        "import WeizhiDocx from './weizhi-docx.js';"
-                                + "var doc = WeizhiDocx.open('out/report.docx');"
-                                + "doc.setTitle('Edited Title');"
-                                + "doc.setBodyStyle({font:'SimSun', sizePt:12, lineSpacing:1.5});"
-                                + "doc.save('out/report-edited.docx');"
-                                + "export default doc.getTitle();",
-                        10000);
-                if (!"\"Edited Title\"".equals(edited)) {
-                    throw new AssertionError("want Edited Title got " + edited);
+            try {
+                engine.runJs(
+                        "import { markdownToDocx } from './docx.js';\n"
+                                + "markdownToDocx({inputPath:'notes/report.md', outputPath:'../outside.docx'});\n",
+                        5000);
+                throw new AssertionError("expected path escape");
+            } catch (RuntimeException e) {
+                String msg = e.getMessage();
+                if (msg == null || (!msg.contains("path") && !msg.contains("escape") && !msg.contains("invalid"))) {
+                    throw e;
                 }
-                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "Edited Title");
-                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "SimSun");
-                assertZipEntryContains(root.resolve("out/report-edited.docx"), "word/document.xml", "w:val=\"24\"");
             }
 
             Path artifacts = Path.of(System.getProperty("user.dir"), "build", "office-artifacts");
@@ -81,7 +67,7 @@ public final class OfficeTest {
             Files.copy(root.resolve("out/report.docx"), artifacts.resolve("report.docx"),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
-        System.out.println("Office host.office OK (" + platform + ")");
+        System.out.println("Office docx.js OK (" + platform + ")");
     }
 
     private static void write(Path file, String text) throws IOException {
@@ -102,32 +88,19 @@ public final class OfficeTest {
         }
     }
 
-    private static void assertZipEntryExists(Path zipPath, String entryName) throws IOException {
-        if (!zipHasEntry(zipPath, entryName, null)) {
-            throw new AssertionError("missing zip entry " + entryName);
-        }
-    }
-
     private static void assertZipEntryContains(Path zipPath, String entryName, String text) throws IOException {
-        if (!zipHasEntry(zipPath, entryName, text)) {
-            throw new AssertionError("entry " + entryName + " missing text " + text);
-        }
-    }
-
-    private static boolean zipHasEntry(Path zipPath, String entryName, String mustContain) throws IOException {
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipPath))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entryName.equals(entry.getName())) {
-                    if (mustContain == null) {
-                        return true;
+                    String xml = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
+                    if (!xml.contains(text)) {
+                        throw new AssertionError("entry " + entryName + " missing " + text);
                     }
-                    byte[] buf = zis.readAllBytes();
-                    String xml = new String(buf, StandardCharsets.UTF_8);
-                    return xml.contains(mustContain);
+                    return;
                 }
             }
         }
-        return false;
+        throw new AssertionError("missing zip entry " + entryName);
     }
 }

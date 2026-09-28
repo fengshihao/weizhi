@@ -199,15 +199,20 @@ public final class CapsInstrumentedTest {
     }
 
     @Test
-    public void hostOfficeDocxFromMarkdown() throws Exception {
+    public void docxJsMarkdownToDocx() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
+        File scriptDir = new File(ctx.getCacheDir(), "office-scripts-" + System.currentTimeMillis());
+        assertTrue(scriptDir.mkdirs());
+        copyAsset("office/docx.js", new File(scriptDir, "docx.js"));
         File workspace = workspace("office");
         write(new File(workspace, "in.md"), "# Title\n\nBody line\n");
         try (WeizhiEngine engine = new WeizhiEngine()) {
             AndroidCaps.install(engine, new AndroidCaps.Session(context(), workspace));
+            engine.setScriptFolder(scriptDir.getAbsolutePath());
             String out = engine.runJs(
-                    "var r = host.office.docx.fromMarkdown({inputPath:'in.md', outputPath:'out/doc.docx'});"
-                            + "({ok:r.ok, path:r.path})",
-                    8000);
+                    "import { markdownToDocx } from './docx.js';\n"
+                            + "export default markdownToDocx({inputPath:'in.md', outputPath:'out/doc.docx'});\n",
+                    10000);
             assertTrue(out.contains("\"ok\":true"));
             assertTrue(out.contains("\"path\":\"out/doc.docx\""));
         }

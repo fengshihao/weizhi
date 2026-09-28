@@ -2,7 +2,6 @@ package com.weizhi.desktop;
 
 import com.weizhi.WeizhiEngine;
 import com.weizhi.platform.LocalWorkspace;
-import com.weizhi.platform.OfficeScripts;
 import com.weizhi.platform.PlatformHost;
 import com.weizhi.platform.PlatformScripts;
 
@@ -46,6 +45,5 @@ public final class DesktopCaps {
         engine.setFsRoot(workspace.toString());
         engine.setHostCall(new PlatformHost(files, platform, confirmer));
         engine.runJs(PlatformScripts.install(platform), 3000);
-        engine.runJs(OfficeScripts.install(), 3000);
     }
 }

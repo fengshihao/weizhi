@@ -46,14 +46,12 @@ import 内置模块名（fs / path / buffer / process / zlib / zip）→ from "�
 ```javascript
 import fs from "fs";
 import zip from "zip";
-import WeizhiDocx from "./weizhi-docx.js";
+import { markdownToDocx, Document, renderDocx } from "./docx.js";
 
-host.office.docx.fromMarkdown({ inputPath: "a.md", outputPath: "out/a.docx" });
-const doc = WeizhiDocx.open("out/a.docx");
-doc.setTitle("标题");
-doc.save("out/a-final.docx");
-
-export default { path: "out/a-final.docx" };
+markdownToDocx({ inputPath: "a.md", outputPath: "out/a.docx" });
+const doc = Document.create({ title: "标题" });
+doc.addParagraph("正文");
+export default renderDocx(doc, "out/b.docx");
 ```
 
 ---
