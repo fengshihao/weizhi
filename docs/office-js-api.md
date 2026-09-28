@@ -23,11 +23,12 @@ engine.setScriptFolder(new File(appFiles, "weizhi-lib").getAbsolutePath());
 脚本内：
 
 ```javascript
-loadScript("weizhi-docx.js");
+import WeizhiDocx from "./weizhi-docx.js";
 const doc = WeizhiDocx.open("out/report.docx");
 ```
 
-依赖：`fs`、`require("zip")`；生成初稿仍可用 `host.office.docx.fromMarkdown`。
+依赖：`fs`；解包/打包 **优先** `linux.files` / `mac.files` / `android.files` 的 `zipExtract` / `zipCreate`（与 Java 生成的 docx 兼容），无 caps 时回退 `require("zip")`。  
+生成初稿仍可用 `host.office.docx.fromMarkdown`。安装 caps 时会 **`setFsRoot` 与 workspace 对齐**（`DesktopCaps` / `AndroidCaps`）。
 
 ---
 
@@ -86,7 +87,7 @@ const doc = WeizhiDocx.open("out/report.docx");
 ## 示例（AI 典型流程）
 
 ```javascript
-loadScript("weizhi-docx.js");
+import WeizhiDocx from "./weizhi-docx.js";
 
 // 1. 引擎一键出稿
 host.office.docx.fromMarkdown({

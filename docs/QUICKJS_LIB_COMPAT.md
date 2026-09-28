@@ -12,7 +12,7 @@
 - ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）和 `require("zip")`（`extractSync` / `createSync`，可直接解压/打包 Office 类 zip）。
 - 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `media.resize` 同一条路。
 
-QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，再用 `loadScript` / `import './file.js'` 加载。
+QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成一个叶子文件，用 `import './file.js'` 加载（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。
 
 ## 引擎实际能跑什么
 

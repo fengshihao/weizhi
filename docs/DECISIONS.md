@@ -13,7 +13,7 @@ When people step away, work continues against the agreed design. Below are the s
 - Repo lives at `/Users/fengshihao/Work/weizhi`, alongside Agent1, not inside it.
 - License is Apache-2.0. QuickJS stays upstream MIT and must not be altered.
 - Do not depend on or fork all of quickjs-kt. Compile Bellard QuickJS only inside this engine.
-- Agents have one entry point: run a JS snippet. Plain JS libraries load via `loadScript("file.js")` from a script folder. **Heavy / platform capability is host-signed native SO** (see HOST_ABI), not in-engine Wasm.
+- Agents have one entry point: run a JS snippet. User libraries load via `import "./file.js"` under `setScriptFolder` ([MODULE_LOADING.md](MODULE_LOADING.md)). **Heavy / platform capability is host-signed native SO** (see HOST_ABI), not in-engine Wasm.
 - **Wasm / WAMR / `loadPack` are archived** on branch `archive/wamr-packs`. Trunk does not link WAMR. Restore from that branch if needed later.
 - Official site, full README, and the Molan-style portal are out of scope for this phase.
 - Host binding is **Java + JNI**, no Kotlin. Async I/O uses an `ExecutorService` thread pool (default fixed size from `maxAsyncIo`).
@@ -76,11 +76,11 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 ## Node-style built-ins (phase 1)
 
-- Prefer `import fs from "fs"`; `require("fs")` is compatible. Built-in names only, no npm.
+- Built-in modules: **`require("fs")` 等**为 Agent 脚本推荐写法（见 [MODULE_LOADING.md](MODULE_LOADING.md)）；`import fs from "fs"` 仍可用，但同一段脚本不要与 `require` 混用。Built-in names only, no npm.
 - Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`), `zip` (`require("zip")`: `extractSync` / `createSync`; zip-slip skipped; entry cap 10000; sizes follow `fs_io_bytes`).
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
-- Relative ES modules: `import { x } from './file.js'` or `await import('./file.js')` load leaf `.js` files from the script folder (same name rules as `loadScript`). Static import scripts may `export default` as the `runJs` result. Built-in names only for bare imports (`fs`, `path`, …); no npm.
+- User libraries: **`import … from './file.js'`** only (leaf names under `setScriptFolder`). `loadScript("file.js")` is legacy (same file, global eval); **do not teach AI to use it**. Static import scripts may `export default` as the `runJs` result.
 - Filesystem: host sandbox root; relative paths; escape fails with `path` or `escape` in the error.
 - Missing module / missing member: fails with `unsupported` and a clear name (see next section).
 
@@ -103,7 +103,7 @@ Hosts should pass the full `error` (and `error_location`) back to the orchestrat
 
 ## Script libraries
 
-- Folder is set by `weizhi_set_script_folder` / Java `setScriptFolder`. JS uses leaf names only (`loadScript("util.js")` or `import './util.js'`), not paths with `/` or `..`.
+- Folder is set by `weizhi_set_script_folder` / Java `setScriptFolder`. JS uses leaf names only (`import './util.js'`), not paths with `/` or `..`. See [MODULE_LOADING.md](MODULE_LOADING.md).
 - Names allow only letters, digits, `.`, `_`, and `-`. Slash or `..` fails with `name` in the error.
 - Script root and workspace (`fs`) root are separate.
 - Files over 16 MB are rejected.

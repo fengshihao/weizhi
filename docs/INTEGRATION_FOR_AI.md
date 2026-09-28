@@ -8,6 +8,7 @@
 | **本文** | 宿主怎么开引擎、设沙箱、跑脚本、装 caps |
 | **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / MCP / Skill / `$tools`） |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
+| [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI，避免 loadScript/import/require 混用） |
 | [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
 | [DECISIONS.md](DECISIONS.md) | 限额、错误关键词、分层边界 |
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
@@ -23,7 +24,7 @@
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
 4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps` + 可选 `:agent-tools*`）。
 5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。**工具环** `:agent-tools` 另有 `WorkspaceSandbox` + 可选 `extraReadRoot`（见 [AGENT_TOOLS_INTEGRATION.md §3](AGENT_TOOLS_INTEGRATION.md#3-路径与工作区必对齐)）；技能目录用 `workspace/skills` 或 assets + `compositeSkills`，不要发明未文档化的引擎 API。
-6. `setScriptFolder` **只**服务 `loadScript("leaf.js")` / 相对 `import './leaf.js'`（叶子文件名），不是通用只读资料区。
+6. `setScriptFolder` **只**服务 `import './leaf.js'`（叶子文件名），不是通用只读资料区。见 [MODULE_LOADING.md](MODULE_LOADING.md)。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
 ---
@@ -131,7 +132,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 |---|---|---|
 | `new WeizhiEngine()` / `(WeizhiLimits)` | 开引擎 | `close()` / try-with-resources；任务结束宜关掉 |
 | `setFsRoot(path)` | 可读写工作区 | 相对路径沙箱；逃逸错误含 `path`/`escape` |
-| `setScriptFolder(path)` | `loadScript` / 相对 import 根 | **仅叶子文件名** `[A-Za-z0-9._-]+.js` |
+| `setScriptFolder(path)` | 自建库 `import './…'` 根 | **仅叶子文件名** `[A-Za-z0-9._-]+.js` |
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
 | `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
@@ -149,7 +150,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 完整版复制 [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)。集成方最少保证模型知道：
 
-- 模块：`fs`、`fs.promises`、`path`、`buffer`、`process`、`zlib`、`zip`；无 npm。
+- 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（内置 `require("…")`；自建库 `import "./….js"`；不用 `loadScript`）。
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
 - `Buffer` 是 `Uint8Array` 子类；`fetch` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。

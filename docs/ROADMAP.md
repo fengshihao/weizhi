@@ -37,7 +37,7 @@
 
 - **位置由 Agent App 决定**（通常是应用私有目录），告知引擎/caps 即可（例如挂成工作区子树，或单独 `setScriptFolder` / 技能根）。
 - 必须让 AI **可写**，否则无法自行创建 Skill。
-- 技能如何命名、何时归档、如何索引：**App / Agent 策略**；引擎只负责能 `import` / `loadScript` 跑起来。
+- 技能如何命名、何时归档、如何索引：**App / Agent 策略**；引擎只负责能 `import './….js'` 跑起来（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。
 
 ```
 工作区 (R/W)          ← 日常读写、产出

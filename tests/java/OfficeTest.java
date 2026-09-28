@@ -61,12 +61,12 @@ public final class OfficeTest {
 
             if (Files.isDirectory(scriptDir)) {
                 String edited = engine.runJs(
-                        "loadScript('weizhi-docx.js');"
+                        "import WeizhiDocx from './weizhi-docx.js';"
                                 + "var doc = WeizhiDocx.open('out/report.docx');"
                                 + "doc.setTitle('Edited Title');"
                                 + "doc.setBodyStyle({font:'SimSun', sizePt:12, lineSpacing:1.5});"
                                 + "doc.save('out/report-edited.docx');"
-                                + "doc.getTitle()",
+                                + "export default doc.getTitle();",
                         10000);
                 if (!"\"Edited Title\"".equals(edited)) {
                     throw new AssertionError("want Edited Title got " + edited);

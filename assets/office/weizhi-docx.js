@@ -2,17 +2,14 @@
  * Weizhi docx helper — semantic edit API for AI scripts (QuickJS).
  * Depends: fs, path, require("zip"). Optional: host.office.docx.fromMarkdown for create.
  *
- * Usage:
- *   loadScript("weizhi-docx.js");  // from setScriptFolder
+ * Usage (script folder set via setScriptFolder):
+ *   import WeizhiDocx from "./weizhi-docx.js";
  *   const doc = WeizhiDocx.open("out/report.docx");
  *   doc.setTitle("新标题");
  *   doc.setBodyStyle({ font: "宋体", sizePt: 12, lineSpacing: 1.5 });
  *   doc.save("out/report-edited.docx");
  */
-(function (global) {
-  "use strict";
-
-  var zip = require("zip");
+var zip = require("zip");
   var W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
   function xmlEscape(s) {
@@ -360,10 +357,10 @@
     return new DocxDocument(workDir, docPath);
   };
 
-  global.WeizhiDocx = {
-    DocxDocument: DocxDocument,
-    open: function (path, opts) {
-      return DocxDocument.open(path, opts);
-    },
-  };
-})(typeof globalThis !== "undefined" ? globalThis : global);
+export { DocxDocument };
+export default {
+  DocxDocument: DocxDocument,
+  open: function (path, opts) {
+    return DocxDocument.open(path, opts);
+  },
+};
