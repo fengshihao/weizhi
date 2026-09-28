@@ -26,6 +26,16 @@ public final class OfficeTest {
             }
             engine.setScriptFolder(scriptDir.toString());
             write(root.resolve("notes/report.md"), "# Hello\n\n- item one\n- item two\n");
+            write(root.resolve("notes/rich.md"),
+                    "# Rich\n\n"
+                            + "Visit [site](https://example.com) for **bold**.\n\n"
+                            + "- [ ] task open\n"
+                            + "- [x] task done\n\n"
+                            + "| A | B |\n"
+                            + "| --- | --- |\n"
+                            + "| 1 | 2 |\n\n"
+                            + "> quote line\n\n"
+                            + "```\ncode();\n```\n");
 
             String mdOut = engine.runJs(
                     "import { markdownToDocx } from './docx.js';\n"
@@ -48,6 +58,24 @@ public final class OfficeTest {
             assertContains(modelOut, "\"ok\":true");
             assertZipEntryContains(root.resolve("out/model.docx"), "word/document.xml", "Edited");
             assertZipEntryContains(root.resolve("out/model.docx"), "word/document.xml", "SimSun");
+
+            String rich = engine.runJs(
+                    "import { markdownToDocx } from './docx.js';\n"
+                            + "export default markdownToDocx({inputPath:'notes/rich.md', outputPath:'out/rich.docx'});\n",
+                    12000);
+            assertContains(rich, "\"ok\":true");
+            assertZipEntryContains(root.resolve("out/rich.docx"), "word/document.xml", "example.com");
+            assertZipEntryContains(root.resolve("out/rich.docx"), "word/document.xml", "w:tbl");
+
+            String round = engine.runJs(
+                    "import { readDocx } from './docx.js';\n"
+                            + "var doc = readDocx('out/rich.docx');\n"
+                            + "doc.addParagraph('After load edit');\n"
+                            + "var r = doc.save('out/rich-edited.docx');\n"
+                            + "export default { bytes: r.bytes, has: doc.toMarkdown().indexOf('After load') >= 0 };\n",
+                    15000);
+            assertContains(round, "\"has\":true");
+            assertZipEntryContains(root.resolve("out/rich-edited.docx"), "word/document.xml", "After load");
 
             try {
                 engine.runJs(
