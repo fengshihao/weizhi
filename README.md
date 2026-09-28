@@ -15,6 +15,7 @@ Bellard QuickJS 嵌入式引擎（C + JNI），面向 **Agent 跑 JS 脚本**。
 | [docs/HOST_ABI.md](docs/HOST_ABI.md) | 宿主 / 原生插件 ABI |
 | [docs/NATIVE_PLUGIN_IDL.md](docs/NATIVE_PLUGIN_IDL.md) | 签名 SO / IDL |
 | [docs/QUICKJS_LIB_COMPAT.md](docs/QUICKJS_LIB_COMPAT.md) | 第三方 JS 库适配 |
+| [docs/office.md](docs/office.md) | **host.office**（docx / xlsx / pptx MVP） |
 
 ## 快速构建
 

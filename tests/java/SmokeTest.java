@@ -57,6 +57,7 @@ public final class SmokeTest {
 
         System.out.println("JNI smoke OK");
         desktopCaps();
+        OfficeTest.main(args);
     }
 
     private static void desktopCaps() throws Exception {

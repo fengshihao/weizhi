@@ -8,6 +8,7 @@ import android.net.Uri;
 import com.weizhi.WeizhiEngine;
 import com.weizhi.platform.LocalWorkspace;
 import com.weizhi.platform.MiniJson;
+import com.weizhi.platform.OfficeScripts;
 import com.weizhi.platform.PlatformHost;
 import com.weizhi.platform.PlatformScripts;
 
@@ -45,6 +46,7 @@ public final class AndroidCaps {
         session.engine = engine;
         engine.setHostCall(new AndroidHost(session, files));
         engine.runJs(PlatformScripts.install("android"), 5000);
+        engine.runJs(OfficeScripts.install(), 5000);
     }
 
     private static final class AndroidHost extends PlatformHost {

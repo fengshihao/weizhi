@@ -199,6 +199,25 @@ public final class CapsInstrumentedTest {
     }
 
     @Test
+    public void hostOfficeDocxFromMarkdown() throws Exception {
+        File workspace = workspace("office");
+        write(new File(workspace, "in.md"), "# Title\n\nBody line\n");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.install(engine, new AndroidCaps.Session(context(), workspace));
+            String out = engine.runJs(
+                    "var r = host.office.docx.fromMarkdown({inputPath:'in.md', outputPath:'out/doc.docx'});"
+                            + "({ok:r.ok, path:r.path})",
+                    8000);
+            assertTrue(out.contains("\"ok\":true"));
+            assertTrue(out.contains("\"path\":\"out/doc.docx\""));
+        }
+        byte[] head = java.nio.file.Files.readAllBytes(new File(workspace, "out/doc.docx").toPath());
+        assertTrue(head.length >= 2);
+        assertEquals('P', (char) head[0]);
+        assertEquals('K', (char) head[1]);
+    }
+
+    @Test
     public void zipExtractCreateRoundTrip() throws Exception {
         File workspace = workspace("zip");
         try (WeizhiEngine engine = new WeizhiEngine()) {

@@ -28,7 +28,12 @@ javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/platform/PlatformScripts.java" \
     "$root/java/com/weizhi/platform/PlatformHost.java" \
     "$root/java/com/weizhi/platform/OrganizeFiles.java" \
+    "$root/java/com/weizhi/platform/OfficeXml.java" \
+    "$root/java/com/weizhi/platform/OfficeMarkdown.java" \
+    "$root/java/com/weizhi/platform/OfficeService.java" \
+    "$root/java/com/weizhi/platform/OfficeScripts.java" \
     "$root/java/com/weizhi/desktop/DesktopCaps.java" \
+    "$root/tests/java/OfficeTest.java" \
     "$root/tests/java/SmokeTest.java"
 
 echo "Running JNI smoke ($lib)..."
