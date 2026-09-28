@@ -150,6 +150,101 @@ function inlinesToPlain(inlines) {
   return out;
 }
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function blockPlainText(block) {
+  if (!block) {
+    return "";
+  }
+  if (block.type === "code") {
+    return String(block.text || "");
+  }
+  if (block.type === "table") {
+    var rows = block.rows || [];
+    return rows
+      .map(function (row) {
+        return row.join("\t");
+      })
+      .join("\n");
+  }
+  if (block.type === "image") {
+    return block.path ? String(block.path) : "";
+  }
+  return inlinesToPlain(block.inlines || []);
+}
+
+function setBlockPlainText(block, text) {
+  if (block.type === "code") {
+    block.text = String(text);
+    return;
+  }
+  if (block.type === "table") {
+    throw new Error("docx: setBlockText on table: edit block.rows in memory or replace table cell text via grep+replace on plain export");
+  }
+  if (block.type === "image") {
+    throw new Error("docx: setBlockText on image block not supported");
+  }
+  block.inlines = parseInlines(String(text));
+}
+
+function blockMatchesType(block, typeFilter) {
+  if (!typeFilter) {
+    return true;
+  }
+  if (typeof typeFilter === "string") {
+    return block.type === typeFilter;
+  }
+  if (Object.prototype.toString.call(typeFilter) === "[object Array]") {
+    for (var i = 0; i < typeFilter.length; i++) {
+      if (block.type === typeFilter[i]) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
+function snippetAround(text, start, len, radius) {
+  radius = radius == null ? 48 : radius;
+  var a = Math.max(0, start - radius);
+  var b = Math.min(text.length, start + len + radius);
+  return (a > 0 ? "…" : "") + text.slice(a, b) + (b < text.length ? "…" : "");
+}
+
+function buildSearchRegExp(pattern, options) {
+  options = options || {};
+  var flags = "";
+  if (options.caseInsensitive !== false) {
+    flags += "i";
+  }
+  if (options.global !== false) {
+    flags += "g";
+  }
+  if (pattern instanceof RegExp) {
+    return new RegExp(pattern.source, flags || pattern.flags);
+  }
+  if (options.regex) {
+    return new RegExp(String(pattern), flags);
+  }
+  return new RegExp(escapeRegExp(String(pattern)), flags);
+}
+
+function countRegExpMatches(text, re) {
+  var copy = new RegExp(re.source, re.flags.indexOf("g") >= 0 ? re.flags : re.flags + "g");
+  var n = 0;
+  var m;
+  while ((m = copy.exec(text)) !== null) {
+    n++;
+    if (m[0].length === 0) {
+      copy.lastIndex++;
+    }
+  }
+  return n;
+}
+
 function runPropsFromStyle(style, run) {
   var parts = [];
   if (style && style.font) {
@@ -460,6 +555,166 @@ export function Document(options) {
   };
   doc.toMarkdown = function () {
     return blocksToMarkdown(doc.blocks);
+  };
+  doc.plainText = function () {
+    var parts = [];
+    for (var pi = 0; pi < doc.blocks.length; pi++) {
+      parts.push(blockPlainText(doc.blocks[pi]));
+    }
+    return parts.join("\n");
+  };
+  doc.textView = function (options) {
+    options = options || {};
+    var lines = [];
+    for (var i = 0; i < doc.blocks.length; i++) {
+      var b = doc.blocks[i];
+      if (!blockMatchesType(b, options.type)) {
+        continue;
+      }
+      var plain = blockPlainText(b);
+      var label = b.type === "heading" ? "h" + (b.level || 1) : b.type;
+      var head = "[" + i + "] " + label + ": ";
+      if (b.type === "code" && plain.indexOf("\n") >= 0) {
+        var codeLines = plain.split("\n");
+        for (var cl = 0; cl < codeLines.length; cl++) {
+          lines.push({
+            blockIndex: i,
+            type: b.type,
+            level: b.level,
+            line: lines.length + 1,
+            text: cl === 0 ? head + codeLines[cl] : head.replace(/: $/, ": (cont) ") + codeLines[cl],
+            preview: codeLines[cl],
+          });
+        }
+      } else {
+        lines.push({
+          blockIndex: i,
+          type: b.type,
+          level: b.level,
+          line: lines.length + 1,
+          text: head + plain,
+          preview: plain,
+        });
+      }
+    }
+    return lines;
+  };
+  doc.listBlocks = function (options) {
+    options = options || {};
+    var out = [];
+    for (var i = 0; i < doc.blocks.length; i++) {
+      var bl = doc.blocks[i];
+      if (!blockMatchesType(bl, options.type)) {
+        continue;
+      }
+      var item = {
+        index: i,
+        type: bl.type,
+        text: blockPlainText(bl),
+      };
+      if (bl.type === "heading") {
+        item.level = bl.level || 1;
+      }
+      if (bl.type === "task") {
+        item.checked = !!bl.checked;
+      }
+      out.push(item);
+    }
+    return out;
+  };
+  doc.headings = function () {
+    return doc.listBlocks({ type: "heading" });
+  };
+  doc.filter = function (options) {
+    return doc.listBlocks(options || {});
+  };
+  doc.getBlock = function (index) {
+    var b = doc.blocks[index];
+    if (!b) {
+      return null;
+    }
+    return {
+      index: index,
+      type: b.type,
+      text: blockPlainText(b),
+      level: b.level,
+      checked: b.checked,
+    };
+  };
+  doc.setBlockText = function (index, text) {
+    var b = doc.blocks[index];
+    if (!b) {
+      throw new Error("docx: setBlockText: invalid block index " + index);
+    }
+    setBlockPlainText(b, text);
+    return doc;
+  };
+  doc.grep = function (pattern, options) {
+    options = options || {};
+    var re = buildSearchRegExp(pattern, Object.assign({}, options, { global: true }));
+    var max = options.maxResults != null ? options.maxResults : 200;
+    var matches = [];
+    var view = doc.textView({ type: options.type });
+    for (var vi = 0; vi < view.length; vi++) {
+      var row = view[vi];
+      var plain = row.preview;
+      var localRe = new RegExp(re.source, re.flags);
+      var m;
+      while ((m = localRe.exec(plain)) !== null) {
+        matches.push({
+          blockIndex: row.blockIndex,
+          type: row.type,
+          line: row.line,
+          match: m[0],
+          start: m.index,
+          end: m.index + m[0].length,
+          text: plain,
+          snippet: snippetAround(plain, m.index, m[0].length),
+        });
+        if (matches.length >= max) {
+          return { matches: matches, truncated: true };
+        }
+        if (m[0].length === 0) {
+          localRe.lastIndex++;
+        }
+      }
+    }
+    return { matches: matches, truncated: false };
+  };
+  doc.replaceInBlock = function (blockIndex, search, replacement, options) {
+    options = options || {};
+    var b = doc.blocks[blockIndex];
+    if (!b) {
+      throw new Error("docx: replaceInBlock: invalid block index " + blockIndex);
+    }
+    var plain = blockPlainText(b);
+    var reOpts = Object.assign({}, options, { global: options.replaceFirst ? false : options.global !== false });
+    var re = buildSearchRegExp(search, reOpts);
+    var count = options.replaceFirst
+      ? (new RegExp(re.source, re.flags.replace("g", "")).test(plain) ? 1 : 0)
+      : countRegExpMatches(plain, re);
+    if (count === 0) {
+      return { replaced: 0, blockIndex: blockIndex };
+    }
+    var newPlain = plain.replace(re, String(replacement));
+    setBlockPlainText(b, newPlain);
+    return { replaced: count, blockIndex: blockIndex };
+  };
+  doc.replaceAll = function (search, replacement, options) {
+    options = options || {};
+    var total = 0;
+    var touched = [];
+    for (var i = 0; i < doc.blocks.length; i++) {
+      if (!blockMatchesType(doc.blocks[i], options.type)) {
+        continue;
+      }
+      var r = doc.replaceInBlock(i, search, replacement, options);
+      if (r.replaced > 0) {
+        total += r.replaced;
+        touched.push(i);
+      }
+    }
+    return { replaced: total, blockIndices: touched };
   };
   return doc;
 }

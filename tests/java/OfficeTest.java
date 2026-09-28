@@ -64,7 +64,7 @@ public final class OfficeTest {
                             + "export default markdownToDocx({inputPath:'notes/rich.md', outputPath:'out/rich.docx'});\n",
                     12000);
             assertContains(rich, "\"ok\":true");
-            assertZipEntryContains(root.resolve("out/rich.docx"), "word/document.xml", "example.com");
+            assertZipEntryContains(root.resolve("out/rich.docx"), "word/document.xml", "site");
             assertZipEntryContains(root.resolve("out/rich.docx"), "word/document.xml", "w:tbl");
 
             String round = engine.runJs(
@@ -76,6 +76,25 @@ public final class OfficeTest {
                     15000);
             assertContains(round, "\"has\":true");
             assertZipEntryContains(root.resolve("out/rich-edited.docx"), "word/document.xml", "After load");
+
+            String grepEdit = engine.runJs(
+                    "import { readDocx } from './docx.js';\n"
+                            + "var doc = readDocx('out/rich.docx');\n"
+                            + "var heads = doc.headings();\n"
+                            + "var g = doc.grep('bold');\n"
+                            + "doc.replaceAll('bold', 'strong');\n"
+                            + "var r = doc.save('out/grep-edited.docx');\n"
+                            + "export default {"
+                            + "heading: heads[0] && heads[0].text,"
+                            + "grepCount: g.matches.length,"
+                            + "hasStrong: doc.plainText().indexOf('strong') >= 0,"
+                            + "bytes: r.bytes"
+                            + "};\n",
+                    15000);
+            assertContains(grepEdit, "\"heading\":\"Rich\"");
+            assertContains(grepEdit, "\"grepCount\":");
+            assertContains(grepEdit, "\"hasStrong\":true");
+            assertZipEntryContains(root.resolve("out/grep-edited.docx"), "word/document.xml", "strong");
 
             try {
                 engine.runJs(
