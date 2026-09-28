@@ -15,7 +15,7 @@
 ### 你可以做什么
 
 - 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`、`zlib`、`zip`。
-- **没有 npm**。模块加载只遵守 [MODULE_LOADING.md](MODULE_LOADING.md) 两条规则：**内置**用 `require("fs")` 等（整段脚本风格统一，不要和 `import fs from "fs"` 混用）；**自建库**只用 `import … from "./叶子.js"`（脚本目录由宿主 `setScriptFolder` 设置）。**没有 `loadScript`**。含 `import`/`export` 的脚本可用 `export default` 作为本轮 `runJs` 的返回值。
+- **没有 npm**。模块加载见 [MODULE_LOADING.md](MODULE_LOADING.md)：**AI 脚本一律用 `import`**（内置 `import fs from "fs"`，自建库 `import … from "./叶子.js"`）。**不要写 `require()`**（引擎虽保留给旧代码，但 Agent 不用）。**没有 `loadScript`**。含 `import`/`export` 时可用 `export default` 作为本轮 `runJs` 返回值。
 - 压缩：`const z = require("zlib")`。`gzipSync` / `gunzipSync`（gzip）和 `deflateSync` / `inflateSync`（raw deflate）的参数与返回值都是 `Buffer`。`process.weizhiCaps.compress` 为 `true`。单次输入或输出超过 fs 载荷上限会报 `too large: zlib`。
 - Zip：`const zip = require("zip")`。`zip.extractSync(zipPath, destDir)` 解压到工作区（返回 `{entries, skipped}`）；`zip.createSync(sourceDir, zipPath)` 打包目录内文件（返回 `{files}`）。含 `..` 的恶意条目会跳过；单文件/整包受 fs 载荷上限约束。`process.weizhiCaps.zip` 为 `true`。xlsx/docx 等可解压后用 `fs` 改 XML，再 `createSync` 打回。
 - 字节和文本：`Buffer` 是 `Uint8Array` 子类（`buf instanceof Uint8Array` 为真，可 `buf[i]`）。`Buffer.from(str|Uint8Array|数组, "utf8"|"hex"|"base64")`、`buf.toString(...)`、`Buffer.alloc(n)`。`new TextEncoder().encode(str)` 得到 `Uint8Array`；`new TextDecoder().decode(bytes)` 只接受 UTF-8。`btoa` / `atob` 是 Latin-1，不是 UTF-8。

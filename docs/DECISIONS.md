@@ -76,7 +76,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 ## Node-style built-ins (phase 1)
 
-- Built-in modules: **`require("fs")` 等**为 Agent 脚本推荐写法（见 [MODULE_LOADING.md](MODULE_LOADING.md)）；`import fs from "fs"` 仍可用，但同一段脚本不要与 `require` 混用。Built-in names only, no npm.
+- Built-in modules: Agent 脚本推荐 **`import fs from "fs"`** 等（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。**`require("fs")` 仍保留**（集成/旧脚本），但不写入 Agent 提示。Built-in names only, no npm.
 - Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`), `zip` (`require("zip")`: `extractSync` / `createSync`; zip-slip skipped; entry cap 10000; sizes follow `fs_io_bytes`).
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.

@@ -150,7 +150,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 完整版复制 [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)。集成方最少保证模型知道：
 
-- 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（内置 `require("…")`；自建库 `import "./….js"`）。
+- 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（AI 一律 `import`；`require` 仅引擎兼容，不教 Agent）。
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
 - `Buffer` 是 `Uint8Array` 子类；`fetch` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。

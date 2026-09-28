@@ -27,8 +27,8 @@ import WeizhiDocx from "./weizhi-docx.js";
 const doc = WeizhiDocx.open("out/report.docx");
 ```
 
-依赖：`fs`；解包/打包 **优先** `linux.files` / `mac.files` / `android.files` 的 `zipExtract` / `zipCreate`（与 Java 生成的 docx 兼容），无 caps 时回退 `require("zip")`。  
-生成初稿仍可用 `host.office.docx.fromMarkdown`。安装 caps 时会 **`setFsRoot` 与 workspace 对齐**（`DesktopCaps` / `AndroidCaps`）。
+依赖：`import fs from "fs"` 等（库内部实现可能仍用 `require`）；解包/打包 **优先** caps 的 `files.zipExtract` / `zipCreate`。  
+生成初稿仍可用 `host.office.docx.fromMarkdown`。安装 caps 时会 **`setFsRoot` 与 workspace 对齐**。
 
 ---
 
