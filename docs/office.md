@@ -89,8 +89,17 @@ MVP 测试只验证 **ZIP 结构 + 关键 part 路径 + 文本是否写入 XML**
 - `execute_script` 内直接调 `host.office.*`，或 catalog 薄脚本封装。
 - 生成 docx 后由 Agent1 UI `FileProvider` + `ACTION_VIEW` 打开（不在 Weizhi 实现）。
 
-## 后续（非 MVP）
+## 架构与演进
 
-- `docx.open` / `insertParagraph` / `insertImage` / `save`
-- `xlsx.open` / `appendSheet` / `writeCell`
-- 复杂 ppt 版式、主题与图片嵌入
+专用 API（`fromMarkdown` / `fromRows` 等）**先作为 Agent1 默认快捷路径**使用。长期分层：
+
+- **Java 内核（Weizhi AAR，少变）**：沙箱、unpack/pack、空 OOXML 脚手架、可选结构化读/写原语。
+- **JS / catalog（AI 可改，可热更新）**：版式、Markdown 规则、解包改 XML 再打包、复杂生成与读取流程。
+
+详细设计见 **[office-architecture.md](office-architecture.md)**（含 Phase B 原语清单与「今天就能用 fs+zip 编辑 docx」示例）。
+
+## 后续（非 MVP，见 architecture 文档）
+
+- 内核：`unpack` / `pack` / `scaffold`、`readText` / `readSheet`
+- 编辑：`open` / `save`、`insertParagraph` / `insertImage`
+- 业务：`fromMarkdown` 等价逻辑可迁到 Agent1 catalog JS，Java 只保留稳定原语
