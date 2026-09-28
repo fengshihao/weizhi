@@ -406,23 +406,13 @@ static void test_host_function_limit(void) {
     weizhi_close(engine);
 }
 
-static void test_load_script(void) {
-    char *dir = make_temp_dir();
+static void test_load_script_removed(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
-    WeizhiResult result;
-    const char *lib = "globalThis.inc = function(x){ return x + 1; }; 0";
-    write_file(dir, "util.js", lib, strlen(lib));
-    EXPECT(weizhi_set_script_folder(engine, dir) == 0);
-    result = weizhi_run_js(engine, "loadScript(\"util.js\"); inc(41)", 1000);
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
-    weizhi_result_free(&result);
-    result = weizhi_run_js(engine, "loadScript(\"../util.js\")", 1000);
+    WeizhiResult result = weizhi_run_js(engine, "loadScript(\"util.js\")", 1000);
     EXPECT(result.ok == 0);
-    EXPECT(result.error != NULL && strstr(result.error, "name") != NULL);
+    EXPECT(result.error != NULL && strstr(result.error, "loadScript") != NULL);
     weizhi_result_free(&result);
     weizhi_close(engine);
-    free(dir);
 }
 
 static void test_relative_import(void) {
@@ -598,12 +588,15 @@ static void test_script_fs_roots_isolated(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    const char *lib = "globalThis.secretFromScript = 'from-script'; 0";
+    const char *lib = "export const secretFromScript = 'from-script';\n";
     write_file(script_dir, "util.js", lib, strlen(lib));
     write_file(script_dir, "secret.txt", "from-script-dir", 15);
     EXPECT(weizhi_set_script_folder(engine, script_dir) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
-    result = weizhi_run_js(engine, "loadScript('util.js'); secretFromScript", 2000);
+    result = weizhi_run_js(engine,
+                           "import { secretFromScript } from './util.js';\n"
+                           "export default secretFromScript;\n",
+                           2000);
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"from-script\"") == 0);
     weizhi_result_free(&result);
@@ -1099,7 +1092,7 @@ int main(void) {
     test_second_thread_rejected();
     test_close_while_running_fails();
     test_host_function_limit();
-    test_load_script();
+    test_load_script_removed();
     test_relative_import();
     test_promise_await();
     test_buffer_path_require();

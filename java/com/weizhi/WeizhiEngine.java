@@ -94,7 +94,7 @@ public final class WeizhiEngine implements AutoCloseable {
         nativeInstallJavaAsyncVfs(nativeHandle);
     }
 
-    /** Folder for {@code loadScript("file.js")} libraries (leaf names only). */
+    /** Folder for {@code import './file.js'} libraries (leaf names only). */
     public void setScriptFolder(String folder) {
         if (nativeSetScriptFolder(nativeHandle, folder) != 0) {
             throw new IllegalArgumentException("setScriptFolder failed");

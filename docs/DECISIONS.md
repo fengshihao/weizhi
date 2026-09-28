@@ -80,7 +80,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 - Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`), `zip` (`require("zip")`: `extractSync` / `createSync`; zip-slip skipped; entry cap 10000; sizes follow `fs_io_bytes`).
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
-- User libraries: **`import … from './file.js'`** only (leaf names under `setScriptFolder`). `loadScript("file.js")` is legacy (same file, global eval); **do not teach AI to use it**. Static import scripts may `export default` as the `runJs` result.
+- User libraries: **`import … from './file.js'`** only (leaf names under `setScriptFolder`). **`loadScript` removed** — use ES modules. Static import scripts may `export default` as the `runJs` result.
 - Filesystem: host sandbox root; relative paths; escape fails with `path` or `escape` in the error.
 - Missing module / missing member: fails with `unsupported` and a clear name (see next section).
 
@@ -110,7 +110,7 @@ Hosts should pass the full `error` (and `error_location`) back to the orchestrat
 
 ## Logging
 
-One JSON object per line. Dev builds log script source, host-function args and returns. Field names are English: `run_id`, `seq`, `event`. Events include `run_js_start`, `host_call`, `load_script`, `console`. Human-readable failure reasons are English.
+One JSON object per line. Dev builds log script source, host-function args and returns. Field names are English: `run_id`, `seq`, `event`. Events include `run_js_start`, `host_call`, `console`. Human-readable failure reasons are English.
 
 ## Size
 

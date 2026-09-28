@@ -19,7 +19,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 /**
- * On-device JNI smoke: arithmetic, fs, loadScript, fetch hints.
+ * On-device JNI smoke: arithmetic, fs, script import, fetch hints.
  */
 @RunWith(AndroidJUnit4.class)
 public final class WeizhiJniInstrumentedTest {
@@ -59,15 +59,16 @@ public final class WeizhiJniInstrumentedTest {
     }
 
     @Test
-    public void loadScript() throws Exception {
+    public void scriptFolderImport() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File scriptDir = new File(context.getCacheDir(), "weizhi-scripts-" + System.currentTimeMillis());
         assertTrue(scriptDir.mkdirs());
         writeBytes(new File(scriptDir, "util.js"),
-                "globalThis.inc = function(x){ return x + 1; }; 0".getBytes(StandardCharsets.UTF_8));
+                "export function inc(x){ return x + 1; }\n".getBytes(StandardCharsets.UTF_8));
         try (WeizhiEngine engine = new WeizhiEngine()) {
             engine.setScriptFolder(scriptDir.getAbsolutePath());
-            assertEquals("42", engine.runJs("loadScript(\"util.js\"); inc(41)", 2000));
+            assertEquals("42", engine.runJs(
+                    "import { inc } from './util.js';\nexport default inc(41);\n", 2000));
         }
     }
 

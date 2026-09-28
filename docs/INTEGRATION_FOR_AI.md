@@ -8,7 +8,7 @@
 | **本文** | 宿主怎么开引擎、设沙箱、跑脚本、装 caps |
 | **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / MCP / Skill / `$tools`） |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
-| [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI，避免 loadScript/import/require 混用） |
+| [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI：`require` 内置 + `import` 自建库） |
 | [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
 | [DECISIONS.md](DECISIONS.md) | 限额、错误关键词、分层边界 |
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
@@ -150,7 +150,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 完整版复制 [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)。集成方最少保证模型知道：
 
-- 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（内置 `require("…")`；自建库 `import "./….js"`；不用 `loadScript`）。
+- 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（内置 `require("…")`；自建库 `import "./….js"`）。
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
 - `Buffer` 是 `Uint8Array` 子类；`fetch` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。

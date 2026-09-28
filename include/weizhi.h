@@ -83,7 +83,7 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits);
 /* Returns -1 while a script is running; engine stays usable. 0 on close; pointer is invalid after. */
 int weizhi_close(WeizhiEngine *engine);
 int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn, void *userdata);
-/* Folder for loadScript JS libs (leaf filenames only; resolved under this root). */
+/* Folder for import './file.js' libs (leaf filenames only; resolved under this root). */
 int weizhi_set_script_folder(WeizhiEngine *engine, const char *folder);
 /* Workspace sandbox root. If no custom VFS is set, uses the built-in POSIX impl (thread-pool async). */
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder);

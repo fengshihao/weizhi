@@ -217,46 +217,6 @@ int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, siz
     return 0;
 }
 
-static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    Engine *engine = JS_GetContextOpaque(ctx);
-    const char *name = NULL;
-    uint8_t *bytes = NULL;
-    size_t length = 0;
-    char errbuf[128];
-    JSValue value;
-    (void)this_val;
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "invalid script name");
-    }
-    name = JS_ToCString(ctx, argv[0]);
-    if (name == NULL) {
-        return JS_EXCEPTION;
-    }
-    if (weizhi_read_script_leaf(engine, name, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
-        JSValue err;
-        if (strstr(errbuf, "name") != NULL) {
-            err = JS_ThrowTypeError(ctx, "%s", errbuf);
-        } else {
-            err = JS_ThrowReferenceError(ctx, "%s", errbuf);
-        }
-        JS_FreeCString(ctx, name);
-        return err;
-    }
-    value = JS_Eval(ctx, (const char *)bytes, length, name, JS_EVAL_TYPE_GLOBAL);
-    free(bytes);
-    {
-        char *quoted = quote_json(name);
-        char data[160];
-        if (quoted != NULL) {
-            snprintf(data, sizeof(data), "{\"name\":%s}", quoted);
-            emit_log(engine, "load_script", data);
-            free(quoted);
-        }
-    }
-    JS_FreeCString(ctx, name);
-    return value;
-}
-
 static JSValue js_host_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
     Engine *engine = JS_GetContextOpaque(ctx);
     HostFn *host;
@@ -310,13 +270,6 @@ static JSValue js_host_call(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return parsed;
 }
 
-static void install_builtin(Engine *engine, const char *name, JSCFunction *fn) {
-    JSValue global = JS_GetGlobalObject(engine->ctx);
-    JSValue func = JS_NewCFunction(engine->ctx, fn, name, 1);
-    JS_SetPropertyStr(engine->ctx, global, name, func);
-    JS_FreeValue(engine->ctx, global);
-}
-
 static size_t size_or_default(size_t value, size_t fallback) {
     return value == 0 ? fallback : value;
 }
@@ -368,7 +321,6 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits) {
         return NULL;
     }
     JS_SetContextOpaque(engine->ctx, engine);
-    install_builtin(engine, "loadScript", js_load_script);
     if (weizhi_install_node_api(engine) != 0) {
         weizhi_close(engine);
         return NULL;
@@ -417,7 +369,7 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     if (atomic_load(&engine->state) != ST_IDLE) {
         return -1;
     }
-    if (strcmp(name, "loadScript") == 0 || strcmp(name, "require") == 0 ||
+    if (strcmp(name, "require") == 0 ||
         strcmp(name, "Buffer") == 0 || strcmp(name, "setTimeout") == 0 || strcmp(name, "clearTimeout") == 0) {
         return -1;
     }
