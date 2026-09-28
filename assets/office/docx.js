@@ -245,6 +245,160 @@ function countRegExpMatches(text, re) {
   return n;
 }
 
+function mergeStyle(base, override) {
+  var out = Object.assign({}, base || {});
+  if (override) {
+    Object.assign(out, override);
+  }
+  return out;
+}
+
+function effectiveBlockStyle(doc, block) {
+  if (!block) {
+    return {};
+  }
+  if (block.type === "code") {
+    return { font: "Consolas", sizePt: 10 };
+  }
+  return mergeStyle(doc.defaultStyle, block.style);
+}
+
+function styleLabel(style) {
+  if (!style) {
+    return "";
+  }
+  var parts = [];
+  if (style.font) {
+    parts.push(String(style.font));
+  }
+  if (style.sizePt != null) {
+    parts.push(String(style.sizePt) + "pt");
+  }
+  if (style.bold) {
+    parts.push("bold");
+  }
+  if (style.italic) {
+    parts.push("italic");
+  }
+  if (style.lineSpacing != null) {
+    parts.push("line=" + style.lineSpacing);
+  }
+  return parts.length ? " {" + parts.join(", ") + "}" : "";
+}
+
+function styleMatchesCriteria(doc, block, criteria) {
+  if (!criteria) {
+    return true;
+  }
+  var eff = effectiveBlockStyle(doc, block);
+  if (criteria.wordStyle != null) {
+    var ws = block.wordStyle || "";
+    if (String(criteria.wordStyle).toLowerCase() !== ws.toLowerCase()) {
+      return false;
+    }
+  }
+  if (criteria.font != null) {
+    var f = eff.font ? String(eff.font) : "";
+    if (f.toLowerCase().indexOf(String(criteria.font).toLowerCase()) < 0) {
+      return false;
+    }
+  }
+  if (criteria.sizePt != null && eff.sizePt !== criteria.sizePt) {
+    return false;
+  }
+  if (criteria.minSizePt != null && (eff.sizePt == null || eff.sizePt < criteria.minSizePt)) {
+    return false;
+  }
+  if (criteria.maxSizePt != null && (eff.sizePt == null || eff.sizePt > criteria.maxSizePt)) {
+    return false;
+  }
+  if (criteria.bold != null && !!eff.bold !== !!criteria.bold) {
+    return false;
+  }
+  if (criteria.italic != null && !!eff.italic !== !!criteria.italic) {
+    return false;
+  }
+  if (criteria.lineSpacing != null && eff.lineSpacing !== criteria.lineSpacing) {
+    return false;
+  }
+  return true;
+}
+
+function summarizeInlineStyles(inlines) {
+  var runs = inlines || [];
+  var out = [];
+  for (var i = 0; i < runs.length; i++) {
+    var r = runs[i];
+    out.push({
+      index: i,
+      type: r.type || "text",
+      text: r.type === "link" ? r.text : r.text,
+      bold: !!r.bold,
+      italic: !!r.italic,
+      code: !!r.code,
+      href: r.href,
+    });
+  }
+  return out;
+}
+
+function extractParagraphStyleFromPInner(pInner) {
+  var style = {};
+  var wordStyle = null;
+  var pPrM = pInner.match(/<w:pPr>([\s\S]*?)<\/w:pPr>/);
+  var pPr = pPrM ? pPrM[1] : "";
+  var pStyleM = pPr.match(/<w:pStyle w:val="([^"]+)"/);
+  if (!pStyleM) {
+    pStyleM = pInner.match(/<w:pStyle w:val="([^"]+)"/);
+  }
+  if (pStyleM) {
+    wordStyle = pStyleM[1];
+  }
+  var spM = pPr.match(/<w:spacing[^>]*\bw:line="(\d+)"/);
+  if (spM) {
+    style.lineSpacing = Number(spM[1]) / 240;
+  }
+  var runRe = /<w:r[\s\S]*?<\/w:r>/g;
+  var rm;
+  while ((rm = runRe.exec(pInner)) !== null) {
+    if (rm[0].indexOf("<w:drawing") >= 0) {
+      continue;
+    }
+    var text = extractPlainFromRuns(rm[0]);
+    if (!text) {
+      continue;
+    }
+    var rPrM = rm[0].match(/<w:rPr>([\s\S]*?)<\/w:rPr>/);
+    var rPr = rPrM ? rPrM[1] : "";
+    var fontM = rPr.match(/w:ascii="([^"]+)"/);
+    if (fontM) {
+      style.font = fontM[1];
+    }
+    var szM = rPr.match(/<w:sz w:val="(\d+)"/);
+    if (szM) {
+      style.sizePt = Number(szM[1]) / 2;
+    }
+    if (rPr.indexOf("<w:b") >= 0) {
+      style.bold = true;
+    }
+    if (rPr.indexOf("<w:i") >= 0) {
+      style.italic = true;
+    }
+    break;
+  }
+  var hasKeys = false;
+  for (var k in style) {
+    if (Object.prototype.hasOwnProperty.call(style, k)) {
+      hasKeys = true;
+      break;
+    }
+  }
+  return {
+    style: hasKeys ? style : undefined,
+    wordStyle: wordStyle,
+  };
+}
+
 function runPropsFromStyle(style, run) {
   var parts = [];
   if (style && style.font) {
@@ -574,6 +728,10 @@ export function Document(options) {
       var plain = blockPlainText(b);
       var label = b.type === "heading" ? "h" + (b.level || 1) : b.type;
       var head = "[" + i + "] " + label + ": ";
+      if (options.includeStyle) {
+        var eff = effectiveBlockStyle(doc, b);
+        head = "[" + i + "] " + label + styleLabel(eff) + (b.wordStyle ? " <" + b.wordStyle + ">" : "") + ": ";
+      }
       if (b.type === "code" && plain.indexOf("\n") >= 0) {
         var codeLines = plain.split("\n");
         for (var cl = 0; cl < codeLines.length; cl++) {
@@ -607,11 +765,20 @@ export function Document(options) {
       if (!blockMatchesType(bl, options.type)) {
         continue;
       }
+      if (!styleMatchesCriteria(doc, bl, options.style)) {
+        continue;
+      }
       var item = {
         index: i,
         type: bl.type,
         text: blockPlainText(bl),
       };
+      if (options.includeStyle !== false) {
+        item.style = effectiveBlockStyle(doc, bl);
+        if (bl.wordStyle) {
+          item.wordStyle = bl.wordStyle;
+        }
+      }
       if (bl.type === "heading") {
         item.level = bl.level || 1;
       }
@@ -633,13 +800,66 @@ export function Document(options) {
     if (!b) {
       return null;
     }
-    return {
+    var info = {
       index: index,
       type: b.type,
       text: blockPlainText(b),
       level: b.level,
       checked: b.checked,
+      style: effectiveBlockStyle(doc, b),
     };
+    if (b.wordStyle) {
+      info.wordStyle = b.wordStyle;
+    }
+    return info;
+  };
+  doc.getBlockStyle = function (index) {
+    var b = doc.blocks[index];
+    if (!b) {
+      return null;
+    }
+    return {
+      blockIndex: index,
+      type: b.type,
+      effective: effectiveBlockStyle(doc, b),
+      explicit: b.style ? mergeStyle({}, b.style) : null,
+      wordStyle: b.wordStyle || null,
+      defaultStyle: mergeStyle({}, doc.defaultStyle),
+      inlines: summarizeInlineStyles(b.inlines),
+    };
+  };
+  doc.setBlockStyle = function (index, style) {
+    var b = doc.blocks[index];
+    if (!b) {
+      throw new Error("docx: setBlockStyle: invalid block index " + index);
+    }
+    if (b.type === "table" || b.type === "image") {
+      throw new Error("docx: setBlockStyle not supported for " + b.type);
+    }
+    b.style = mergeStyle(b.style, style || {});
+    return doc;
+  };
+  doc.grepStyles = function (criteria, options) {
+    options = options || {};
+    criteria = criteria || {};
+    var hits = [];
+    for (var i = 0; i < doc.blocks.length; i++) {
+      var bl = doc.blocks[i];
+      if (!blockMatchesType(bl, options.type)) {
+        continue;
+      }
+      if (!styleMatchesCriteria(doc, bl, criteria)) {
+        continue;
+      }
+      hits.push({
+        blockIndex: i,
+        type: bl.type,
+        text: blockPlainText(bl),
+        style: effectiveBlockStyle(doc, bl),
+        wordStyle: bl.wordStyle || null,
+      });
+    }
+    return hits;
   };
   doc.setBlockText = function (index, text) {
     var b = doc.blocks[index];
@@ -951,21 +1171,42 @@ function parseDocumentXml(xml, relsMap) {
       continue;
     }
     var pInner = pXml.replace(/^<w:p[^>]*>/, "").replace(/<\/w:p>$/, "");
+    var paraMeta = extractParagraphStyleFromPInner(pInner);
     var styleM = pInner.match(/<w:pStyle w:val="([^"]+)"/);
     var inlines = parseHyperlinkRuns(pInner, state);
     var plain = inlinesToPlain(inlines);
+    var blockStyle = paraMeta.style ? mergeStyle({}, paraMeta.style) : undefined;
+    var blockWordStyle = paraMeta.wordStyle || (styleM ? styleM[1] : null);
     if (styleM && /^Heading(\d)$/.test(styleM[1])) {
-      blocks.push({ type: "heading", level: parseInt(styleM[1], 10), inlines: inlines });
+      blocks.push({
+        type: "heading",
+        level: parseInt(styleM[1], 10),
+        inlines: inlines,
+        style: blockStyle,
+        wordStyle: blockWordStyle,
+      });
     } else if (plain.indexOf("☐ ") === 0 || plain.indexOf("☑ ") === 0) {
       blocks.push({
         type: "task",
         checked: plain.indexOf("☑ ") === 0,
         inlines: parseInlines(plain.slice(2)),
+        style: blockStyle,
+        wordStyle: blockWordStyle,
       });
     } else if (plain.indexOf("• ") === 0) {
-      blocks.push({ type: "bullet", inlines: parseInlines(plain.slice(2)) });
+      blocks.push({
+        type: "bullet",
+        inlines: parseInlines(plain.slice(2)),
+        style: blockStyle,
+        wordStyle: blockWordStyle,
+      });
     } else {
-      blocks.push({ type: "paragraph", inlines: inlines });
+      blocks.push({
+        type: "paragraph",
+        inlines: inlines,
+        style: blockStyle,
+        wordStyle: blockWordStyle,
+      });
     }
   }
   return blocks;

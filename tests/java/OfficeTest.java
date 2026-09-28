@@ -96,6 +96,22 @@ public final class OfficeTest {
             assertContains(grepEdit, "\"hasStrong\":true");
             assertZipEntryContains(root.resolve("out/grep-edited.docx"), "word/document.xml", "strong");
 
+            String styleFlow = engine.runJs(
+                    "import { Document, renderDocx, readDocx } from './docx.js';\n"
+                            + "var doc = Document.create({ defaultStyle: { font: 'SimSun', sizePt: 12 } });\n"
+                            + "doc.addParagraph('Small', { sizePt: 10 });\n"
+                            + "doc.addParagraph('Large', { sizePt: 16, bold: true });\n"
+                            + "renderDocx(doc, 'out/style.docx');\n"
+                            + "var loaded = readDocx('out/style.docx');\n"
+                            + "var hits = loaded.grepStyles({ sizePt: 16 });\n"
+                            + "loaded.setBlockStyle(hits[0].blockIndex, { font: 'SimHei', sizePt: 18 });\n"
+                            + "loaded.save('out/style-edited.docx');\n"
+                            + "export default { hitText: hits[0] && hits[0].text, eff: loaded.getBlockStyle(hits[0].blockIndex).effective };\n",
+                    15000);
+            assertContains(styleFlow, "\"hitText\":\"Large\"");
+            assertContains(styleFlow, "\"sizePt\":18");
+            assertZipEntryContains(root.resolve("out/style-edited.docx"), "word/document.xml", "SimHei");
+
             try {
                 engine.runJs(
                         "import { markdownToDocx } from './docx.js';\n"

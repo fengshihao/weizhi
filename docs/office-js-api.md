@@ -114,6 +114,17 @@ const md = doc.toMarkdown();             // 有损往返，复杂版式会简化
 | `replaceInBlock(index, search, replace, { replaceFirst?, regex? })` | 块内替换（默认全部；复杂 inline 会被收成新 plain） |
 | `replaceAll(search, replace, { type?, … })` | 跨块替换 |
 | `setBlockText(index, text)` | 整段设为 Markdown 风格 plain |
+| `getBlockStyle(index)` | 有效样式 `effective`、块上显式 `explicit`、`wordStyle`（如 `Heading1`）、run 级 `inlines` |
+| `setBlockStyle(index, { font, sizePt, bold, italic, lineSpacing })` | 合并写入块样式（渲染时与 `defaultStyle` 叠加） |
+| `grepStyles({ font?, sizePt?, bold?, … }, { type? })` | 按样式条件筛块（类似 grep，但匹配样式而非正文） |
+| `textView({ includeStyle: true })` | 行首展示 `{字体, 字号, …}` 与 Word 段落样式名 |
+
+样式字段（块级，写入 OOXML 的 `w:rPr` / 段落行距）：
+
+- `font`、`sizePt`、`bold`、`italic`、`lineSpacing`（倍数，如 `1.5`）
+- 读 docx 时会从**首个有字的 run** 与 `w:spacing` 尽量还原到 `block.style`；`wordStyle` 保留 `Heading1` 等
+- **Run 级**加粗/斜体/链接：读入后在 `inlines[]`；改 run 级可 `getBlockStyle` 后改 `inlines` 再写回块（高级用法）
+- **不支持**：主题色、段前段后距、样式库全量、页眉页脚、单元格独立样式
 
 **读取限制**：以 `word/document.xml` 为主；嵌入图片读回为占位；复杂 Run/样式/页眉页脚可能丢失。表格 grep 命中的是「行内 tab 分隔」的 plain；`setBlockText` 不支持 table/image 块。
 
