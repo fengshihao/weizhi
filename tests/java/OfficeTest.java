@@ -45,6 +45,18 @@ public final class OfficeTest {
             assertContains(mdOut, "\"ok\":true");
             assertContains(mdOut, "\"path\":\"out/report.docx\"");
             assertPkZip(root.resolve("out/report.docx"));
+
+            String builderOut = engine.runJs(
+                    "import { buildDocx } from './docx-build.js';\n"
+                            + "export default buildDocx("
+                            + "{ title: 'B', defaultStyle: { font: 'SimSun', sizePt: 11 } },"
+                            + "function(b){ b.h1('Built').p('Line').table(['C1','C2'],['v1','v2']); },"
+                            + "'out/builder.docx'"
+                            + ");\n",
+                    10000);
+            assertContains(builderOut, "\"ok\":true");
+            assertZipEntryContains(root.resolve("out/builder.docx"), "word/document.xml", "Built");
+            assertZipEntryContains(root.resolve("out/builder.docx"), "word/document.xml", "w:tbl");
             assertZipEntryContains(root.resolve("out/report.docx"), "word/document.xml", "Hello");
 
             String modelOut = engine.runJs(

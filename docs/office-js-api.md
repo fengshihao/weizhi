@@ -29,6 +29,47 @@ const result = renderDocx(doc, "out/report.docx");
 // { ok: true, path: "out/report.docx", bytes: number }
 ```
 
+### Builder / 块 DSL（创作更顺口）
+
+**写新文档**时可用 `docx-build.js` 链式 API；**改已有 docx** 仍用 `readDocx` + grep（Builder 不负责编辑）。
+
+```javascript
+import { buildDocx } from "./docx-build.js";
+
+buildDocx({ title: "报告", defaultStyle: { font: "宋体", sizePt: 12 } }, (b) => {
+  b.h1("摘要")
+    .p("第一段正文。")
+    .style({ bold: true })
+    .p("加粗的一句")
+    .bullet("要点")
+    .table(["列A", "列B"], ["1", "2"]);
+}, "out/report.docx");
+```
+
+或 **JSON 块列表**（适合 Agent `@Tool` 传参）：
+
+```javascript
+import { buildDoc, renderDocx } from "./docx-build.js";
+
+const doc = buildDoc({}, (b) =>
+  b.blocks([
+    { type: "h1", text: "标题" },
+    { type: "p", text: "正文" },
+    { type: "table", rows: [["H1", "H2"], ["a", "b"]] },
+  ])
+);
+renderDocx(doc.doc(), "out/from-blocks.docx");
+```
+
+| Builder 方法 | 等价 |
+|---|---|
+| `h1` / `h2` / `h3` / `h(level)` | `addHeading` |
+| `p` / `bullet` / `task` / `quote` / `code` | 同名 `add*` |
+| `table(rows…)` | `addTable` |
+| `style({…})` | 仅影响下一块文本 |
+| `defaultStyle({…})` | `setDefaultStyle` |
+| `block(spec)` / `blocks([…])` | 声明式一块或一批 |
+
 ### Document 方法
 
 | 方法 | 说明 |
