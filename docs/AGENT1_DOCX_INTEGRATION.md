@@ -132,7 +132,55 @@ Agent1 CI 建议在集成后增加：拷贝 `assets/office/*.js` → 跑一次 `
 
 ---
 
-## 8. 相关文档
+## 8. Android 崩溃 / 无日志排查（与桌面 CLI 不同步时）
+
+桌面 **`./scripts/test-jni.sh` 正常**，只说明「本机 CMake 编出来的 **`libweizhijni.so` + 同仓库 `WeizhiEngine.java`**」匹配。Agent1 若**只换 SO、或 Maven 里 Java/SO 版本不一致**，会在 Android 上直接崩进程，且不一定有 Java 堆栈。
+
+### 8.1 代码上最常见原因（按优先级）
+
+1. **JNI 与 Java 不同步**（自 D4 / `runJs` 文件名栈起）  
+   - Java 侧：`nativeRunJs(long, String, int, String)` **4 个参数**。  
+   - 必须 **`weizhi` AAR 里的 `WeizhiEngine.class` 与 `jniLibs/*/libweizhijni.so` 同一次发布**（`./scripts/publish-android-maven.sh` 或整包 import），不要只拷 `.so` 进旧工程。  
+   - 典型 logcat：`UnsatisfiedLinkError`、`NoSuchMethodError`、`*JNI DETECTED ERROR*`。
+
+2. **ABI 不匹配**  
+   - 真机 arm64 需 `jniLibs/arm64-v8a/libweizhijni.so`；x86 模拟器需 `x86_64`。混用会 `dlopen` 失败。
+
+3. **不是 native 崩，而是脚本/集成**（表现为 `RuntimeException`，message 以 `!` 开头被 Java 抛出）  
+   - 仍调用已删除的 **`loadScript`** → ReferenceError。  
+   - **`setScriptFolder` 未设**就 `import './docx.js'` → 模块找不到。  
+   - **`setFsRoot` 与 Caps workspace 不一致** → 写 docx 路径失败。  
+   - **`docx.js` 未打进 Agent1 assets/catalog** → import 失败。
+
+4. **资源极限**（较少见，一般会有 JS 错误文案）  
+   - 默认 JS 栈 **256KB**、堆 **32MB**；超大脚本或极深递归 → `"stack"` / `"memory"`。docx 库较大，但仍应在默认限额内；若仍 OOM，可在 Agent1 构造 `WeizhiLimits` 加大 `jsHeapBytes` / `jsStackBytes` 试一次。
+
+5. **线程**  
+   - 不要在 **主线程** 长时间 `runJs`（部分 UI cap 会抛 `runJs must not be on the main thread`）。应在后台线程跑引擎。
+
+### 8.2 建议抓 log（无 Android Studio 时）
+
+```bash
+adb logcat -c
+adb logcat -v time '*:E' | rg -i 'weizhi|UnsatisfiedLink|FATAL|signal 11|JNI|QuickJS|AndroidRuntime'
+```
+
+复现一次崩溃后，看是否有 **UnsatisfiedLinkError**（集成问题）或 **signal 11 SIGSEGV**（native，多为 SO/ABI 或引擎 bug）。
+
+### 8.3 Weizhi 仓库内对照测试（真机/模拟器）
+
+```bash
+./scripts/build-android.sh arm64-v8a
+cd android && ./gradlew :app:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.weizhi.WeizhiJniInstrumentedTest
+# docx：CapsInstrumentedTest#docxJsMarkdownToDocx / docxJsGrepValidate
+```
+
+若上述在设备上绿，而 Agent1 仍崩，问题几乎一定在 **Agent1 打包的 AAR/SO 版本或脚本集成**，不在 docx JS 本身。
+
+---
+
+## 9. 相关文档
 
 - [office-js-api.md](office-js-api.md) — API 表
 - [office.md](office.md) — 总览
