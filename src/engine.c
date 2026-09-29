@@ -102,7 +102,7 @@ static int interrupt_cb(JSRuntime *rt, void *opaque) {
     return now_ms() >= engine->deadline_ms;
 }
 
-static int valid_leaf_name(const char *name) {
+int weizhi_valid_script_leaf(const char *name) {
     size_t i;
     size_t len;
     if (name == NULL || name[0] == '\0') {
@@ -187,7 +187,7 @@ int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, siz
     *out = NULL;
     *out_len = 0;
     if (engine == NULL || leaf == NULL ||
-        !valid_leaf_name(leaf) || strlen(leaf) < 4 || strcmp(leaf + strlen(leaf) - 3, ".js") != 0) {
+        !weizhi_valid_script_leaf(leaf) || strlen(leaf) < 4 || strcmp(leaf + strlen(leaf) - 3, ".js") != 0) {
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "invalid script name");
         }
@@ -206,6 +206,77 @@ int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, siz
         return -1;
     }
     bytes = read_file(path, &length, &error);
+    if (bytes == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "script not found");
+        }
+        return -1;
+    }
+    *out = bytes;
+    *out_len = length;
+    return 0;
+}
+
+int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **out, size_t *out_len,
+                                 char *errbuf, size_t errbuf_len) {
+    char folder_real[PATH_MAX];
+    char joined[PATH_MAX];
+    char file_real[PATH_MAX];
+    size_t folder_len;
+    const char *error = NULL;
+    uint8_t *bytes;
+    size_t length = 0;
+    if (out == NULL || out_len == NULL) {
+        return -1;
+    }
+    *out = NULL;
+    *out_len = 0;
+    if (engine == NULL || relpath == NULL || relpath[0] == '\0') {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "invalid path");
+        }
+        return -1;
+    }
+    if (engine->fs_root == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "workspace not set");
+        }
+        return -1;
+    }
+    if (!weizhi_path_ok(relpath)) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "invalid path");
+        }
+        return -1;
+    }
+    if (strlen(relpath) < 4 || strcmp(relpath + strlen(relpath) - 3, ".js") != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "not a script path");
+        }
+        return -1;
+    }
+    if (realpath(engine->fs_root, folder_real) == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "workspace not found");
+        }
+        return -1;
+    }
+    snprintf(joined, sizeof(joined), "%s/%s", folder_real, relpath);
+    if (realpath(joined, file_real) == NULL) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "script not found");
+        }
+        return -1;
+    }
+    folder_len = strlen(folder_real);
+    if (strncmp(file_real, folder_real, folder_len) != 0 ||
+        (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "path escape");
+        }
+        return -2;
+    }
+    bytes = read_file(file_real, &length, &error);
     if (bytes == NULL) {
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "script not found");

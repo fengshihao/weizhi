@@ -9,18 +9,20 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 | 加载什么 | AI 怎么写 |
 |---|---|
 | **引擎内置**（`fs`、`path`、`buffer`、`process`、`zlib`、`zip`） | `import fs from "fs"`、`import zip from "zip"` 等 |
-| **脚本目录自建库**（`setScriptFolder` 下叶子 `.js`） | `import … from "./名字.js"` 或 `await import("./名字.js")` |
+| **脚本目录自建库**（`setScriptFolder` 下叶子 `.js`） | `import … from "./名字.js"`、`import … from "名字"`，或 `await import(...)` |
 
 整段 `runJs` 含 `import` / `export` 时按 **ES 模块** 执行；用 `export default` 作为本轮返回值。
 
 **没有 `loadScript`**（已移除）。
 
-**路径**：自建库只能是 `./leaf.js`，不能 `./a/b.js`、`..`、绝对路径。
+**路径**：工作区内可写 `jobs/run.js` 等相对路径；catalog 侧仍是**单层叶子** `leaf.js`（不能 `a/b.js`）。禁止 `..`、绝对路径。
 
 **两个根（勿混）**：
 
-- **`setFsRoot`** — 工作区（用户文件、`fs`）
-- **`setScriptFolder`** — 脚本库（只解析 `./leaf.js`）
+- **`setFsRoot`** — 工作区（用户文件、`fs`、orchestrator 入口如 `jobs/run.js`）
+- **`setScriptFolder`** — catalog 脚本库（`docx.js` 等）
+
+**解析顺序（ES module）**：先按当前模块路径在工作区找；找不到时，对单层 `./leaf.js` **回退**到 `setScriptFolder/leaf.js`。bare 名 `docx` / `docx.js` 在 catalog 根目录查找。
 
 ---
 

@@ -171,9 +171,14 @@ void weizhi_refresh_caps(Engine *engine);
 int weizhi_js_is_buffer(JSContext *ctx, JSValueConst val);
 int weizhi_js_buffer_data(JSContext *ctx, JSValueConst val, uint8_t **data, size_t *len);
 JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len);
+/* Leaf script name: single path segment, [A-Za-z0-9._-], max 64 chars. */
+int weizhi_valid_script_leaf(const char *name);
 /* Read a leaf .js from script_folder into *out (caller frees). Returns 0 on success. */
 int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
                             char *errbuf, size_t errbuf_len);
+/* Read a .js under fs_root (relpath, no ".."). Returns 0 on success. */
+int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **out, size_t *out_len,
+                                 char *errbuf, size_t errbuf_len);
 /* Zip pack/unpack under fs root (zip-slip safe). Returns 0 on success. */
 int weizhi_zip_extract(Engine *engine, const char *zip_rel, const char *dest_rel, int *out_entries,
                        int *out_skipped, char *errbuf, size_t errbuf_len);
