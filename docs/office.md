@@ -7,6 +7,7 @@
 | 文件 | 作用 |
 |---|---|
 | `assets/office/docx.js` | 内存 `Document` + `renderDocx` + `markdownToDocx` + grep/样式 |
+| `assets/office/docx-build.js` | 链式 Builder / JSON 块 DSL（写新文档） |
 | `assets/office/docx-raw.js` | 解压/打包 `.docx` + `validateDocx`（原始 OOXML 逃生舱） |
 
 宿主：`engine.setScriptFolder` 指向含 `docx.js` 的目录（或把该文件拷入 Agent1 catalog）。

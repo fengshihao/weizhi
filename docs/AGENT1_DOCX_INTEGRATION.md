@@ -27,6 +27,7 @@
    | 文件 | 说明 |
    |---|---|
    | `assets/office/docx.js` | 文档模型 + 渲染 + grep/样式 |
+   | `assets/office/docx-build.js` | 可选 **Builder / 块 DSL**（从零写文档） |
    | `assets/office/docx-raw.js` | 解压 / 打包 / `validateDocx` |
 
    Android：`android/app/src/main/assets/office/` 已与 `assets/office/` 同步；Agent1 可同样放进 `assets` 或下发到 `workspace/scripts/office/`。
