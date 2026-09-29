@@ -14,6 +14,7 @@
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
 | [HOST_ABI.md](HOST_ABI.md) / [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) | 签名原生插件 |
 | [QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md) | 第三方 JS 库能不能塞进脚本 |
+| **[AGENT1_DOCX_INTEGRATION.md](AGENT1_DOCX_INTEGRATION.md)** | **Agent1 接 Word（docx.js / docx-raw.js、catalog、工具环、验收）** |
 
 ---
 

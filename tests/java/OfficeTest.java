@@ -118,17 +118,46 @@ public final class OfficeTest {
                             + "var u = unpackDocx('out/report.docx', { workDir: 'tmp/raw-report' });\n"
                             + "var p = u.dir + '/word/document.xml';\n"
                             + "fs.writeFileSync(p, fs.readFileSync(p).toString().replace('item one', 'ITEM ONE'));\n"
-                            + "var bad = validateDocx({ dir: u.dir });\n"
+                            + "var good = validateDocx({ dir: u.dir });\n"
                             + "var packed = packDocx(u.dir, 'out/raw-edited.docx');\n"
                             + "var v = validateDocx({ path: 'out/raw-edited.docx' });\n"
-                            + "fs.writeFileSync(p, fs.readFileSync(p).toString().replace('<w:body>', '<w:body>'));\n"
                             + "fs.writeFileSync(p, '<broken');\n"
                             + "var broken = validateDocx({ dir: u.dir, levels: ['xml'] });\n"
-                            + "export default { packedOk: packed.ok, validOk: v.ok, badOk: bad.ok, brokenOk: broken.ok === false };\n",
+                            + "export default { packedOk: packed.ok, validOk: v.ok, goodOk: good.ok, brokenOk: broken.ok === false, xmlErrors: broken.errors.length };\n",
                     20000);
             assertContains(rawFlow, "\"packedOk\":true");
             assertContains(rawFlow, "\"validOk\":true");
+            assertContains(rawFlow, "\"goodOk\":true");
             assertContains(rawFlow, "\"brokenOk\":true");
+
+            String inspect = engine.runJs(
+                    "import { readDocx } from './docx.js';\n"
+                            + "var doc = readDocx('out/rich.docx');\n"
+                            + "var tv = doc.textView({ includeStyle: true });\n"
+                            + "var paras = doc.filter({ type: 'paragraph' });\n"
+                            + "var first = doc.replaceInBlock(paras[0].index, 'Visit', 'See', { replaceFirst: true });\n"
+                            + "var md = doc.toMarkdown();\n"
+                            + "export default {"
+                            + "viewLines: tv.length,"
+                            + "paraCount: paras.length,"
+                            + "replaced: first.replaced,"
+                            + "mdHasSee: md.indexOf('See') >= 0"
+                            + "};\n",
+                    15000);
+            assertContains(inspect, "\"replaced\":1");
+            assertContains(inspect, "\"mdHasSee\":true");
+
+            String validateOnly = engine.runJs(
+                    "import { validateDocx } from './docx-raw.js';\n"
+                            + "var files = (typeof linux !== 'undefined' && linux.files) ? linux.files"
+                            + " : mac.files;\n"
+                            + "files.mkdir('tmp/empty-pkg');\n"
+                            + "files.write('tmp/empty-pkg/[Content_Types].xml',"
+                            + " '<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"></Types>');\n"
+                            + "export default validateDocx({ dir: 'tmp/empty-pkg', levels: ['package'] });\n",
+                    10000);
+            assertContains(validateOnly, "\"ok\":false");
+            assertContains(validateOnly, "package_missing");
 
             try {
                 engine.runJs(

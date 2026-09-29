@@ -183,4 +183,10 @@ Document（内存 blocks）
 
 ## 测试
 
-`tests/java/OfficeTest`；Android `CapsInstrumentedTest.docxJsMarkdownToDocx`。
+| 运行方式 | 内容 |
+|---|---|
+| `./scripts/test-jni.sh` | `OfficeTest`：MD→docx、渲染、read/save、grep/样式、raw+validate、textView、`replaceFirst`、缺包校验 |
+| `./scripts/test.sh android` | `docxJsMarkdownToDocx`、`docxJsGrepValidate` |
+| `./scripts/test-office-strict.sh` | 可选 `xmllint`（需先 jni 测试生成 artifact） |
+
+Agent1 集成清单见 [AGENT1_DOCX_INTEGRATION.md](AGENT1_DOCX_INTEGRATION.md)。

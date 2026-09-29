@@ -223,6 +223,35 @@ public final class CapsInstrumentedTest {
     }
 
     @Test
+    public void docxJsGrepValidate() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
+        File scriptDir = new File(ctx.getCacheDir(), "office-scripts-grep-" + System.currentTimeMillis());
+        assertTrue(scriptDir.mkdirs());
+        copyAsset("office/docx.js", new File(scriptDir, "docx.js"));
+        copyAsset("office/docx-raw.js", new File(scriptDir, "docx-raw.js"));
+        File workspace = workspace("office-grep");
+        write(new File(workspace, "in.md"), "# T\n\nFind **needle** here.\n");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.install(engine, new AndroidCaps.Session(context(), workspace));
+            engine.setScriptFolder(scriptDir.getAbsolutePath());
+            String out = engine.runJs(
+                    "import { markdownToDocx, readDocx } from './docx.js';\n"
+                            + "import { validateDocx } from './docx-raw.js';\n"
+                            + "markdownToDocx({ inputPath: 'in.md', outputPath: 'out/x.docx' });\n"
+                            + "var doc = readDocx('out/x.docx');\n"
+                            + "var g = doc.grep('needle');\n"
+                            + "doc.replaceAll('needle', 'found');\n"
+                            + "doc.save('out/y.docx');\n"
+                            + "var v = validateDocx({ path: 'out/y.docx' });\n"
+                            + "export default { matches: g.matches.length, valid: v.ok, text: doc.plainText() };\n",
+                    15000);
+            assertTrue(out.contains("\"matches\":1"));
+            assertTrue(out.contains("\"valid\":true"));
+            assertTrue(out.contains("found"));
+        }
+    }
+
+    @Test
     public void zipExtractCreateRoundTrip() throws Exception {
         File workspace = workspace("zip");
         try (WeizhiEngine engine = new WeizhiEngine()) {
