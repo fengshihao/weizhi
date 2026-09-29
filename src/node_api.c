@@ -1410,19 +1410,12 @@ static int buffer_module_init(JSContext *ctx, JSModuleDef *m) {
     return 0;
 }
 
-static JSModuleDef *load_script_js_module(JSContext *ctx, Engine *engine, const char *module_name) {
-    uint8_t *bytes = NULL;
-    size_t length = 0;
-    char errbuf[128];
+static JSModuleDef *compile_js_module(JSContext *ctx, const char *module_name, const uint8_t *bytes,
+                                      size_t length) {
     JSValue func_val;
     JSModuleDef *m;
-    if (weizhi_read_script_leaf(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
-        JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name, errbuf);
-        return NULL;
-    }
     func_val = JS_Eval(ctx, (const char *)bytes, length, module_name,
                        JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-    free(bytes);
     if (JS_IsException(func_val)) {
         return NULL;
     }
@@ -1431,23 +1424,91 @@ static JSModuleDef *load_script_js_module(JSContext *ctx, Engine *engine, const 
     return m;
 }
 
-static int is_script_js_module_name(const char *module_name) {
-    size_t i;
-    size_t len;
+static int module_name_rejected(const char *module_name) {
     if (module_name == NULL || module_name[0] == '\0') {
+        return 1;
+    }
+    if (module_name[0] == '/' || strchr(module_name, '\\') != NULL) {
+        return 1;
+    }
+    if (strstr(module_name, "..") != NULL) {
+        return 1;
+    }
+    return 0;
+}
+
+static int is_catalog_leaf_js(const char *leaf) {
+    size_t len;
+    if (!weizhi_valid_script_leaf(leaf)) {
         return 0;
     }
-    len = strlen(module_name);
-    if (len < 4 || len > 64 || strcmp(module_name + len - 3, ".js") != 0) {
-        return 0;
+    len = strlen(leaf);
+    return len >= 4 && strcmp(leaf + len - 3, ".js") == 0;
+}
+
+static JSModuleDef *load_catalog_leaf_module(JSContext *ctx, Engine *engine, const char *module_name,
+                                             const char *catalog_leaf) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    char errbuf[128];
+    JSModuleDef *m;
+    if (weizhi_read_script_leaf(engine, catalog_leaf, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name, errbuf);
+        return NULL;
     }
-    for (i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)module_name[i];
-        if (!(isalnum(c) || c == '.' || c == '_' || c == '-')) {
-            return 0;
+    m = compile_js_module(ctx, module_name, bytes, length);
+    free(bytes);
+    return m;
+}
+
+static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const char *module_name) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    char errbuf[128];
+    const char *slash;
+    const char *leaf;
+    char bare_leaf[72];
+    JSModuleDef *m;
+
+    if (module_name_rejected(module_name)) {
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid path", module_name);
+        return NULL;
+    }
+
+    slash = strchr(module_name, '/');
+    if (slash == NULL) {
+        leaf = module_name;
+        if (!is_catalog_leaf_js(leaf)) {
+            if (strlen(module_name) + 4 >= sizeof(bare_leaf)) {
+                JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid name", module_name);
+                return NULL;
+            }
+            snprintf(bare_leaf, sizeof(bare_leaf), "%s.js", module_name);
+            if (!is_catalog_leaf_js(bare_leaf)) {
+                JS_ThrowReferenceError(ctx, "could not load module \"%s\": not found", module_name);
+                return NULL;
+            }
+            leaf = bare_leaf;
         }
+        return load_catalog_leaf_module(ctx, engine, module_name, leaf);
     }
-    return 1;
+
+    if (weizhi_path_ok(module_name) &&
+        weizhi_read_workspace_script(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf)) == 0) {
+        m = compile_js_module(ctx, module_name, bytes, length);
+        free(bytes);
+        return m;
+    }
+
+    leaf = strrchr(module_name, '/');
+    leaf = leaf != NULL ? leaf + 1 : module_name;
+    if (is_catalog_leaf_js(leaf) && engine->script_folder != NULL) {
+        return load_catalog_leaf_module(ctx, engine, module_name, leaf);
+    }
+
+    JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
+                           errbuf[0] != '\0' ? errbuf : "not found");
+    return NULL;
 }
 
 static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_name, void *opaque) {
@@ -1485,10 +1546,23 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
         }
         return m;
     }
-    if (is_script_js_module_name(module_name)) {
-        return load_script_js_module(ctx, engine, module_name);
+    if (strchr(module_name, '/') != NULL) {
+        return load_user_js_module(ctx, engine, module_name);
     }
-    JS_ThrowReferenceError(ctx, "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)",
+    if (is_catalog_leaf_js(module_name)) {
+        return load_catalog_leaf_module(ctx, engine, module_name, module_name);
+    }
+    if (strchr(module_name, '.') == NULL && weizhi_valid_script_leaf(module_name) &&
+        strcmp(module_name, "process") != 0 && strcmp(module_name, "zlib") != 0 &&
+        strcmp(module_name, "zip") != 0) {
+        char bare_leaf[72];
+        snprintf(bare_leaf, sizeof(bare_leaf), "%s.js", module_name);
+        if (is_catalog_leaf_js(bare_leaf)) {
+            return load_catalog_leaf_module(ctx, engine, module_name, bare_leaf);
+        }
+    }
+    JS_ThrowReferenceError(ctx,
+                           "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, zip, or workspace/catalog .js)",
                            module_name);
     return NULL;
 }

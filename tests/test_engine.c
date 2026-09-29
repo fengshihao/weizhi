@@ -583,6 +583,54 @@ static void test_fs_size_limit(void) {
     free(dir);
 }
 
+static void test_workspace_catalog_module_fallback(void) {
+    char *script_dir = make_temp_dir();
+    char *fs_dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    const char *docx = "export const fromCatalog = true;\n";
+    const char *helper = "export const fromWorkspace = true;\n";
+    write_file(script_dir, "docx.js", docx, strlen(docx));
+    {
+        char jobs[512];
+        snprintf(jobs, sizeof(jobs), "%s/jobs", fs_dir);
+        EXPECT(mkdir(jobs, 0755) == 0);
+    }
+    write_file(fs_dir, "jobs/helper.js", helper, strlen(helper));
+    EXPECT(weizhi_set_script_folder(engine, script_dir) == 0);
+    EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
+    result = weizhi_run_js_ex(engine,
+                              "import { fromCatalog } from './docx.js';\n"
+                              "export default fromCatalog;\n",
+                              2000,
+                              "jobs/run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js_ex(engine,
+                              "import { fromWorkspace } from './helper.js';\n"
+                              "export default fromWorkspace;\n",
+                              2000,
+                              "jobs/run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js_ex(engine,
+                              "import { fromCatalog } from 'docx';\n"
+                              "export default fromCatalog;\n",
+                              2000,
+                              "jobs/run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js_ex(engine, "import '../../../etc/passwd';\n", 1000, "jobs/run.js");
+    EXPECT(result.ok == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(script_dir);
+    free(fs_dir);
+}
+
 static void test_script_fs_roots_isolated(void) {
     char *script_dir = make_temp_dir();
     char *fs_dir = make_temp_dir();
@@ -1098,6 +1146,7 @@ int main(void) {
     test_buffer_path_require();
     test_fs_sync_and_promises();
     test_fs_size_limit();
+    test_workspace_catalog_module_fallback();
     test_script_fs_roots_isolated();
     test_console_logs();
     test_import_fs();
