@@ -8,13 +8,19 @@
 
 让 Agent1 里的 LLM 通过 **`runJs` + ES module** 完成：
 
-| 场景 | 推荐模块 |
+| 场景 | 推荐模块 / API |
 |---|---|
-| Markdown → Word、从零写报告 | `docx.js` |
-| 打开已有 docx → 观察 / grep / 改字 / 改样式 → 保存 | `docx.js` |
-| 高级 API 不够（页眉、relationships、细粒度 OOXML） | `docx-raw.js` |
+| **从零写**（新报告、新合同、结构化生成） | **`docx-build.js`**（Builder / `blocks([…])`），或 Markdown → `markdownToDocx` |
+| **改已有** docx（找段、改字、改样式、追加） | **`docx.js`**：`readDocx` → `grep` / `textView` / `replace*` / `setBlockStyle` → `save`（**不用 Builder**） |
+| OOXML 级补丁（页眉、relationships 等） | `docx-raw.js` + `validateDocx` |
 
-**不要**再依赖已删除的 Java `host.office.*`。行级 `read_file` / `grep` / `edit_file` 仍是 Agent1 `@Tool`；文档内容检索用 **`Document.grep`** / **`textView`**。
+### 创作 vs 修改（给 Agent 的固定分工）
+
+1. **新文档**：用 Builder（或 Markdown）**生成一份新的 `.docx`**，保存到 workspace；用户或后续轮次再在这份文件上改。
+2. **已有文档**：始终 **`readDocx(路径)`** 加载，在内存里改 blocks，**`save`** 到原路径或新路径；不要对已有文件走 `buildDocx` 覆盖式「重写整篇」（除非用户明确要求「重做一版」）。
+3. **「重做一版」**：当旧文档结构太乱、改起来不如重写时，可以用 Builder **新建** `out/xxx-v2.docx`，再在 v2 上用 read/grep 微调——旧文件保留作对照。
+
+**不要**再依赖已删除的 Java `host.office.*`。行级 `read_file` / `grep` / `edit_file` 仍是 Agent1 `@Tool`；Word 正文检索用 **`Document.grep`** / **`textView`**。
 
 ---
 
@@ -44,10 +50,10 @@
 
 | 工具名 | 脚本要点 |
 |---|---|
-| `docx_markdown_to_word` | `markdownToDocx({ inputPath, outputPath, title?, defaultStyle? })` |
-| `docx_read_grep_edit` | `readDocx` → `grep` / `replaceAll` / `setBlockStyle` → `save` |
+| `docx_create`（新） | `buildDocx(...)` 或 `markdownToDocx` → 产出**新**文件 |
+| `docx_edit`（改已有） | `readDocx` → `grep` / `replaceAll` / `setBlockStyle` → `save` |
 | `docx_inspect` | `textView({ includeStyle: true })` 或 `listBlocks` / `headings` |
-| `docx_raw_edit` | `unpackDocx` → 改路径 → `validateDocx({ dir })` → `packDocx` → 再 `validateDocx({ path })` |
+| `docx_raw_edit` | `unpackDocx` → 改 XML → `validateDocx` → `packDocx` |
 
 返回值：引擎 JSON；**校验失败**时把 `validateDocx` 的 `errors[]`（含 `file`、`line`、`column`）原样给 LLM。
 
