@@ -112,6 +112,24 @@ public final class OfficeTest {
             assertContains(styleFlow, "\"sizePt\":18");
             assertZipEntryContains(root.resolve("out/style-edited.docx"), "word/document.xml", "SimHei");
 
+            String rawFlow = engine.runJs(
+                    "import { unpackDocx, packDocx, validateDocx } from './docx-raw.js';\n"
+                            + "import fs from 'fs';\n"
+                            + "var u = unpackDocx('out/report.docx', { workDir: 'tmp/raw-report' });\n"
+                            + "var p = u.dir + '/word/document.xml';\n"
+                            + "fs.writeFileSync(p, fs.readFileSync(p).toString().replace('item one', 'ITEM ONE'));\n"
+                            + "var bad = validateDocx({ dir: u.dir });\n"
+                            + "var packed = packDocx(u.dir, 'out/raw-edited.docx');\n"
+                            + "var v = validateDocx({ path: 'out/raw-edited.docx' });\n"
+                            + "fs.writeFileSync(p, fs.readFileSync(p).toString().replace('<w:body>', '<w:body>'));\n"
+                            + "fs.writeFileSync(p, '<broken');\n"
+                            + "var broken = validateDocx({ dir: u.dir, levels: ['xml'] });\n"
+                            + "export default { packedOk: packed.ok, validOk: v.ok, badOk: bad.ok, brokenOk: broken.ok === false };\n",
+                    20000);
+            assertContains(rawFlow, "\"packedOk\":true");
+            assertContains(rawFlow, "\"validOk\":true");
+            assertContains(rawFlow, "\"brokenOk\":true");
+
             try {
                 engine.runJs(
                         "import { markdownToDocx } from './docx.js';\n"

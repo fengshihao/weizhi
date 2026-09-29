@@ -1240,6 +1240,27 @@ function parseRels(relsXml) {
   return map;
 }
 
+/** Unpack .docx to a workspace directory for raw OOXML editing with `fs`. */
+export function unpackDocx(inputPath, options) {
+  options = options || {};
+  if (!inputPath) {
+    throw new Error("bad argument: unpackDocx: inputPath required");
+  }
+  var workDir = options.workDir || "tmp/docx-unpack-" + Date.now();
+  unpack(inputPath, workDir);
+  return { ok: true, dir: workDir, inputPath: inputPath };
+}
+
+/** Pack a directory tree (OOXML parts) into a .docx zip. */
+export function packDocx(sourceDir, outputPath) {
+  if (!sourceDir || !outputPath) {
+    throw new Error("bad argument: packDocx: sourceDir and outputPath required");
+  }
+  packDir(sourceDir, outputPath);
+  var bytes = fs.readFileSync(outputPath).length;
+  return { ok: true, path: outputPath, bytes: bytes };
+}
+
 export function readDocx(inputPath, options) {
   options = options || {};
   var workDir = options.workDir || "tmp/docx-read-" + Date.now();
@@ -1300,4 +1321,6 @@ export default {
   renderDocx: renderDocx,
   markdownToDocx: markdownToDocx,
   readDocx: readDocx,
+  unpackDocx: unpackDocx,
+  packDocx: packDocx,
 };

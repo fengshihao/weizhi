@@ -130,6 +130,46 @@ const md = doc.toMarkdown();             // 有损往返，复杂版式会简化
 
 ---
 
+## 原始 OOXML（逃生舱）
+
+高级模型 API 不够用时，可直接改解包后的 XML，再打包成 **.docx（OPC zip）**。模块：**`docx-raw.js`**（亦可在 `docx.js` 用 `unpackDocx` / `packDocx`）。
+
+```javascript
+import { unpackDocx, packDocx, validateDocx } from "./docx-raw.js";
+import fs from "fs";
+
+const { dir } = unpackDocx("in/report.docx", { workDir: "tmp/report-ooxml" });
+const xmlPath = dir + "/word/document.xml";
+let xml = fs.readFileSync(xmlPath).toString();
+xml = xml.replace("OLD", "NEW");
+fs.writeFileSync(xmlPath, xml);
+
+const v = validateDocx({ dir });
+if (!v.ok) {
+  export default v;  // 把 errors 交给 Agent 修
+}
+export default packDocx(dir, "out/report-edited.docx");
+```
+
+也可只用宿主 **`files.zipExtract` / `files.zipCreate`** 或 **`import zip from "zip"`**（见 [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)），与上表等价。
+
+### `validateDocx` 校验难不难？
+
+| 层级 | 做什么 | 难度 | 本库 |
+|---|---|---|---|
+| **zip** | 是否为 PK 压缩包 |  trivial | ✅ |
+| **package** | 是否有 `[Content_Types].xml`、`_rels/.rels`、`word/document.xml` 等 |  easy | ✅ |
+| **xml** | 各 `.xml` / `.rels` **良构**（标签闭合、属性引号） |  medium（已实现轻量扫描器） | ✅ `checkXmlWellFormed` |
+| **document** | `word/document.xml` 含 `w:document` + `w:body` |  easy | ✅ |
+| **XSD / OPC 完整合规** | 对照 OOXML 数百 XSD | **hard**（需 schema、命名空间、关系图） | ❌ 未做 |
+| **Word 能否打开** | 渲染/排版语义 | **very hard** | ❌ 需 Word/LibreOffice 等外部试开 |
+
+结论：**防「AI 写错 XML 导致解压/解析直接炸」**的校验好写，已够用；**不能保证 Word 100% 接受**。桌面 CI 可选 `./scripts/test-office-strict.sh`（`xmllint` 若已安装则多一层良构检查）。
+
+`validateDocx({ path: "f.docx" })` 会临时解包；`{ dir: "tmp/…" }` 只校验目录。`levels: ["package","xml"]` 可跳过 zip。
+
+---
+
 ## 架构说明
 
 ```
