@@ -71,12 +71,16 @@ public final class OfficeTest {
                             + "export default {"
                             + "h1: doc.getBlockStyle(heads[0].index).effective.sizePt,"
                             + "h2: doc.getBlockStyle(heads[1].index).effective.sizePt,"
-                            + "body: doc.getBlockStyle(paras[0].index).effective.sizePt"
+                            + "body: doc.getBlockStyle(paras[0].index).effective.sizePt,"
+                            + "h1Level: heads[0].level,"
+                            + "h2Level: heads[1].level"
                             + "};\n",
                     12000);
             assertContains(headingHierarchy, "\"h1\":22");
             assertContains(headingHierarchy, "\"h2\":16");
             assertContains(headingHierarchy, "\"body\":12");
+            assertContains(headingHierarchy, "\"h1Level\":1");
+            assertContains(headingHierarchy, "\"h2Level\":2");
             assertZipEntryContains(root.resolve("out/headings.docx"), "word/styles.xml", "Heading1");
             assertZipEntryContains(root.resolve("out/headings.docx"), "word/document.xml", "w:sz w:val=\"44\"");
 
