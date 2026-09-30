@@ -253,12 +253,33 @@ function mergeStyle(base, override) {
   return out;
 }
 
+var DEFAULT_HEADING_STYLE_BY_LEVEL = {
+  1: { sizePt: 22, bold: true },
+  2: { sizePt: 16, bold: true },
+  3: { sizePt: 14, bold: true },
+  4: { sizePt: 13, bold: true },
+  5: { sizePt: 12, bold: true },
+  6: { sizePt: 12, bold: true },
+  7: { sizePt: 11, bold: true },
+  8: { sizePt: 11, bold: true },
+  9: { sizePt: 11, bold: true },
+};
+
+function headingStyleForLevel(doc, level) {
+  var lv = Math.min(9, Math.max(1, level || 1));
+  var map = doc.headingStyles || DEFAULT_HEADING_STYLE_BY_LEVEL;
+  return mergeStyle({}, map[lv] || map[3] || DEFAULT_HEADING_STYLE_BY_LEVEL[3]);
+}
+
 function effectiveBlockStyle(doc, block) {
   if (!block) {
     return {};
   }
   if (block.type === "code") {
     return { font: "Consolas", sizePt: 10 };
+  }
+  if (block.type === "heading") {
+    return mergeStyle(mergeStyle(doc.defaultStyle, block.style), headingStyleForLevel(doc, block.level));
   }
   return mergeStyle(doc.defaultStyle, block.style);
 }
@@ -480,8 +501,8 @@ function buildDrawing(relId, cx, cy) {
     + "</wp:inline></w:drawing></w:r>";
 }
 
-function buildParagraphBlock(block, defaultStyle, state) {
-  var style = block.style || defaultStyle || {};
+function buildParagraphBlock(block, doc, state) {
+  var style = effectiveBlockStyle(doc, block);
   var pPrParts = [];
   if (block.type === "heading") {
     pPrParts.push('<w:pStyle w:val="Heading' + Math.min(9, Math.max(1, block.level || 1)) + '"/>');
@@ -568,7 +589,7 @@ function renderBodyXml(doc, state) {
     } else if (b.type === "image") {
       body += buildImageBlock(b, state);
     } else {
-      body += buildParagraphBlock(b, doc.defaultStyle, state);
+      body += buildParagraphBlock(b, doc, state);
     }
   }
   return body;
@@ -576,7 +597,8 @@ function renderBodyXml(doc, state) {
 
 function buildDocumentRels(state) {
   var xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Relationships xmlns="' + REL_NS + '">';
+    + '<Relationships xmlns="' + REL_NS + '">'
+    + '<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>';
   for (var i = 0; i < state.hyperlinks.length; i++) {
     var h = state.hyperlinks[i];
     xml += '<Relationship Id="' + h.id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"'
@@ -601,9 +623,71 @@ function buildContentTypes(state) {
     + '<Default Extension="jpg" ContentType="image/jpeg"/>'
     + '<Override PartName="/word/document.xml"'
     + ' ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+    + '<Override PartName="/word/styles.xml"'
+    + ' ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
     + '<Override PartName="/docProps/core.xml"'
     + ' ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
     + "</Types>";
+  return xml;
+}
+
+function buildStylesParagraphStyle(styleId, name, style, options) {
+  options = options || {};
+  var pPr = "";
+  if (options.before != null || options.after != null) {
+    pPr = "<w:pPr><w:spacing";
+    if (options.before != null) {
+      pPr += ' w:before="' + options.before + '"';
+    }
+    if (options.after != null) {
+      pPr += ' w:after="' + options.after + '"';
+    }
+    pPr += "/></w:pPr>";
+  }
+  var rPrParts = [];
+  if (style.bold) {
+    rPrParts.push("<w:b/>");
+  }
+  if (style.sizePt != null) {
+    var hp = ptToHalfPoints(style.sizePt);
+    rPrParts.push('<w:sz w:val="' + hp + '"/><w:szCs w:val="' + hp + '"/>');
+  }
+  if (style.font) {
+    rPrParts.push(
+      '<w:rFonts w:ascii="' + xmlEscape(style.font) + '" w:hAnsi="' + xmlEscape(style.font) + '"/>'
+    );
+  }
+  var rPr = rPrParts.length ? "<w:rPr>" + rPrParts.join("") + "</w:rPr>" : "";
+  var defaultAttr = options.isDefault ? ' w:default="1"' : "";
+  return '<w:style w:type="paragraph" w:styleId="' + styleId + '"' + defaultAttr
+    + '><w:name w:val="' + xmlEscape(name) + '"/>' + pPr + rPr + "</w:style>";
+}
+
+function buildStylesXml(doc) {
+  var defaultStyle = doc.defaultStyle || {};
+  var bodyFont = defaultStyle.font || "Calibri";
+  var bodySize = defaultStyle.sizePt != null ? defaultStyle.sizePt : 12;
+  var bodyHp = ptToHalfPoints(bodySize);
+  var xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    + '<w:styles xmlns:w="' + W_NS + '">'
+    + "<w:docDefaults><w:rPrDefault><w:rPr>"
+    + '<w:rFonts w:ascii="' + xmlEscape(bodyFont) + '" w:hAnsi="' + xmlEscape(bodyFont) + '"/>'
+    + '<w:sz w:val="' + bodyHp + '"/><w:szCs w:val="' + bodyHp + '"/>'
+    + "</w:rPr></w:rPrDefault></w:docDefaults>";
+  xml += buildStylesParagraphStyle("Normal", "Normal", { font: bodyFont, sizePt: bodySize }, { isDefault: true });
+  for (var level = 1; level <= 9; level++) {
+    var hs = headingStyleForLevel(doc, level);
+    if (defaultStyle.font && !hs.font) {
+      hs = mergeStyle({ font: defaultStyle.font }, hs);
+    }
+    xml += buildStylesParagraphStyle(
+      "Heading" + level,
+      "heading " + level,
+      hs,
+      { before: level <= 2 ? 240 : 160, after: 120 }
+    );
+  }
+  xml += "</w:styles>";
   return xml;
 }
 
@@ -626,6 +710,7 @@ function writeDocxTree(buildDir, doc) {
       + "</Relationships>"
   );
   writeUtf8(buildDir + "/word/document.xml", documentXml);
+  writeUtf8(buildDir + "/word/styles.xml", buildStylesXml(doc));
   writeUtf8(buildDir + "/word/_rels/document.xml.rels", buildDocumentRels(state));
   for (var k = 0; k < state.images.length; k++) {
     var im = state.images[k];
@@ -646,6 +731,7 @@ export function Document(options) {
   var doc = {
     title: options.title || "",
     defaultStyle: options.defaultStyle || {},
+    headingStyles: options.headingStyles || null,
     blocks: [],
     _sourcePath: options._sourcePath || null,
   };
@@ -996,7 +1082,11 @@ function isTableSeparator(line) {
 
 export function documentFromMarkdown(md, options) {
   options = options || {};
-  var doc = Document({ title: options.title || "", defaultStyle: options.defaultStyle });
+  var doc = Document({
+    title: options.title || "",
+    defaultStyle: options.defaultStyle,
+    headingStyles: options.headingStyles,
+  });
   if (options.title) {
     doc.addHeading(options.title, 1);
   }
@@ -1311,6 +1401,7 @@ export function markdownToDocx(options) {
   var doc = documentFromMarkdown(md, {
     title: options.title,
     defaultStyle: options.defaultStyle,
+    headingStyles: options.headingStyles,
   });
   return renderDocx(doc, outputPath);
 }
