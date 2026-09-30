@@ -3,6 +3,7 @@ package com.weizhi.agent;
 import android.content.Context;
 
 import com.weizhi.WeizhiEngine;
+import com.weizhi.agent.sandbox.ReadMount;
 import com.weizhi.agent.sandbox.WorkspaceSandbox;
 import com.weizhi.agent.skill.AssetSkillRepository;
 import com.weizhi.agent.skill.CompositeSkillRepository;
@@ -42,6 +43,7 @@ public final class AgentToolsBundle {
     public static final class Builder {
         private final Path workspace;
         private Path extraReadRoot;
+        private List<ReadMount> readMounts;
         private SkillRepository skillRepository;
         private WeizhiScriptRunner scriptRunner;
         private Consumer<WeizhiEngine> engineConfigure;
@@ -55,6 +57,12 @@ public final class AgentToolsBundle {
 
         public Builder extraReadRoot(Path readRoot) {
             this.extraReadRoot = readRoot;
+            return this;
+        }
+
+        /** 逻辑前缀只读挂载（与 {@link #extraReadRoot} 二选一；挂载优先）。 */
+        public Builder readMounts(List<ReadMount> mounts) {
+            this.readMounts = mounts;
             return this;
         }
 
@@ -112,7 +120,9 @@ public final class AgentToolsBundle {
 
         public AgentToolkit build() {
             AgentToolkit tk = new AgentToolkit();
-            WorkspaceSandbox sandbox = new WorkspaceSandbox(workspace, extraReadRoot);
+            WorkspaceSandbox sandbox = readMounts != null
+                    ? new WorkspaceSandbox(workspace, readMounts)
+                    : new WorkspaceSandbox(workspace, extraReadRoot);
 
             tk.registerTool(new FileReadTools(sandbox));
             tk.registerTool(new FileWriteTools(sandbox));
