@@ -1267,10 +1267,11 @@ function parseDocumentXml(xml, relsMap) {
     var plain = inlinesToPlain(inlines);
     var blockStyle = paraMeta.style ? mergeStyle({}, paraMeta.style) : undefined;
     var blockWordStyle = paraMeta.wordStyle || (styleM ? styleM[1] : null);
-    if (styleM && /^Heading(\d)$/.test(styleM[1])) {
+    var headingLevelM = styleM ? styleM[1].match(/^Heading(\d)$/) : null;
+    if (headingLevelM) {
       blocks.push({
         type: "heading",
-        level: parseInt(styleM[1], 10),
+        level: parseInt(headingLevelM[1], 10),
         inlines: inlines,
         style: blockStyle,
         wordStyle: blockWordStyle,
