@@ -92,8 +92,11 @@ markdownToDocx({
   outputPath: "out/report.docx",
   title: "可选封面标题",
   defaultStyle: { font: "宋体", sizePt: 12 },
+  headingStyles: { 1: { sizePt: 22, bold: true }, 2: { sizePt: 16, bold: true } }, // 可选
 });
 ```
+
+`#` … `###` 会写入 `word/styles.xml`（Heading1–9）并在 run 级应用默认字号（H1 22pt、H2 16pt、H3 14pt，可经 `headingStyles` 覆盖），无需在 Markdown 里插 HTML。
 
 或先建模型再渲染：
 

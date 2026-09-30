@@ -26,6 +26,8 @@ public final class OfficeTest {
             }
             engine.setScriptFolder(scriptDir.toString());
             write(root.resolve("notes/report.md"), "# Hello\n\n- item one\n- item two\n");
+            write(root.resolve("notes/headings.md"),
+                    "# 一级标题\n\n正文段落 twelve pt。\n\n## 二级标题\n\n另一段正文。\n");
             write(root.resolve("notes/rich.md"),
                     "# Rich\n\n"
                             + "Visit [site](https://example.com) for **bold**.\n\n"
@@ -58,6 +60,25 @@ public final class OfficeTest {
             assertZipEntryContains(root.resolve("out/builder.docx"), "word/document.xml", "Built");
             assertZipEntryContains(root.resolve("out/builder.docx"), "word/document.xml", "w:tbl");
             assertZipEntryContains(root.resolve("out/report.docx"), "word/document.xml", "Hello");
+
+            String headingHierarchy = engine.runJs(
+                    "import { markdownToDocx, readDocx } from './docx.js';\n"
+                            + "markdownToDocx({ inputPath: 'notes/headings.md', outputPath: 'out/headings.docx',"
+                            + " defaultStyle: { sizePt: 12 } });\n"
+                            + "var doc = readDocx('out/headings.docx');\n"
+                            + "var heads = doc.headings();\n"
+                            + "var paras = doc.filter({ type: 'paragraph' });\n"
+                            + "export default {"
+                            + "h1: doc.getBlockStyle(heads[0].index).effective.sizePt,"
+                            + "h2: doc.getBlockStyle(heads[1].index).effective.sizePt,"
+                            + "body: doc.getBlockStyle(paras[0].index).effective.sizePt"
+                            + "};\n",
+                    12000);
+            assertContains(headingHierarchy, "\"h1\":22");
+            assertContains(headingHierarchy, "\"h2\":16");
+            assertContains(headingHierarchy, "\"body\":12");
+            assertZipEntryContains(root.resolve("out/headings.docx"), "word/styles.xml", "Heading1");
+            assertZipEntryContains(root.resolve("out/headings.docx"), "word/document.xml", "w:sz w:val=\"44\"");
 
             String modelOut = engine.runJs(
                     "import { Document, renderDocx } from './docx.js';\n"
