@@ -92,10 +92,12 @@ Path ws = workspace.toPath();
 
 - 写操作：仅 workspace 内相对路径  
 - **可选** `extraReadRoot`：用户授权只读目录（如 SAF 映射后的路径）；**引擎 `fs` 侧双根尚未实现**（ROADMAP A），只读外部文件可先用工具环 `read_file`/`grep`/`bash` 读绝对路径  
+- **可选** `readMounts`：`ReadMount(logicalPrefix, root)` 前缀只读挂载（Agent1 文档区 `docs/system`、`docs/capabilities` 等）；`grep`/`glob`/`read_file` 输出与入参均用逻辑路径。与 `extraReadRoot` 二选一，挂载优先。
 
 ```java
 AgentToolsBundle.builder(ws)
     .extraReadRoot(userGrantedReadOnlyPath)  // 可 null
+    // .readMounts(List.of(new ReadMount("docs/system", agentRoot.resolve("docs/system"))))
     ...
 ```
 

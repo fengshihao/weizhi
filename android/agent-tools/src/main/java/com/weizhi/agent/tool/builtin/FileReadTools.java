@@ -22,7 +22,7 @@ public class FileReadTools {
     }
 
     @Tool(name = "read_file",
-            description = "读取文本文件，返回带行号的内容。工作区内相对路径；只读区用绝对路径。"
+            description = "读取文本文件，返回带行号的内容。工作区内相对路径；只读挂载区用逻辑路径（如 docs/system/...）。"
                     + "大文件用 offset/limit；二进制会被拒绝（二进制请用 run_js 内 fs）。",
             readOnly = true, concurrencySafe = true)
     public String readFile(
