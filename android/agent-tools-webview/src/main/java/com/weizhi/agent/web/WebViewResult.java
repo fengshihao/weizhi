@@ -23,7 +23,7 @@ final class WebViewResult {
     final String resultType;
     /** 预览原文。JSON null 的预览是文本 {@code null}，与字符串 {@code "null"} 的预览相同。 */
     final String text;
-    /** 写入 output_path 的 UTF-8；JSON null 时为 null，调用方不得落盘。 */
+    /** 返回值的 UTF-8；JSON null 时为 null，不落盘。 */
     final byte[] spillUtf8;
     final boolean unserializable;
     /** 非 null 表示 payload 无法解析。 */
@@ -73,6 +73,21 @@ final class WebViewResult {
         } catch (RuntimeException e) {
             return error(e.getMessage() == null ? e.toString() : e.getMessage());
         }
+    }
+
+    /**
+     * 图片 Base64 文本（PNG / JPEG / GIF / WebP 的常见开头）。
+     * 只看文本前缀，不解码；data URL 前缀不在此列，调用方应 return 逗号后的 payload。
+     */
+    static boolean isImageBase64(String text) {
+        if (text == null) {
+            return false;
+        }
+        String t = text.trim();
+        return t.startsWith("iVBORw0KGgo")
+                || t.startsWith("/9j/")
+                || t.startsWith("R0lGOD")
+                || t.startsWith("UklGR");
     }
 
     private static WebViewResult typed(String type, String jsonText, boolean unserializable) {
