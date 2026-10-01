@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.weizhi.agent.sandbox.WorkspaceSandbox;
 import com.weizhi.agent.tool.Tool;
+import com.weizhi.agent.tool.ToolParam;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
@@ -21,97 +22,98 @@ import static org.junit.Assert.assertTrue;
 public class WebViewExecToolTest {
 
     private static final Gson GSON = new Gson();
+    /** 1x1 PNG 的 Base64，远小于 64KB。 */
+    private static final String PNG_B64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
     @Test
-    public void nullReturnDoesNotWriteFile() throws Exception {
+    public void smallPngBase64SpillsWithoutPayloadInPreview() throws Exception {
         Path ws = Files.createTempDirectory("weizhi-wv");
-        String json = render(ws, "{\"result\":null}");
-        JsonObject o = JsonParser.parseString(json).getAsJsonObject();
-        assertTrue(o.get("ok").getAsBoolean());
-        assertEquals("null", o.get("resultType").getAsString());
-        assertEquals("null", o.get("resultPreview").getAsString());
-        assertFalse(o.has("outputPath"));
-        assertFalse(Files.exists(ws.resolve("tmp")));
-    }
-
-    @Test
-    public void missingReturnDoesNotWriteFile() throws Exception {
-        Path ws = Files.createTempDirectory("weizhi-wv");
-        JsonObject o = JsonParser.parseString(render(ws, "{}")).getAsJsonObject();
-        assertTrue(o.get("ok").getAsBoolean());
-        assertEquals("null", o.get("resultType").getAsString());
-        assertFalse(o.has("outputPath"));
-        assertFalse(Files.exists(ws.resolve("tmp")));
-    }
-
-    @Test
-    public void smallStringNullStaysInline() throws Exception {
-        Path ws = Files.createTempDirectory("weizhi-wv");
-        JsonObject o = JsonParser.parseString(render(ws, "{\"result\":\"null\"}")).getAsJsonObject();
-        assertTrue(o.get("ok").getAsBoolean());
-        assertEquals("string", o.get("resultType").getAsString());
-        assertEquals("null", o.get("resultPreview").getAsString());
-        assertFalse(o.has("outputPath"));
-        assertFalse(Files.exists(ws.resolve("tmp")));
-    }
-
-    @Test
-    public void smallFalsyValuesStayInline() throws Exception {
-        Path ws = Files.createTempDirectory("weizhi-wv");
-        JsonObject zero = JsonParser.parseString(render(ws, "{\"result\":0}")).getAsJsonObject();
-        assertEquals("number", zero.get("resultType").getAsString());
-        assertEquals("0", zero.get("resultPreview").getAsString());
-        assertFalse(zero.has("outputPath"));
-
-        JsonObject no = JsonParser.parseString(render(ws, "{\"result\":false}")).getAsJsonObject();
-        assertEquals("boolean", no.get("resultType").getAsString());
-        assertEquals("false", no.get("resultPreview").getAsString());
-
-        JsonObject empty = JsonParser.parseString(render(ws, "{\"result\":\"\"}")).getAsJsonObject();
-        assertEquals("string", empty.get("resultType").getAsString());
-        assertEquals("", empty.get("resultPreview").getAsString());
-        assertFalse(Files.exists(ws.resolve("tmp")));
-    }
-
-    @Test
-    public void over64KbSpillsToWorkspaceTmp() throws Exception {
-        Path ws = Files.createTempDirectory("weizhi-wv");
-        String body = repeat('a', WebViewExecTool.AUTO_SPILL_BYTES + 1);
-        String json = render(ws, "{\"result\":" + GSON.toJson(body) + "}");
-        JsonObject o = JsonParser.parseString(json).getAsJsonObject();
+        JsonObject o = JsonParser.parseString(render(ws, null, jsonString(PNG_B64))).getAsJsonObject();
         assertTrue(o.get("ok").getAsBoolean());
         assertEquals("string", o.get("resultType").getAsString());
         String rel = o.get("outputPath").getAsString();
-        assertTrue(rel.startsWith("tmp/webview-"));
-        assertTrue(rel.endsWith(".txt"));
-        assertEquals(body.length(), o.get("outputBytes").getAsInt());
-        assertEquals(body, read(ws.resolve(rel)));
-        assertTrue(o.get("resultPreview").getAsString().startsWith(repeat('a', 32)));
-        assertTrue(o.get("resultPreview").getAsString().contains("截断"));
-        assertTrue(o.get("resultPreview").getAsString().length() < body.length());
+        assertTrue(rel.startsWith("tmp/webview_exec/"));
+        assertTrue(rel.endsWith(".b64"));
+        assertEquals(PNG_B64.length(), o.get("outputBytes").getAsInt());
+        assertEquals(PNG_B64, read(ws.resolve(rel)));
+        assertEquals(WebViewExecTool.SPILL_PREVIEW, o.get("resultPreview").getAsString());
+        assertFalse(o.get("resultPreview").getAsString().contains("iVBORw0KGgo"));
     }
 
     @Test
-    public void exactly64KbStaysInline() throws Exception {
+    public void nullReturnDoesNotWriteEvenIfPathGiven() throws Exception {
         Path ws = Files.createTempDirectory("weizhi-wv");
-        String body = repeat('b', WebViewExecTool.AUTO_SPILL_BYTES);
-        JsonObject o = JsonParser.parseString(
-                render(ws, "{\"result\":" + GSON.toJson(body) + "}")).getAsJsonObject();
-        assertTrue(o.get("ok").getAsBoolean());
-        assertFalse(o.has("outputPath"));
-        assertEquals(body, o.get("resultPreview").getAsString());
+        Path existing = ws.resolve("puppy.png");
+        Files.write(existing, "PNG".getBytes(StandardCharsets.UTF_8));
+
+        JsonObject withPath = JsonParser.parseString(render(ws, "puppy.png", "{\"result\":null}")).getAsJsonObject();
+        assertFalse(withPath.get("ok").getAsBoolean());
+        assertTrue(withPath.get("error").getAsString().contains("null"));
+        assertFalse(withPath.has("outputPath"));
+        assertEquals("PNG", read(existing));
+
+        JsonObject missing = JsonParser.parseString(render(ws, null, "{}")).getAsJsonObject();
+        assertFalse(missing.get("ok").getAsBoolean());
         assertFalse(Files.exists(ws.resolve("tmp")));
     }
 
     @Test
-    public void largeResultWithoutSandboxFailsAndWritesNothing() {
-        String body = repeat('c', WebViewExecTool.AUTO_SPILL_BYTES + 1);
-        WebViewExecTool tool = new WebViewExecTool(null, null);
-        String json = tool.renderOk(outcome("{\"result\":" + GSON.toJson(body) + "}"));
-        JsonObject o = JsonParser.parseString(json).getAsJsonObject();
-        assertFalse(o.get("ok").getAsBoolean());
-        assertTrue(o.get("error").getAsString().contains("64KB"));
-        assertFalse(json.contains("outputPath"));
+    public void explicitOutputPathOverridesTempFile() throws Exception {
+        Path ws = Files.createTempDirectory("weizhi-wv");
+        JsonObject o = JsonParser.parseString(render(ws, "puppy.png", jsonString(PNG_B64))).getAsJsonObject();
+        assertTrue(o.get("ok").getAsBoolean());
+        assertEquals("puppy.png", o.get("outputPath").getAsString());
+        assertEquals(PNG_B64, read(ws.resolve("puppy.png")));
+        assertEquals(WebViewExecTool.SPILL_PREVIEW, o.get("resultPreview").getAsString());
+        assertFalse(Files.exists(ws.resolve("tmp")));
+    }
+
+    @Test
+    public void otherImagePrefixesSpill() throws Exception {
+        Path ws = Files.createTempDirectory("weizhi-wv");
+        assertSpillsImage(ws, "/9j/small-jpeg");
+        assertSpillsImage(ws, "R0lGODlhAQAB");
+        assertSpillsImage(ws, "UklGRgAAA");
+    }
+
+    @Test
+    public void smallNonImageStaysInline() throws Exception {
+        Path ws = Files.createTempDirectory("weizhi-wv");
+        JsonObject text = JsonParser.parseString(render(ws, null, "{\"result\":\"null\"}")).getAsJsonObject();
+        assertTrue(text.get("ok").getAsBoolean());
+        assertEquals("string", text.get("resultType").getAsString());
+        assertEquals("null", text.get("resultPreview").getAsString());
+        assertFalse(text.has("outputPath"));
+
+        JsonObject zero = JsonParser.parseString(render(ws, null, "{\"result\":0}")).getAsJsonObject();
+        assertEquals("number", zero.get("resultType").getAsString());
+        assertEquals("0", zero.get("resultPreview").getAsString());
+        assertFalse(zero.has("outputPath"));
+        assertFalse(Files.exists(ws.resolve("tmp")));
+    }
+
+    @Test
+    public void over64KbSpillsAndPreviewOmitsPayload() throws Exception {
+        Path ws = Files.createTempDirectory("weizhi-wv");
+        String body = repeat('a', WebViewExecTool.AUTO_SPILL_BYTES + 1);
+        JsonObject o = JsonParser.parseString(render(ws, null, jsonString(body))).getAsJsonObject();
+        assertTrue(o.get("ok").getAsBoolean());
+        String rel = o.get("outputPath").getAsString();
+        assertTrue(rel.startsWith("tmp/webview_exec/"));
+        assertEquals(body, read(ws.resolve(rel)));
+        assertEquals(WebViewExecTool.SPILL_PREVIEW, o.get("resultPreview").getAsString());
+        assertFalse(o.get("resultPreview").getAsString().contains("aaa"));
+    }
+
+    @Test
+    public void exactly64KbNonImageStaysInline() throws Exception {
+        Path ws = Files.createTempDirectory("weizhi-wv");
+        String body = repeat('b', WebViewExecTool.AUTO_SPILL_BYTES);
+        JsonObject o = JsonParser.parseString(render(ws, null, jsonString(body))).getAsJsonObject();
+        assertTrue(o.get("ok").getAsBoolean());
+        assertFalse(o.has("outputPath"));
+        assertEquals(body, o.get("resultPreview").getAsString());
     }
 
     @Test
@@ -119,6 +121,8 @@ public class WebViewExecToolTest {
         WebViewResult object = WebViewResult.parse("{\"result\":{\"a\":1}}");
         assertEquals("object", object.resultType);
         assertEquals("{\"a\":1}", object.text);
+        assertTrue(WebViewResult.isImageBase64(PNG_B64));
+        assertFalse(WebViewResult.isImageBase64("hello"));
 
         WebViewResult array = WebViewResult.parse("{\"result\":[1,\"null\"]}");
         assertEquals("array", array.resultType);
@@ -127,24 +131,36 @@ public class WebViewExecToolTest {
     }
 
     @Test
-    public void toolDescriptionDoesNotAskForOutputPath() throws Exception {
+    public void toolDescriptionDocumentsAutoSpill() throws Exception {
         Method m = WebViewExecTool.class.getMethod("webviewExec",
-                String.class, String.class, String.class, String.class);
+                String.class, String.class, String.class, String.class, String.class);
         String desc = m.getAnnotation(Tool.class).description();
-        assertTrue(desc.contains("64KB"));
-        assertTrue(desc.contains("tmp/webview-"));
-        assertTrue(desc.contains("UTF-8"));
-        assertTrue(desc.contains("不要指定输出路径"));
-        assertFalse(desc.contains("output_path"));
-        for (java.lang.reflect.Parameter p : m.getParameters()) {
-            com.weizhi.agent.tool.ToolParam tp = p.getAnnotation(com.weizhi.agent.tool.ToolParam.class);
-            assertFalse("output_path".equals(tp.name()));
-        }
+        assertTrue(desc.contains("tmp/webview_exec/"));
+        assertTrue(desc.contains("不含 Base64"));
+        assertTrue(desc.contains("output_path"));
+
+        ToolParam output = m.getParameters()[3].getAnnotation(ToolParam.class);
+        assertEquals("output_path", output.name());
+        assertFalse(output.required());
+        assertTrue(output.description().contains("可选"));
+        assertTrue(output.description().contains("UTF-8"));
     }
 
-    private static String render(Path ws, String payload) {
+    private static void assertSpillsImage(Path ws, String b64) throws Exception {
+        JsonObject o = JsonParser.parseString(render(ws, null, jsonString(b64))).getAsJsonObject();
+        assertTrue(o.get("ok").getAsBoolean());
+        assertTrue(o.get("outputPath").getAsString().startsWith("tmp/webview_exec/"));
+        assertEquals(WebViewExecTool.SPILL_PREVIEW, o.get("resultPreview").getAsString());
+        assertEquals(b64, read(ws.resolve(o.get("outputPath").getAsString())));
+    }
+
+    private static String jsonString(String value) {
+        return "{\"result\":" + GSON.toJson(value) + "}";
+    }
+
+    private static String render(Path ws, String outputRel, String payload) {
         WebViewExecTool tool = new WebViewExecTool(null, new WorkspaceSandbox(ws));
-        return tool.renderOk(outcome(payload));
+        return tool.renderOk(outcome(payload), outputRel);
     }
 
     private static WebViewRuntime.ExecOutcome outcome(String payload) {
