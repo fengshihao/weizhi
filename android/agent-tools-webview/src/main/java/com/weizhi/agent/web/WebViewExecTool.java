@@ -1,17 +1,13 @@
 package com.weizhi.agent.web;
 
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.weizhi.agent.sandbox.WorkspaceSandbox;
 import com.weizhi.agent.tool.Tool;
 import com.weizhi.agent.tool.ToolParam;
-import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
@@ -30,6 +26,7 @@ import okhttp3.ResponseBody;
  *
  * <p>流程:native 侧校验+下载 wasm+读 input(base64)→ {@link WebViewRuntime} 串行下发 →
  * 结果预览/console 回执;大结果(>64KB)由 bridge 分块回传,按 output_path 经 Sandbox 落盘。
+ * output_path 写入返回值的 UTF-8 文本;JSON null 没有可落盘内容,不写文件。
  */
 public class WebViewExecTool {
 
@@ -56,6 +53,11 @@ public class WebViewExecTool {
                     + "普通计算请直接用 run_js。code 顶层 return 返回结果;"
                     + "可用全局:input(input_path 文件的 Uint8Array,未提供则 null)、"
                     + "loadWasm()——返回 wasm_url 模块的 WebAssembly.Module Promise、console.log(随回执返回)。"
+                    + "output_path 写入的是返回值的 UTF-8 文本,不是按扩展名生成的二进制文件;"
+                    + "若 return 的是 Base64,文件内容就是这段 Base64。"
+                    + "返回 null 或 undefined 且提供了 output_path 时 ok 为 false,不会把文本 null 写入文件。"
+                    + "成功回执含 resultType(null、string、number、boolean、object、array);"
+                    + "字符串 \"null\" 与 JSON null 靠 resultType 区分。"
                     + "结果 >64KB 时须提供 output_path 落盘(回执只含路径+预览)。"
                     + "任务超时(timeout_ms,默认 60000,上限 600000)后页面被强杀重置。",
             readOnly = false, concurrencySafe = false)
@@ -69,7 +71,10 @@ public class WebViewExecTool {
                     description = "输入文件路径(工作区内,≤20MB),脚本内以 Uint8Array 全局变量 input 取用")
                     String inputPath,
             @ToolParam(name = "output_path", required = false,
-                    description = "结果落盘路径(工作区内相对路径);大结果(>64KB)必须提供,回执返回路径+预览")
+                    description = "结果落盘路径(工作区内相对路径)。写入返回值的 UTF-8 文本,"
+                            + "扩展名不表示二进制格式;return Base64 则文件内容就是这段 Base64。"
+                            + "返回 null 或 undefined 时拒绝落盘(ok:false),不会写入文本 null。"
+                            + "大结果(>64KB)必须提供,回执返回路径+预览")
                     String outputPath,
             @ToolParam(name = "timeout_ms", required = false,
                     description = "任务超时毫秒数(默认 60000,上限 600000)")
@@ -134,57 +139,49 @@ public class WebViewExecTool {
         return renderOk(task, o);
     }
 
-    /** 组成功回执:结果预览(1KB)+ console + 落盘路径。 */
-    private String renderOk(WebViewTask task, WebViewRuntime.ExecOutcome o) {
-        Object result = null;
-        boolean unserializable = false;
-        try {
-            JsonObject payload = JsonParser.parseString(o.payloadJson).getAsJsonObject();
-            if (payload.has("result") && !payload.get("result").isJsonNull()) {
-                result = payload.get("result");
-            }
-            unserializable = payload.has("unserializable") && payload.get("unserializable").getAsBoolean();
-        } catch (Exception e) {
-            WebLog.w(                    "webview_exec payload parse failed: " + e.getMessage());
-            return errJson("结果解析失败: " + e.getMessage());
+    /** 组回执:结果类型 + 预览(1KB)+ console + 落盘路径。JSON null 且要求落盘时 ok:false,不写文件。 */
+    String renderOk(WebViewTask task, WebViewRuntime.ExecOutcome o) {
+        WebViewResult parsed = WebViewResult.parse(o.payloadJson);
+        if (parsed.parseError != null) {
+            WebLog.w("webview_exec payload parse failed: " + parsed.parseError);
+            return errJson("结果解析失败: " + parsed.parseError);
         }
-        String resultText = result == null ? "null"
-                : (result instanceof com.google.gson.JsonPrimitive
-                        && ((com.google.gson.JsonPrimitive) result).isString()
-                        ? ((com.google.gson.JsonPrimitive) result).getAsString()
-                        : GSON.toJson(result));
+        if (task.outputRel != null && parsed.spillUtf8 == null) {
+            return errJson("没有可落盘的返回值:脚本返回了 null 或 undefined。"
+                    + "output_path 写入的是返回值的 UTF-8 文本,不会把文本 null 写入文件。"
+                    + "请在 code 中 return 要保存的内容;若是图片,return Base64 字符串"
+                    + "(文件内容就是这段 Base64,不会按扩展名解码成二进制)。");
+        }
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);
         m.put("elapsedMs", o.elapsedMs);
-        if (unserializable) {
+        if (parsed.unserializable) {
             m.put("note", "结果不可 JSON 序列化,已降级为字符串形态");
         }
-        // 落盘(提供了 output_path 即落盘,不问大小——语义一致)
+        // 落盘(提供了 output_path 且返回值非 null 才写,不问大小)
         if (task.outputRel != null) {
             try {
                 Path p = sandbox.resolveWrite(task.outputRel);
                 if (p.getParent() != null) {
                     Files.createDirectories(p.getParent());
                 }
-                byte[] bytes = result instanceof com.google.gson.JsonPrimitive
-                        && ((com.google.gson.JsonPrimitive) result).isString()
-                                ? resultText.getBytes(StandardCharsets.UTF_8)
-                                : GSON.toJson(result).getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = parsed.spillUtf8;
                 Files.write(p, bytes);
                 m.put("outputPath", task.outputRel);
                 m.put("outputBytes", bytes.length);
-                WebLog.i(                        "webview_exec spill " + bytes.length + " bytes -> " + task.outputRel);
+                WebLog.i("webview_exec spill " + bytes.length + " bytes -> " + task.outputRel);
             } catch (IOException | SecurityException e) {
-                WebLog.w(                        "webview_exec output write failed: " + task.outputRel + ": " + e.getMessage());
+                WebLog.w("webview_exec output write failed: " + task.outputRel + ": " + e.getMessage());
                 return errJson("任务执行成功但结果落盘失败(" + task.outputRel + "): "
-                        + e.getMessage() + "。结果预览: " + preview(resultText));
+                        + e.getMessage() + "。结果预览: " + preview(parsed.text));
             }
-        } else if (resultText.length() > BridgeCodec.INLINE_LIMIT) {
-            m.put("hint", "结果 " + resultText.length() + " 字符未保存:未提供 output_path,"
+        } else if (parsed.text.length() > BridgeCodec.INLINE_LIMIT) {
+            m.put("hint", "结果 " + parsed.text.length() + " 字符未保存:未提供 output_path,"
                     + "请带 output_path 重跑获取完整结果。");
         }
-        m.put("resultPreview", preview(resultText));
+        m.put("resultType", parsed.resultType);
+        m.put("resultPreview", preview(parsed.text));
         if (!o.console.isEmpty()) {
             m.put("console", o.console);
         }
