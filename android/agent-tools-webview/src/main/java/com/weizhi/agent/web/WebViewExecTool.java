@@ -14,6 +14,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -25,8 +26,10 @@ import okhttp3.ResponseBody;
  * wasm / DOM / canvas 类重任务(PDF 生成等)。
  *
  * <p>流程:native 侧校验+下载 wasm+读 input(base64)→ {@link WebViewRuntime} 串行下发 →
- * 结果预览/console 回执;大结果(>64KB)由 bridge 分块回传,按 output_path 经 Sandbox 落盘。
- * output_path 写入返回值的 UTF-8 文本;JSON null 没有可落盘内容,不写文件。
+ * 结果预览/console 回执。不超过 {@link #AUTO_SPILL_BYTES} 的结果放进回执;
+ * 超过则自动写入工作区 {@code tmp/webview-<时间>-<序号>.txt}
+ * (与 zip 默认解压、docx 解包同一临时目录),回执只带回相对路径。
+ * 文件是返回值的 UTF-8 文本。JSON null 不写文件。调用方不指定输出路径。
  */
 public class WebViewExecTool {
 
@@ -36,8 +39,14 @@ public class WebViewExecTool {
             .callTimeout(180, TimeUnit.SECONDS)
             .readTimeout(150, TimeUnit.SECONDS)
             .build();
-    /** 回执里结果预览长度(字符,SR15 §3.1:前 1KB)。 */
+    /** 回执里结果预览长度(字符,SR15 §3.1:前 1KB)。仅自动落盘时截断。 */
     private static final int PREVIEW_CHARS = 1024;
+    /**
+     * 超过此字节数自动落盘。与 bridge 内联上限一致(64KB),调用方不传路径。
+     * 临时文件在工作区 {@code tmp/} 下,和 zip 默认解压目录、docx 的 {@code tmp/docx-*} 同一约定。
+     */
+    static final int AUTO_SPILL_BYTES = BridgeCodec.INLINE_LIMIT;
+    private static final AtomicInteger SPILL_SEQ = new AtomicInteger();
 
     private final WebViewRuntime runtime;
     private final WorkspaceSandbox sandbox;
@@ -53,12 +62,14 @@ public class WebViewExecTool {
                     + "普通计算请直接用 run_js。code 顶层 return 返回结果;"
                     + "可用全局:input(input_path 文件的 Uint8Array,未提供则 null)、"
                     + "loadWasm()——返回 wasm_url 模块的 WebAssembly.Module Promise、console.log(随回执返回)。"
-                    + "output_path 写入的是返回值的 UTF-8 文本,不是按扩展名生成的二进制文件;"
-                    + "若 return 的是 Base64,文件内容就是这段 Base64。"
-                    + "返回 null 或 undefined 且提供了 output_path 时 ok 为 false,不会把文本 null 写入文件。"
+                    + "不超过 64KB 的结果完整放在回执 resultPreview。"
+                    + "超过 64KB 时自动写入工作区临时文件 tmp/webview-<时间>-<序号>.txt,"
+                    + "回执给出 outputPath 与 outputBytes,resultPreview 只含前 1KB;不要指定输出路径。"
+                    + "该文件是返回值的 UTF-8 文本,不是按扩展名生成的二进制;"
+                    + "若 return Base64,文件内容就是这段 Base64。"
+                    + "返回 null 或 undefined 不写文件。"
                     + "成功回执含 resultType(null、string、number、boolean、object、array);"
                     + "字符串 \"null\" 与 JSON null 靠 resultType 区分。"
-                    + "结果 >64KB 时须提供 output_path 落盘(回执只含路径+预览)。"
                     + "任务超时(timeout_ms,默认 60000,上限 600000)后页面被强杀重置。",
             readOnly = false, concurrencySafe = false)
     public String webviewExec(
@@ -70,12 +81,6 @@ public class WebViewExecTool {
             @ToolParam(name = "input_path", required = false,
                     description = "输入文件路径(工作区内,≤20MB),脚本内以 Uint8Array 全局变量 input 取用")
                     String inputPath,
-            @ToolParam(name = "output_path", required = false,
-                    description = "结果落盘路径(工作区内相对路径)。写入返回值的 UTF-8 文本,"
-                            + "扩展名不表示二进制格式;return Base64 则文件内容就是这段 Base64。"
-                            + "返回 null 或 undefined 时拒绝落盘(ok:false),不会写入文本 null。"
-                            + "大结果(>64KB)必须提供,回执返回路径+预览")
-                    String outputPath,
             @ToolParam(name = "timeout_ms", required = false,
                     description = "任务超时毫秒数(默认 60000,上限 600000)")
                     String timeoutMs) {
@@ -93,10 +98,9 @@ public class WebViewExecTool {
             }
         }
         timeout = WebViewTask.clampTimeout(timeout);
-        boolean needSandbox = (inputPath != null && !inputPath.trim().isEmpty())
-                || (outputPath != null && !outputPath.trim().isEmpty());
+        boolean needSandbox = inputPath != null && !inputPath.trim().isEmpty();
         if (needSandbox && sandbox == null) {
-            return errJson("宿主未配置 workspace 沙箱,input_path/output_path 不可用。");
+            return errJson("宿主未配置 workspace 沙箱,input_path 不可用。");
         }
 
         // —— wasm 下载(native 侧,页面零外联;SR15 §4.1)——
@@ -119,38 +123,26 @@ public class WebViewExecTool {
             inputB64 = Base64.getEncoder().encodeToString(bytes);
         }
 
-        // —— output 预校验(路径非法即拒绝,免任务跑完才发现写不了)——
-        String outputRel = outputPath != null ? outputPath.trim() : "";
-        if (!outputRel.isEmpty()) {
-            try {
-                sandbox.resolveWrite(outputRel);
-            } catch (SecurityException e) {
-                return errJson("output_path 非法: " + e.getMessage());
-            }
-        }
-
-        WebViewTask task = new WebViewTask(code, inputB64, wasmB64,
-                outputRel.isEmpty() ? null : outputRel, timeout);
+        WebViewTask task = new WebViewTask(code, inputB64, wasmB64, timeout);
         WebViewRuntime.ExecOutcome o = runtime.execute(task, null);
 
         if (!o.ok) {
             return errJson(o.error);
         }
-        return renderOk(task, o);
+        return renderOk(o);
     }
 
-    /** 组回执:结果类型 + 预览(1KB)+ console + 落盘路径。JSON null 且要求落盘时 ok:false,不写文件。 */
-    String renderOk(WebViewTask task, WebViewRuntime.ExecOutcome o) {
+    /** 组回执。超过 64KB 的非 null 结果自动写入 tmp/,小结果完整留在 resultPreview。 */
+    String renderOk(WebViewRuntime.ExecOutcome o) {
         WebViewResult parsed = WebViewResult.parse(o.payloadJson);
         if (parsed.parseError != null) {
             WebLog.w("webview_exec payload parse failed: " + parsed.parseError);
             return errJson("结果解析失败: " + parsed.parseError);
         }
-        if (task.outputRel != null && parsed.spillUtf8 == null) {
-            return errJson("没有可落盘的返回值:脚本返回了 null 或 undefined。"
-                    + "output_path 写入的是返回值的 UTF-8 文本,不会把文本 null 写入文件。"
-                    + "请在 code 中 return 要保存的内容;若是图片,return Base64 字符串"
-                    + "(文件内容就是这段 Base64,不会按扩展名解码成二进制)。");
+        boolean spill = parsed.spillUtf8 != null && parsed.spillUtf8.length > AUTO_SPILL_BYTES;
+        if (spill && sandbox == null) {
+            return errJson("结果 " + parsed.spillUtf8.length
+                    + " 字节超过 64KB,但宿主未配置 workspace 沙箱,无法写入临时文件。");
         }
 
         Map<String, Object> m = new LinkedHashMap<>();
@@ -159,33 +151,42 @@ public class WebViewExecTool {
         if (parsed.unserializable) {
             m.put("note", "结果不可 JSON 序列化,已降级为字符串形态");
         }
-        // 落盘(提供了 output_path 且返回值非 null 才写,不问大小)
-        if (task.outputRel != null) {
+        if (spill) {
+            String rel;
             try {
-                Path p = sandbox.resolveWrite(task.outputRel);
+                rel = allocateSpillRel();
+                Path p = sandbox.resolveWrite(rel);
                 if (p.getParent() != null) {
                     Files.createDirectories(p.getParent());
                 }
-                byte[] bytes = parsed.spillUtf8;
-                Files.write(p, bytes);
-                m.put("outputPath", task.outputRel);
-                m.put("outputBytes", bytes.length);
-                WebLog.i("webview_exec spill " + bytes.length + " bytes -> " + task.outputRel);
+                Files.write(p, parsed.spillUtf8);
+                m.put("outputPath", rel);
+                m.put("outputBytes", parsed.spillUtf8.length);
+                WebLog.i("webview_exec spill " + parsed.spillUtf8.length + " bytes -> " + rel);
             } catch (IOException | SecurityException e) {
-                WebLog.w("webview_exec output write failed: " + task.outputRel + ": " + e.getMessage());
-                return errJson("任务执行成功但结果落盘失败(" + task.outputRel + "): "
-                        + e.getMessage() + "。结果预览: " + preview(parsed.text));
+                WebLog.w("webview_exec output write failed: " + e.getMessage());
+                return errJson("结果超过 64KB,但写入临时文件失败: " + e.getMessage()
+                        + "。结果预览: " + preview(parsed.text));
             }
-        } else if (parsed.text.length() > BridgeCodec.INLINE_LIMIT) {
-            m.put("hint", "结果 " + parsed.text.length() + " 字符未保存:未提供 output_path,"
-                    + "请带 output_path 重跑获取完整结果。");
         }
         m.put("resultType", parsed.resultType);
-        m.put("resultPreview", preview(parsed.text));
+        m.put("resultPreview", spill ? preview(parsed.text) : parsed.text);
         if (!o.console.isEmpty()) {
             m.put("console", o.console);
         }
         return GSON.toJson(m);
+    }
+
+    /** 工作区相对路径 tmp/webview-时间-序号.txt。已存在则换序号。 */
+    private String allocateSpillRel() throws IOException {
+        for (int n = 0; n < 8; n++) {
+            String rel = "tmp/webview-" + System.currentTimeMillis()
+                    + "-" + SPILL_SEQ.incrementAndGet() + ".txt";
+            if (!Files.exists(sandbox.resolveWrite(rel))) {
+                return rel;
+            }
+        }
+        throw new IOException("无法分配 tmp/webview-*.txt");
     }
 
     private static String preview(String s) {

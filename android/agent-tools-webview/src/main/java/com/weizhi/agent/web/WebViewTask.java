@@ -26,15 +26,12 @@ public final class WebViewTask {
     final String inputB64;
     /** wasm_url 下载内容 base64(可空)。 */
     final String wasmB64;
-    /** 输出落盘 workspace 相对路径(可空)。 */
-    final String outputRel;
     final long timeoutMs;
 
-    public WebViewTask(String code, String inputB64, String wasmB64, String outputRel, long timeoutMs) {
+    public WebViewTask(String code, String inputB64, String wasmB64, long timeoutMs) {
         this.code = code;
         this.inputB64 = inputB64;
         this.wasmB64 = wasmB64;
-        this.outputRel = outputRel;
         this.timeoutMs = timeoutMs;
     }
 

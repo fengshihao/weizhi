@@ -23,7 +23,7 @@ final class WebViewResult {
     final String resultType;
     /** 预览原文。JSON null 的预览是文本 {@code null}，与字符串 {@code "null"} 的预览相同。 */
     final String text;
-    /** 写入 output_path 的 UTF-8；JSON null 时为 null，调用方不得落盘。 */
+    /** 返回值的 UTF-8；JSON null 时为 null，不落盘。超过 64KB 时由工具写入 tmp/。 */
     final byte[] spillUtf8;
     final boolean unserializable;
     /** 非 null 表示 payload 无法解析。 */
