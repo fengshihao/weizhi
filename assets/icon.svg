@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Weizhi">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a2f4a"/>
+      <stop offset="100%" stop-color="#0f1c2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f0c878"/>
+      <stop offset="100%" stop-color="#d4923a"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <path fill="none" stroke="url(#gold)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"
+        d="M36 44c0-6 5-11 11-11h34c6 0 11 5 11 11v40c0 6-5 11-11 11H47c-6 0-11-5-11-11V44z"/>
+  <path fill="none" stroke="url(#gold)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"
+        d="M48 52l12 24 8-16 8 16 12-24"/>
+  <circle cx="92" cy="36" r="5" fill="#7eb89a" opacity="0.9"/>
+</svg>

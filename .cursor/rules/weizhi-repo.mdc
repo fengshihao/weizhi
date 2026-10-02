@@ -1,0 +1,16 @@
+---
+description: Weizhi 仓库贡献规则（测试、分层、禁止改 QuickJS）
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Weizhi 仓库规则
+
+1. 开工前读 `AGENTS.md` 与 `docs/ai/START.md`。
+2. **PR 前必须**跑 `WEIZHI_SKIP_ASAN=1 ./scripts/test.sh`（与 CI 一致）；改 JNI/Android 时加 `./scripts/test.sh android`。
+3. **新行为必须**有自动化测试：`tests/`、`tests/java/` 或 `android/**/androidTest/`。
+4. **禁止**修改 `third_party/quickjs`。
+5. **禁止**在 C 引擎实现 Agent 工具（grep、行号 read/edit、glob）；使用 `android/agent-tools`。
+6. Agent 脚本入口唯一：`WeizhiEngine.runJs`；集成文档以 `docs/INTEGRATION_FOR_AI.md` 为准。
+7. 一个 PR 一件事；失败用完整 `RuntimeException` message 回传（勿吞错误）。
