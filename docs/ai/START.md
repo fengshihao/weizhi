@@ -10,7 +10,7 @@
 ## 复制给 AI（准备环境）
 
 ```text
-帮我准备开源项目 Weizhi（之谓，https://github.com/fengshihao/weizhi）的贡献环境：请你自己克隆仓库、读 AGENTS.md 和 docs/ai/START.md，缺依赖时运行 ./scripts/fetch-deps.sh，需要时用 WEIZHI_SKIP_ASAN=1 ./scripts/test.sh 验证。准备好后告诉我，我再说想贡献什么。
+帮我准备开源项目微智 Weizhi（https://github.com/fengshihao/weizhi）的贡献环境：请你自己克隆仓库、读 AGENTS.md 和 docs/ai/START.md，缺依赖时运行 ./scripts/fetch-deps.sh，需要时用 WEIZHI_SKIP_ASAN=1 ./scripts/test.sh 验证。准备好后告诉我，我再说想贡献什么。
 ```
 
 **English**
