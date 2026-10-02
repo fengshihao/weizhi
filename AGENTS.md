@@ -4,9 +4,9 @@
 
 ## 项目是什么
 
-**Weizhi（之谓）** 是基于 Bellard QuickJS 的**嵌入式 JavaScript 引擎**（C + JNI），面向 **AI Agent 在端上跑脚本**：沙箱文件系统、`runJs` 单一入口、可选 **caps**（Android 生产力 API）与 **`:agent-tools`**（grep / bash / `run_js` / Skill / MCP / WebView）。
+**微智 Weizhi** 是基于 Bellard QuickJS 的**嵌入式 JavaScript 引擎**（C + JNI）：Release 核心 SO strip 后约 **1.1&nbsp;MB**，沙箱 + `runJs` 单一入口；可选 **caps**、**`:agent-tools`**、IDL 原生插件与脚本库，按需扩展。
 
-与 Molan（墨览）同属开源工具链：Molan 管「纸面阅读与编辑」，Weizhi 管「Agent 在设备里安全执行 JS 与工具环」。
+与 **[Agent 1](https://github.com/fengshihao/agent1)** 分仓：本仓库是引擎与 AAR；Agent 1 是参考宿主 App（工具环、UI、LLM 编排）。集成约定见 [docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)。
 
 ## 分层（改代码前对齐）
 
