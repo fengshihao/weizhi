@@ -62,7 +62,9 @@ public class GrepTool {
             var it = walk.filter(Files::isRegularFile).iterator();
             while (it.hasNext()) {
                 Path f = it.next();
-                if (includeRegex != null && !includeRegex.matcher(f.getFileName().toString()).matches()) {
+                Path fileName = f.getFileName();
+                if (includeRegex != null
+                        && (fileName == null || !includeRegex.matcher(fileName.toString()).matches())) {
                     continue;
                 }
                 if (isBinary(f)) {

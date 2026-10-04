@@ -54,8 +54,6 @@ public final class ToolSchemaGenerator {
         } else if (Collection.class.isAssignableFrom(type) || type.isArray()) {
             m.put("type", "array");
             m.put("items", new LinkedHashMap<String, Object>());
-        } else if (Map.class.isAssignableFrom(type)) {
-            m.put("type", "object");
         } else {
             m.put("type", "object");
         }

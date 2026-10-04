@@ -56,7 +56,11 @@ public final class LocalWorkspace {
                     sb.append(',');
                 }
                 first = false;
-                String name = child.getFileName().toString();
+                Path childName = child.getFileName();
+                if (childName == null) {
+                    continue;
+                }
+                String name = childName.toString();
                 boolean isDir = Files.isDirectory(child);
                 long size = isDir ? 0L : Files.size(child);
                 sb.append("{\"name\":").append(MiniJson.quote(name))
@@ -84,8 +88,9 @@ public final class LocalWorkspace {
 
     public void write(String path, String text) throws IOException {
         Path file = resolve(path);
-        if (file.getParent() != null) {
-            Files.createDirectories(file.getParent());
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
         }
         byte[] bytes = (text == null ? "" : text).getBytes(StandardCharsets.UTF_8);
         if (bytes.length > 32 * 1024 * 1024) {
@@ -106,12 +111,13 @@ public final class LocalWorkspace {
             throw new IllegalArgumentException("bad argument: files.rename: name");
         }
         Path src = resolve(path);
+        String srcName = requireFileName(src, "files.rename");
         Path dst = src.resolveSibling(name).normalize();
         if (!dst.startsWith(root)) {
             throw new IllegalArgumentException("path escape");
         }
         Files.move(src, dst);
-        undo.push(new String[] {"rename", rel(dst), src.getFileName().toString()});
+        undo.push(new String[] {"rename", rel(dst), srcName});
         audit("files.rename", path + " -> " + name);
     }
 
@@ -121,12 +127,13 @@ public final class LocalWorkspace {
         if (!Files.isDirectory(folder)) {
             Files.createDirectories(folder);
         }
-        Path dst = folder.resolve(src.getFileName().toString()).normalize();
+        Path dst = folder.resolve(requireFileName(src, "files.move")).normalize();
         if (!dst.startsWith(root)) {
             throw new IllegalArgumentException("path escape");
         }
         Files.move(src, dst);
-        undo.push(new String[] {"move", rel(dst), rel(src.getParent())});
+        Path srcParent = src.getParent();
+        undo.push(new String[] {"move", rel(dst), srcParent == null ? "." : rel(srcParent)});
         audit("files.move", path + " -> " + toDir);
     }
 
@@ -171,11 +178,19 @@ public final class LocalWorkspace {
         Path src = resolve(path);
         Path folder = resolve(toDir);
         Files.createDirectories(folder);
-        Files.move(src, folder.resolve(src.getFileName().toString()).normalize());
+        Files.move(src, folder.resolve(requireFileName(src, "files.move")).normalize());
     }
 
     private void audit(String op, String detail) {
         audit.add("{\"op\":" + MiniJson.quote(op) + ",\"detail\":" + MiniJson.quote(detail == null ? "" : detail) + "}");
+    }
+
+    private static String requireFileName(Path path, String op) {
+        Path name = path.getFileName();
+        if (name == null) {
+            throw new IllegalArgumentException("bad argument: " + op + ": no file name");
+        }
+        return name.toString();
     }
 
     private String rel(Path path) {

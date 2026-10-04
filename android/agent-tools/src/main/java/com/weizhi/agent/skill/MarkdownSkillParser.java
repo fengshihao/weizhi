@@ -18,7 +18,9 @@ public final class MarkdownSkillParser {
         Path md = skillDir.resolve("SKILL.md");
         byte[] bytes = Files.readAllBytes(md);
         List<String> resources = scanResources(skillDir);
-        return parse(skillDir.getFileName().toString(), skillDir.toString(), bytes, resources);
+        Path fileName = skillDir.getFileName();
+        String id = fileName != null ? fileName.toString() : skillDir.toString();
+        return parse(id, skillDir.toString(), bytes, resources);
     }
 
     public static Skill parse(String id, String rootDir, byte[] skillMdBytes, List<String> resources) {

@@ -31,12 +31,19 @@ public class ZipTools {
             if (zipPath.startsWith(sandbox.getBaseDir())) {
                 wsRel = sandbox.relativize(zipPath);
             } else {
+                Path zipName = zipPath.getFileName();
+                if (zipName == null) {
+                    return "Error: bad zip path";
+                }
                 Path staging = sandbox.getBaseDir().resolve("tmp/_zip_import")
-                        .resolve(zipPath.getFileName().toString()).normalize();
+                        .resolve(zipName).normalize();
                 if (!staging.startsWith(sandbox.getBaseDir())) {
                     return "Error: path escape";
                 }
-                java.nio.file.Files.createDirectories(staging.getParent());
+                Path stagingParent = staging.getParent();
+                if (stagingParent != null) {
+                    java.nio.file.Files.createDirectories(stagingParent);
+                }
                 java.nio.file.Files.copy(zipPath, staging,
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 wsRel = sandbox.relativize(staging);

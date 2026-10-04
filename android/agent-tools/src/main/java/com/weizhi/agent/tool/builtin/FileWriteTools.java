@@ -46,8 +46,9 @@ public class FileWriteTools {
             throw new IllegalArgumentException("invalid base64 content: " + e.getMessage());
         }
         try {
-            if (resolved.getParent() != null) {
-                Files.createDirectories(resolved.getParent());
+            Path parent = resolved.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
             }
             Files.write(resolved, bytes);
             long size = Files.size(resolved);
