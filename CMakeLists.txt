@@ -37,9 +37,17 @@ add_library(quickjs
 target_include_directories(quickjs PUBLIC ${QUICKJS_DIR})
 target_compile_definitions(quickjs PUBLIC CONFIG_VERSION="2026-06-04")
 
+file(READ "${CMAKE_SOURCE_DIR}/src/mcp_client.js" WEIZHI_MCP_JS_RAW)
+string(REPLACE "\\" "\\\\" WEIZHI_MCP_JS "${WEIZHI_MCP_JS_RAW}")
+string(REPLACE "\"" "\\\"" WEIZHI_MCP_JS "${WEIZHI_MCP_JS}")
+string(REPLACE "\n" "\\n\"\n\"" WEIZHI_MCP_JS "${WEIZHI_MCP_JS}")
+set(WEIZHI_MCP_JS "\"${WEIZHI_MCP_JS}\"")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/mcp_client.js")
+configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONLY)
+
 add_library(weizhi src/engine.c src/node_api.c src/plugin_loader.c src/zip_api.c)
 target_include_directories(weizhi PUBLIC include)
-target_include_directories(weizhi PRIVATE include src)
+target_include_directories(weizhi PRIVATE include src "${CMAKE_BINARY_DIR}")
 target_link_libraries(weizhi PUBLIC quickjs Threads::Threads z)
 if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     target_link_libraries(weizhi PUBLIC log android ${CMAKE_DL_LIBS})

@@ -38,7 +38,6 @@ def weizhiPublishModules = [
     ":caps",
     ":agent-tools",
     ":agent-tools-webview",
-    ":agent-tools-mcp",
 ]
 
 tasks.register("publishWeizhiAndroidLibraries") {

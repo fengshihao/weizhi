@@ -880,6 +880,191 @@ static int mock_http_async(WeizhiEngine *engine, int64_t request_id, const char 
     return 0;
 }
 
+static char *mcp_body_cstr(const WeizhiBytes *body) {
+    char *s;
+    if (body == NULL || body->data == NULL || body->len == 0) {
+        return strdup("");
+    }
+    s = (char *)malloc(body->len + 1);
+    if (s == NULL) {
+        return NULL;
+    }
+    memcpy(s, body->data, body->len);
+    s[body->len] = '\0';
+    return s;
+}
+
+static const char *mcp_method_of(const char *body) {
+    const char *p;
+    const char *end;
+    static char method[64];
+    size_t n;
+    p = strstr(body, "\"method\":\"");
+    if (p == NULL) {
+        return "";
+    }
+    p += strlen("\"method\":\"");
+    end = strchr(p, '"');
+    if (end == NULL) {
+        return "";
+    }
+    n = (size_t)(end - p);
+    if (n >= sizeof(method)) {
+        n = sizeof(method) - 1;
+    }
+    memcpy(method, p, n);
+    method[n] = '\0';
+    return method;
+}
+
+static void mcp_complete(WeizhiEngine *engine, int64_t request_id, int status, const char *ctype,
+                         const char *json) {
+    WeizhiBytes out;
+    char headers[160];
+    memset(&out, 0, sizeof(out));
+    out.data = (unsigned char *)json;
+    out.len = strlen(json);
+    snprintf(headers, sizeof(headers), "{\"content-type\":\"%s\"}", ctype);
+    weizhi_complete_fetch(engine, request_id, status, headers, &out, NULL);
+}
+
+typedef struct McpMock {
+    int initialized;
+} McpMock;
+
+static int mock_mcp_http(WeizhiEngine *engine, int64_t request_id, const char *method, const char *url,
+                         const char *headers_json, const WeizhiBytes *body, void *userdata) {
+    McpMock *st = userdata;
+    char *text;
+    const char *rpc;
+    const char *ctype = "application/json";
+    (void)method;
+    text = mcp_body_cstr(body);
+    if (text == NULL) {
+        weizhi_complete_fetch(engine, request_id, 0, NULL, NULL, "out of memory");
+        return 0;
+    }
+    rpc = mcp_method_of(text);
+    if (url != NULL && strstr(url, "/sse") != NULL) {
+        ctype = "text/event-stream";
+        mcp_complete(engine, request_id, 200, ctype,
+                     "event: message\n"
+                     "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"s\",\"description\":\"\","
+                     "\"inputSchema\":{}}]}}\n\n");
+    } else if (url != NULL && strstr(url, "/version") != NULL
+               && headers_json != NULL && strstr(headers_json, "MCP-Protocol-Version") != NULL) {
+        mcp_complete(engine, request_id, 400, ctype,
+                     "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,"
+                     "\"message\":\"Unsupported protocol version\"}}");
+    } else if (strcmp(rpc, "initialize") == 0) {
+        st->initialized = 1;
+        mcp_complete(engine, request_id, 200, ctype,
+                     "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2026-07-28\"}}");
+    } else if (url != NULL && strstr(url, "/init") != NULL && !st->initialized) {
+        mcp_complete(engine, request_id, 200, ctype,
+                     "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32001,\"message\":\"Session not found\"}}");
+    } else if (strcmp(rpc, "tools/call") == 0) {
+        mcp_complete(engine, request_id, 200, ctype,
+                     "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"pong\"}]}}");
+    } else {
+        mcp_complete(engine, request_id, 200, ctype,
+                     "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"say\","
+                     "\"inputSchema\":{\"type\":\"object\"}}]}}");
+    }
+    free(text);
+    return 0;
+}
+
+static void test_mcp_client(void) {
+    WeizhiEngine *engine;
+    WeizhiResult result;
+    McpMock st;
+    memset(&st, 0, sizeof(st));
+
+    engine = weizhi_open(NULL);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/rpc'});"
+                           "await c.listTools()",
+                           3000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: fetch") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    result = weizhi_run_js(engine, "await mcp.connect({url:'/local'})", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "bad argument: mcp.connect") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/rpc'});"
+                           "await c.close(); await c.listTools()",
+                           1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "mcp client is closed") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    weizhi_set_http(engine, mock_mcp_http, &st);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/rpc', headers:{Authorization:'Bearer t'}});"
+                           "const tools = await c.listTools();"
+                           "const r = await c.callTool('echo', {msg:'hi'});"
+                           "({name:tools[0].name, schema:tools[0].inputSchema.type, text:r.text, err:r.isError})",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"name\":\"echo\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"schema\":\"object\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"text\":\"pong\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"err\":false") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    memset(&st, 0, sizeof(st));
+    weizhi_set_http(engine, mock_mcp_http, &st);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/version'});"
+                           "const tools = await c.listTools();"
+                           "tools[0].name",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "echo") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    memset(&st, 0, sizeof(st));
+    weizhi_set_http(engine, mock_mcp_http, &st);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/init'});"
+                           "const tools = await c.listTools();"
+                           "tools[0].name",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(st.initialized == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "echo") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+
+    engine = weizhi_open(NULL);
+    memset(&st, 0, sizeof(st));
+    weizhi_set_http(engine, mock_mcp_http, &st);
+    result = weizhi_run_js(engine,
+                           "const c = await mcp.connect({url:'https://mcp.example/sse'});"
+                           "const tools = await c.listTools();"
+                           "tools[0].name",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"s\"") == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
 static void test_fetch_with_host(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
@@ -1154,6 +1339,7 @@ int main(void) {
     test_async_io_serializes();
     test_agent_precise_errors();
     test_fetch_with_host();
+    test_mcp_client();
     test_native_ensure_mock();
     test_typed_plugin_loader();
     test_zlib_roundtrip();

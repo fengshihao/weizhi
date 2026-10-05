@@ -45,8 +45,8 @@
 | **沙箱与分层** | 引擎管 `fs` / 限额 / 内置模块；**grep、行号编辑**在 Java `:agent-tools`，不污染 C 核心 | Engine = sandbox + limits; agent ergonomics stay in `:agent-tools` |
 | **端上生产力** | `caps` 暴露 `android.files.*`、zip、分享、提醒等；脚本与 Agent 工具可薄包同一工作区 | `caps` bridge OS surfaces; workspace paths must align |
 | **小巧核心** | Release 引擎 SO 约 **1.1&nbsp;MB**（strip 后）；限额内跑沙箱脚本，不把 Node 级运行时塞进 APK | Stripped core ~1.1&nbsp;MB; bounded sandbox, not a full Node runtime |
-| **随心扩展** | 可选 AAR：<code>caps</code>、<code>agent-tools</code>、MCP/WebView；IDL 签名 SO；<code>setScriptFolder</code> 脚本库 | Compose only the modules you need; native plugins via IDL |
-| **面向 AI 集成** | 集成教程、沙盒系统提示、MCP 示例；README 可复制**一句话**让其他智能体自行克隆与跑门禁 | Copy-paste prompts in [`docs/ai/START.md`](docs/ai/START.md) for any coding agent |
+| **随心扩展** | 可选 AAR：<code>caps</code>、<code>agent-tools</code>、WebView；脚本内 <code>mcp</code>；IDL 签名 SO；<code>setScriptFolder</code> 脚本库 | Compose only the modules you need; native plugins via IDL |
+| **面向 AI 集成** | 集成教程、沙盒系统提示；README 可复制**一句话**让其他智能体自行克隆与跑门禁 | Copy-paste prompts in [`docs/ai/START.md`](docs/ai/START.md) for any coding agent |
 
 ### 与 [Agent 1](https://github.com/fengshihao/agent1) 的关系
 
@@ -136,7 +136,7 @@ cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-too
 | 文档 | 用途 |
 | --- | --- |
 | **[docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)** | **集成方 / AI 接入（引擎 + caps，从这里开始）** |
-| **[docs/AGENT_TOOLS_INTEGRATION.md](docs/AGENT_TOOLS_INTEGRATION.md)** | Agent 工具环（grep / bash / run_js / MCP / WebView / Skill） |
+| **[docs/AGENT_TOOLS_INTEGRATION.md](docs/AGENT_TOOLS_INTEGRATION.md)** | Agent 工具环（grep / bash / run_js / WebView / Skill）；脚本 MCP 客户端 |
 | [docs/AGENT_SANDBOX_PROMPT.md](docs/AGENT_SANDBOX_PROMPT.md) | 复制进 Agent 系统提示的脚本契约 |
 | [docs/ai/START.md](docs/ai/START.md) | **一句话让 AI 准备贡献环境** |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 已锁定设计与限额 |
@@ -165,7 +165,7 @@ assets/                    # 品牌图标、office 脚本
 **Weizhi (微智)** is a **compact, strict JS runtime** for on-device AI agents:
 
 - **~1.1&nbsp;MB stripped core** (`libweizhijni.so`) — sandbox, limits, single `runJs` entry.
-- **Extend on demand**: optional `caps`, `agent-tools`, MCP/WebView, IDL native plugins, script folders.
+- **Extend on demand**: optional `caps`, `agent-tools`, WebView, script `mcp`, IDL native plugins, script folders.
 - **[Agent 1](https://github.com/fengshihao/agent1)** is the reference host app; this repo is the engine layer it depends on (separate repos, Maven prebuilts).
 - **Integrator-friendly**: documented error tokens, AAR/Maven delivery — see [INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md).
 

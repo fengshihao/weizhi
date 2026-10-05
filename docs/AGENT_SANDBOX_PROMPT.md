@@ -30,6 +30,7 @@
 - 支持 Promise、`async`/`await`、`setTimeout` / `clearTimeout`（定时器只在本轮 `runJs` 内有效）。
 - 可以用 `Promise.all` 发起多个异步 I/O。
 - 若宿主启用了网络：可用 `fetch(url, { method, headers, body })`，返回类似浏览器的 Response（`ok` / `status` / `headers.get(name)` / `await res.text()` / `json()` / `arrayBuffer()`）。`body` 可以是字符串、`Buffer` / `Uint8Array`、`Blob`、`FormData`、`URLSearchParams`。
+- 同一网络开关下可用 MCP 客户端：`const c = await mcp.connect({ url, headers })`，然后 `await c.listTools()`、`await c.callTool(name, args)`、`await c.close()`。`listTools` 返回 `{ name, description, inputSchema }[]`，`callTool` 返回 `{ isError, text }`。引擎不缓存工具列表，也不在工作区写目录。
 
 ### 你不能假设的事
 

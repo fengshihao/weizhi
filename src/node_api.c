@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include "mcp_client_js.h"
+
 /* ArrayBuffer free callback for adopted host bytes. */
 static void ab_free(JSRuntime *rt, void *opaque, void *ptr) {
     (void)rt;
@@ -2758,6 +2760,15 @@ static int install_agent_prelude(JSContext *ctx) {
     return 0;
 }
 
+static int install_mcp_api(JSContext *ctx) {
+    JSValue ret = JS_Eval(ctx, WEIZHI_MCP_JS, strlen(WEIZHI_MCP_JS), "<weizhi-mcp>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(ret)) {
+        return -1;
+    }
+    JS_FreeValue(ctx, ret);
+    return 0;
+}
+
 int weizhi_install_node_api(Engine *engine) {
     JSValue global;
     JSValue console;
@@ -2789,7 +2800,7 @@ int weizhi_install_node_api(Engine *engine) {
     JS_SetPropertyStr(engine->ctx, global, "crypto", make_crypto_object(engine->ctx));
     JS_SetPropertyStr(engine->ctx, global, "global", JS_DupValue(engine->ctx, global));
     JS_SetPropertyStr(engine->ctx, global, "globalThis", JS_DupValue(engine->ctx, global));
-    if (install_agent_prelude(engine->ctx) != 0) {
+    if (install_agent_prelude(engine->ctx) != 0 || install_mcp_api(engine->ctx) != 0) {
         JS_FreeValue(engine->ctx, global);
         return -1;
     }

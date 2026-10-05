@@ -6,7 +6,7 @@
 | 文档 | 何时读 |
 |---|---|
 | **本文** | 宿主怎么开引擎、设沙箱、跑脚本、装 caps |
-| **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / MCP / Skill / `$tools`） |
+| **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / Skill / `$tools`） |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
 | [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI：`require` 内置 + `import` 自建库） |
 | [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
@@ -64,8 +64,8 @@ cd android_agent && ./gradlew :app:assembleDebug
 
 - `:weizhi` → 引擎 + `WeizhiEngine` + `libweizhijni.so`（Release 应为 **stripped ~1.1MB**，不是未 strip 的 ~6MB）
 - `:caps` → `AndroidCaps`（`globalThis.android`）
-- `:agent-tools` → `AgentToolsBundle` / `AgentToolkit`（LLM 工具环 + `run_js`）；可选 `:agent-tools-webview`、`:agent-tools-mcp`
-- `minSdk`：库侧 26；宿主须 `INTERNET` 若启用 `enableFetch` / MCP / 脚本 `fetch`
+- `:agent-tools` → `AgentToolsBundle` / `AgentToolkit`（LLM 工具环 + `run_js`）；可选 `:agent-tools-webview`
+- `minSdk`：库侧 26；宿主须 `INTERNET` 若启用 `enableFetch`（脚本 `fetch` / `mcp` 都走这条网络栈）
 
 把 AAR 以 `project` 依赖或发布到本地 maven 均可；AI 改宿主工程时优先：
 
@@ -136,7 +136,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 | `setScriptFolder(path)` | 自建库 `import './…'` 根 | **仅叶子文件名** `[A-Za-z0-9._-]+.js` |
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
-| `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
+| `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` 与 `mcp` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
 | `setHostCall(HostCall)` / `getHostCall()` | Caps 用的 `__caps`；可链式包装 | `AndroidCaps.install` 内部会调；`run_js` 的 `$tools` 桥在 install 之后 chain |
 | `enableNativePlugins(dir)` | 真 SO 插件目录 | 见 NATIVE_PLUGIN_IDL |
 | `enableNativeMock()` | 无 SO 联调 | 仅 mock 目录 |
@@ -153,7 +153,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 - 模块：见 [MODULE_LOADING.md](MODULE_LOADING.md)（AI 一律 `import`；`require` 仅引擎兼容，不教 Agent）。
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
-- `Buffer` 是 `Uint8Array` 子类；`fetch` 需宿主 `enableFetch`。
+- `Buffer` 是 `Uint8Array` 子类；`fetch` 与 `mcp` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。
 - Caps 文件 API：`list`/`read`/`write`/`mkdir`/`rename`/`move`/`undo`/`zipExtract`/`zipCreate`；Android 另有 `pickDirectory`、`media.resize`、`share`、`reminders`。
 
@@ -184,20 +184,18 @@ open → setFsRoot → [setScriptFolder] → [AndroidCaps.install] → [enableFe
 
 ### 4.1 Agent 工具环（第三方必读）
 
-**完整步骤、工具表、Skill/MCP/WebView、LLM 对接与排错** → **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)**（本文只保留摘要）。
+**完整步骤、工具表、Skill/WebView、LLM 对接与排错** → **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)**（本文只保留摘要）。
 
 | Gradle | 作用 |
 |--------|------|
 | `:agent-tools` | 默认工具 + `run_js` + `$tools` 桥 |
 | `:agent-tools-webview` | `WebViewAgentExtension` → `webview_exec` |
-| `:agent-tools-mcp` | `McpAgentExtension` → `mcp_*` + `.mcp/tools.jsonl` |
 
 检查清单补充：
 
 - [ ] `AgentToolsBundle` 的 `workspace` 与 `setFsRoot` / `AndroidCaps.Session.workspace` **同一路径**
 - [ ] `engineConfigure` 内 `AndroidCaps.install`（若脚本要 `android.*` 或 `$tools` 与 caps 共存）
 - [ ] Skill：`.compositeSkills(ctx, "agent_skills")` 或 `.defaultSkillsDir()`（`workspace/skills` 可写）
-- [ ] MCP：`<filesDir>/mcp_servers.json` 至少一个 `enabled: true`（见 [examples/mcp_servers.example.json](examples/mcp_servers.example.json)）
 - [ ] 把 `tk.exportSchemas()` 接到 LLM；tool 结果用 `tk.call(name, args)`，**勿吞 Error 文本**
 - [ ] 工具环调用在 **后台线程**（`bash` / `run_js` / `webview_exec`）
 
@@ -242,7 +240,7 @@ android.audit.recent()
 | `const` 重复声明 | 同引擎多次 `runJs` 共享全局；换名或新引擎 |
 | Agent 工具 `Error: unknown tool` | 未装可选 AAR 或扩展未 `.extension(...)` |
 | `$tools.xxx` 不可用 | 未装配 `AgentToolsBundle` / `xxx` 不在 `jsExposed` |
-| MCP 无 `mcp_call_tool` | `mcp_servers.json` 无 enabled server |
+| `mcp` 调用失败且含 `unsupported: fetch` | 先 `enableFetch()`；`mcp` 走与 `fetch` 相同的 HTTP |
 
 更多工具环问题见 [AGENT_TOOLS_INTEGRATION.md §12](AGENT_TOOLS_INTEGRATION.md#12-常见集成问题)。
 

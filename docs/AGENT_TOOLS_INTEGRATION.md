@@ -14,7 +14,6 @@
 | `:caps` | 脚本里要用 `android.*` / 桌面 `mac`/`linux` | `AndroidCaps` 等 |
 | `:agent-tools` | LLM **tool-call** 环（读文件、grep、bash、`run_js`、Skill） | AAR `com.weizhi.agent` |
 | `:agent-tools-webview` | 需要 **Chromium/wasm/DOM**（PDF、重计算） | `webview_exec` |
-| `:agent-tools-mcp` | 需要接 **远端 MCP Server** | `mcp_call_tool` / `mcp_list_servers` |
 
 **分层（不要混）**
 
@@ -34,7 +33,6 @@
 include(":weizhi", ":caps", ":agent-tools")
 // 按需：
 // include(":agent-tools-webview")
-// include(":agent-tools-mcp")
 ```
 
 宿主 `app/build.gradle`：
@@ -45,7 +43,6 @@ dependencies {
     implementation(project(":caps"))
     implementation(project(":agent-tools"))
     // implementation(project(":agent-tools-webview"))
-    // implementation(project(":agent-tools-mcp"))
 }
 ```
 
@@ -57,8 +54,7 @@ cd android && ./gradlew \
   :weizhi:assembleRelease \
   :caps:assembleRelease \
   :agent-tools:assembleRelease \
-  :agent-tools-webview:assembleRelease \
-  :agent-tools-mcp:assembleRelease
+  :agent-tools-webview:assembleRelease
 ```
 
 发布或 `implementation(files("…/agent-tools-release.aar"))` 时，**必须**同时带上 `:weizhi` 的 `jniLibs`（与纯引擎集成相同）。
@@ -67,8 +63,7 @@ cd android && ./gradlew \
 
 | 能力 | 权限 / 说明 |
 |------|-------------|
-| `run_js` + `enableFetch` | `INTERNET` |
-| MCP | `INTERNET`；配置见 §7 |
+| `run_js` + `enableFetch` | `INTERNET`（脚本里的 `fetch` 和 `mcp` 都用它） |
 | `webview_exec` | 无额外权限；WebView 在 App 进程内，注意 **主线程**（模块内已用 `HandlerUiExecutor`） |
 | bash / 文件工具 | 仅访问 **workspace**（及工具环配置的只读根），不需存储权限 |
 
@@ -173,7 +168,6 @@ List<Map<String, Object>> tools = tk.exportSchemas();
 | 工具名 | 模块 |
 |--------|------|
 | `webview_exec` | `:agent-tools-webview` |
-| `mcp_call_tool` / `mcp_list_servers` | `:agent-tools-mcp` |
 
 ---
 
@@ -258,64 +252,18 @@ import com.weizhi.agent.web.WebViewAgentExtension;
 
 ---
 
-## 9. MCP 模块（可选）
+## 9. MCP 客户端
 
-```gradle
-implementation(project(":agent-tools-mcp"))
+MCP 是引擎脚本能力，和 `fetch` 一样，不在工具环里。宿主先 `enableFetch()`。引擎不保存 server 列表，不缓存 `tools/list`，也不往工作区写目录。server 放哪、要不要缓存、模型看到哪些工具，由宿主自己决定。
+
+```javascript
+const client = await mcp.connect({ url: "https://your-host/mcp", headers: { Authorization: "Bearer …" } });
+const tools = await client.listTools();
+const result = await client.callTool(tools[0].name, { /* 符合 inputSchema */ });
+await client.close();
 ```
 
-```java
-import com.weizhi.agent.mcp.McpAgentExtension;
-
-.extension(new McpAgentExtension(context.getFilesDir().toPath()))
-```
-
-### 9.1 配置文件
-
-路径：`<filesDir>/mcp_servers.json`（由 `McpServerStore` 读取）。  
-格式见 [examples/mcp_servers.example.json](examples/mcp_servers.example.json)：
-
-```json
-{
-  "version": 2,
-  "servers": [
-    {
-      "name": "my_server",
-      "url": "https://your-host/mcp",
-      "enabled": true,
-      "description": "给模型看的简短说明"
-    }
-  ]
-}
-```
-
-### 9.2 模型用法（目录模式）
-
-- 装配时若有 **enabled** 的 server，注册 `mcp_call_tool` / `mcp_list_servers`，并在 workspace 写入 **`.mcp/tools.jsonl`**（工具目录）。  
-- 模型先用 **`grep` / `read_file`** 在 `.mcp/tools.jsonl` 查限定名（`mcp__<server>__<tool>`），再 `mcp_call_tool`。  
-- 无 enabled server 时 **不会**注册 MCP 工具（`McpTools.fromStore` 返回 null）。
-
-### 9.3 HTTP 客户端与代理
-
-MCP 模块 **不会**读取 `https_proxy` / `HTTP_PROXY` / `no_proxy` 等环境变量。默认直连（`McpHttpClients.direct()`）。
-
-需走企业代理或自定义 TLS 时，由宿主提供 `McpHttpClientFactory`，在装配时传入：
-
-```java
-import com.weizhi.agent.mcp.McpAgentExtension;
-import com.weizhi.agent.mcp.McpHttpClients;
-import okhttp3.OkHttpClient;
-
-OkHttpClient ok = new OkHttpClient.Builder()
-        // .proxy(...) / .proxyAuthenticator(...) 等由宿主自行配置
-        .build();
-
-.extension(new McpAgentExtension(
-        context.getFilesDir().toPath(),
-        McpHttpClients.shared(ok)))
-```
-
-也可实现 `McpHttpClientFactory`，按 `McpServerConfig` 为不同 server 返回不同 `OkHttpClient`；或直接 `new McpClient(config, factory)` 做单元测试。
+`listTools()` 返回 `{ name, description, inputSchema }[]`。`callTool` 返回 `{ isError, text }`。连接对象只记住这一次会话需要的协议状态（`initialize`、协议版本头）。代理和 TLS 走宿主为 `fetch` 安装的 HTTP 栈。
 
 ---
 
@@ -359,7 +307,6 @@ cd android && ./gradlew :agent-tools:testReleaseUnitTest
 | `tk.call("run_js", {code:"1+2"})` | `"3"` |
 | `compositeSkills` + `load_skill_through_path("demo","SKILL.md")` | 含 Demo 文案（需 assets） |
 | `write_file` + `run_js` 内 `$tools.grep` | 命中写入内容 |
-| （可选）MCP enabled + `mcp_list_servers` | 非空 server 列表 |
 
 ---
 
@@ -370,7 +317,7 @@ cd android && ./gradlew :agent-tools:testReleaseUnitTest
 | `$tools.xxx is not defined` | 未走 `AgentToolsBundle` 默认装配；或 `xxx` 不在 `jsExposed`；或 `run_js` 未 chain 桥（caps 未 install 也可 chain，但无 android.*） |
 | `unsupported: $tools.run_js` | 预期行为；脚本层应直接写 JS，不要递归调 run_js |
 | `run_js` 与 caps 路径不一致 | 对齐 workspace 与 `Session.workspace` |
-| MCP 工具未出现 | `mcp_servers.json` 无 `enabled: true` 的 server |
+| 脚本里 `mcp` 报 `unsupported: fetch` | 宿主 `enableFetch()`，并声明 `INTERNET` |
 | `webview_exec` 无响应 | 是否在主线程调 WebView；看 logcat `WeizhiWebView` |
 | bash 命令被拒绝 | 不在白名单或含 `;` `\|` 等 shell 元字符 |
 | 工具返回 `Error: unknown tool` | 未注册扩展模块或工具名拼写错误 |

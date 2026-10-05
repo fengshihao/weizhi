@@ -30,7 +30,7 @@ flowchart TB
 | Cap | 含义 | JS 表面 | 主干现状 |
 | --- | --- | --- | --- |
 | VFS | 沙箱文件 | `fs` / `fs.promises` | 已有 |
-| HTTP | 网络 | `fetch` | 已有 `weizhi_set_http` / `enableFetch` |
+| HTTP | 网络 | `fetch`、`mcp` | 已有 `weizhi_set_http` / `enableFetch`。`mcp` 是脚本里的 MCP 客户端，复用这条 HTTP |
 | LOG | 结构化日志 | host log | 已有 `weizhi_set_log` |
 | RANDOM | 熵 | `crypto.getRandomValues` / `crypto.randomUUID` | 已有（`/dev/urandom`） |
 | COMPRESS | gzip/deflate | `require("zlib")` 的 `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync` | 已有 |

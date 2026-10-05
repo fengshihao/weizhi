@@ -60,8 +60,7 @@ echo "==> assembleRelease (all publishable modules)"
   :weizhi:assembleRelease \
   :caps:assembleRelease \
   :agent-tools:assembleRelease \
-  :agent-tools-webview:assembleRelease \
-  :agent-tools-mcp:assembleRelease
+  :agent-tools-webview:assembleRelease
 
 case "$TARGET" in
   repo)

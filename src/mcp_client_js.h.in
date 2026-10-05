@@ -1,0 +1,6 @@
+#ifndef WEIZHI_MCP_CLIENT_JS_H
+#define WEIZHI_MCP_CLIENT_JS_H
+/* Generated from src/mcp_client.js. Do not edit. */
+static const char WEIZHI_MCP_JS[] =
+@WEIZHI_MCP_JS@;
+#endif

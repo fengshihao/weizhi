@@ -27,6 +27,7 @@ Weizhi 暴露给脚本的表面更窄：
 | `path` | `join`、`basename`、`dirname`、`extname`、`sep` |
 | `Buffer` | `Uint8Array` 子类。`from` 收字符串 / 类型数组 / 类数组；`toString` 有 utf8、hex、base64；可 `buf[i]` |
 | `fetch` | body 为字符串、`Buffer`/`Uint8Array`、`Blob`、`FormData`、`URLSearchParams`。Response 有 `headers.get` / `text` / `json` / `arrayBuffer` |
+| `mcp` | `mcp.connect({ url, headers })` 后 `listTools` / `callTool` / `close`。走 `fetch`，宿主须先开网络。不缓存、不写工作区目录 |
 | 定时器 | 仅本轮 `runJs` 内的 `setTimeout` / `clearTimeout` |
 | 限额 | 堆 32MB，栈 256KB，单次 `runJs` 默认 10 分钟（可 `cancel`），单次读写 / `fetch` 载荷 32MB |
 

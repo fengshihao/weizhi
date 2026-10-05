@@ -35,7 +35,6 @@ dependencies {
     implementation(project(":caps"))
     implementation(project(":agent-tools"))
     // 可选：implementation(project(":agent-tools-webview"))
-    // 可选：implementation(project(":agent-tools-mcp"))
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }
