@@ -24,7 +24,7 @@ public class GlobTool {
     }
 
     @Tool(name = "glob",
-            description = "按 glob 模式查找文件（如 '**/*.md'）。默认从工作区根查找。",
+            description = "按 glob 查找文件，例如 **/*.js、src/**/*.ts。返回匹配路径，按修改时间排序。",
             readOnly = true, concurrencySafe = true)
     public String glob(
             @ToolParam(name = "pattern", description = "Glob 模式") String pattern,

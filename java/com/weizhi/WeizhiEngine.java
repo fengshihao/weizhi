@@ -9,6 +9,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import com.weizhi.platform.MiniJson;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -391,8 +392,7 @@ public final class WeizhiEngine implements AutoCloseable {
         conn.setInstanceFollowRedirects(true);
         if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
             try {
-                // Minimal JSON object parse without org.json dependency: "key":"value" pairs only via simple scan.
-                applyHeadersLoose(conn, headersJson);
+                applyHeaders(conn, headersJson);
             } catch (Exception e) {
                 nativeCompleteFetch(engine, requestId, 0, null, null,
                         "bad argument: fetch headers must be a flat JSON object of string values");
@@ -431,36 +431,14 @@ public final class WeizhiEngine implements AutoCloseable {
         nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
     }
 
-    private static void applyHeadersLoose(HttpURLConnection conn, String headersJson) {
-        // Expect {"a":"b","c":"d"} — enough for agent scripts.
-        String s = headersJson.trim();
-        if (!s.startsWith("{") || !s.endsWith("}")) {
-            throw new IllegalArgumentException("headers");
-        }
-        s = s.substring(1, s.length() - 1).trim();
-        if (s.isEmpty()) {
-            return;
-        }
-        // Split on "," that are outside quotes — keep simple: split by ","
-        String[] parts = s.split(",");
-        for (String part : parts) {
-            int colon = part.indexOf(':');
-            if (colon < 0) {
+    private static void applyHeaders(HttpURLConnection conn, String headersJson) {
+        Map<String, Object> headers = MiniJson.object(headersJson);
+        for (Map.Entry<String, Object> entry : headers.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isEmpty() || !(entry.getValue() instanceof String)) {
                 continue;
             }
-            String key = unquote(part.substring(0, colon).trim());
-            String val = unquote(part.substring(colon + 1).trim());
-            if (!key.isEmpty()) {
-                conn.setRequestProperty(key, val);
-            }
+            conn.setRequestProperty(entry.getKey(), (String) entry.getValue());
         }
-    }
-
-    private static String unquote(String v) {
-        if (v.length() >= 2 && v.startsWith("\"") && v.endsWith("\"")) {
-            return v.substring(1, v.length() - 1);
-        }
-        return v;
     }
 
     private static String headersToJson(Map<String, java.util.List<String>> fields) {

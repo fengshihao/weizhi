@@ -28,7 +28,7 @@ public class GrepTool {
     }
 
     @Tool(name = "grep",
-            description = "按正则搜索文件内容。output_mode: content（默认）/ files / count。",
+            description = "用正则搜索文件内容。output_mode：content（默认）、files、count。",
             readOnly = true, concurrencySafe = true)
     public String grep(
             @ToolParam(name = "pattern", description = "正则表达式") String pattern,

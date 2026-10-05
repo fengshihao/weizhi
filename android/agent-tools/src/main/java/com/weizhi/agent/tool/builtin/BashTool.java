@@ -48,7 +48,7 @@ public class BashTool {
     }
 
     @Tool(name = "bash",
-            description = "在工作区沙箱内执行简单 shell 命令。"
+            description = "在工作区执行一条命令。"
                     + "仅支持: base64, cat, cp, date, echo, file, find, head, ls, mkdir, mv, "
                     + "pwd, rm, sha256sum, tail, touch, wc, which。"
                     + "不支持管道、重定向等 shell 语法，无 python/node 等解释器。"

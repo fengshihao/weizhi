@@ -50,16 +50,22 @@
       || msg.indexOf("UnsupportedProtocolVersion") >= 0;
   }
 
+  function safeUrl(url) {
+    return String(url).replace(/([?&#](?:key|api_key|token|access_token)=)[^&#]*/gi, "$1***");
+  }
+
   function rpcError(url, method, resp) {
     var detail = resp && resp.error ? JSON.stringify(resp.error) : String(resp);
-    return new Error("mcp rpc error, url=" + url + ", method=" + method + ", error=" + detail);
+    return new Error("mcp rpc error, method=" + method + ", error=" + detail + ", url=" + safeUrl(url));
   }
 
   function Client(url, headers) {
     this.url = url;
     this.headers = headers;
     this.nextId = 1;
-    this.initialized = false;
+    this.sessionReady = false;
+    this.opening = null;
+    this.sessionId = "";
     this.versionRejected = false;
     this.closed = false;
   }
@@ -76,19 +82,18 @@
     return Promise.resolve();
   };
 
-  Client.prototype._doRequest = function (method, params) {
+  Client.prototype._post = function (rpc) {
     var self = this;
-    var rpc = { jsonrpc: "2.0", id: self.nextId++, method: method };
     var hdrs = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream"
     };
     var k;
-    if (params != null) {
-      rpc.params = params;
-    }
     if (!self.versionRejected) {
       hdrs["MCP-Protocol-Version"] = PROTOCOL;
+    }
+    if (self.sessionId) {
+      hdrs["Mcp-Session-Id"] = self.sessionId;
     }
     for (k in self.headers) {
       if (Object.prototype.hasOwnProperty.call(self.headers, k)) {
@@ -100,12 +105,21 @@
       headers: hdrs,
       body: JSON.stringify(rpc)
     }).then(function (res) {
+      var sid = "";
+      try {
+        sid = res.headers.get("mcp-session-id") || "";
+      } catch (e) {
+        sid = "";
+      }
+      if (sid) {
+        self.sessionId = sid;
+      }
       return res.text().then(function (text) {
         var ct = "";
         var body = null;
         try {
           ct = res.headers.get("content-type") || "";
-        } catch (e) {
+        } catch (e2) {
           ct = "";
         }
         if (ct.indexOf("text/event-stream") >= 0) {
@@ -113,14 +127,11 @@
         } else {
           try {
             body = text ? JSON.parse(text) : null;
-          } catch (e2) {
+          } catch (e3) {
             body = null;
           }
         }
-        if (!res.ok) {
-          if (body && body.error) {
-            return body;
-          }
+        if (!res.ok && !(body && body.error)) {
           return null;
         }
         return body;
@@ -128,37 +139,68 @@
     });
   };
 
+  Client.prototype._rpc = function (method, params) {
+    var rpc = { jsonrpc: "2.0", id: this.nextId++, method: method };
+    if (params != null) {
+      rpc.params = params;
+    }
+    return this._post(rpc);
+  };
+
+  Client.prototype._notifyInitialized = function () {
+    return this._post({ jsonrpc: "2.0", method: "notifications/initialized" }).then(function (resp) {
+      if (resp && resp.error) {
+        throw rpcError(this.url, "notifications/initialized", resp);
+      }
+    }.bind(this));
+  };
+
+  /** 第一次 list/call 之前握手。connect 本身不联网，App 启动也不握手。 */
+  Client.prototype._ensureSession = function () {
+    var self = this;
+    var initParams;
+    if (self.sessionReady) {
+      return Promise.resolve();
+    }
+    if (self.opening) {
+      return self.opening;
+    }
+    initParams = {
+      protocolVersion: PROTOCOL,
+      capabilities: {},
+      clientInfo: { name: "weizhi", version: "1.0" }
+    };
+    self.opening = self._rpc("initialize", initParams).then(function (resp) {
+      if (resp && resp.error && !self.versionRejected && isVersionRejected(resp)) {
+        self.versionRejected = true;
+        return self._rpc("initialize", initParams);
+      }
+      return resp;
+    }).then(function (resp) {
+      if (!resp || resp.error) {
+        throw rpcError(self.url, "initialize", resp);
+      }
+      return self._notifyInitialized();
+    }).then(function () {
+      self.sessionReady = true;
+      self.opening = null;
+    }, function (err) {
+      self.opening = null;
+      self.sessionReady = false;
+      throw err;
+    });
+    return self.opening;
+  };
+
   Client.prototype._request = function (method, params) {
     var self = this;
     return self._ensureOpen().then(function () {
-      return self._doRequest(method, params);
-    }).then(function (resp) {
-      if (resp && !resp.error) {
-        return resp;
-      }
-      if (resp && !self.versionRejected && isVersionRejected(resp)) {
-        self.versionRejected = true;
-        return self._doRequest(method, params);
-      }
-      return resp;
-    }).then(function (resp) {
-      if (resp && !resp.error) {
-        return resp;
-      }
-      if (!self.initialized) {
-        self.initialized = true;
-        return self._doRequest("initialize", {
-          protocolVersion: PROTOCOL,
-          capabilities: {},
-          clientInfo: { name: "weizhi", version: "1.0" }
-        }).then(function () {
-          return self._doRequest(method, params);
-        });
-      }
-      return resp;
+      return self._ensureSession();
+    }).then(function () {
+      return self._rpc(method, params);
     }).then(function (resp) {
       if (!resp) {
-        throw new Error("mcp request failed (no response), url=" + self.url + ", method=" + method);
+        throw new Error("mcp request failed (no response), method=" + method + ", url=" + safeUrl(self.url));
       }
       if (resp.error) {
         throw rpcError(self.url, method, resp);
