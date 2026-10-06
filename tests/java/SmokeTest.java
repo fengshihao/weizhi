@@ -89,6 +89,22 @@ public final class SmokeTest {
                     throw e;
                 }
             }
+            try {
+                engine.runJs(platform + ".intent.start({action:'view', path:'a.txt'})", 2000);
+                fail("expected intent.start unsupported on desktop");
+            } catch (RuntimeException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("unsupported")) {
+                    throw e;
+                }
+            }
+            try {
+                engine.runJs(other + ".intent.start({action:'view', path:'a.txt'})", 2000);
+                fail("expected other platform intent.start unsupported");
+            } catch (RuntimeException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("unsupported")) {
+                    throw e;
+                }
+            }
             engine.runJs(platform + ".files.mkdir('pack'); " + platform + ".files.write('pack/a.txt','hello zip')",
                     3000);
             String zipMsg = engine.runJs(platform + ".files.zipCreate('pack', 'out.zip')", 5000);

@@ -186,8 +186,7 @@ public final class OfficeTest {
 
             String validateOnly = engine.runJs(
                     "import { validateDocx } from './docx-raw.js';\n"
-                            + "var files = (typeof linux !== 'undefined' && linux.files) ? linux.files"
-                            + " : mac.files;\n"
+                            + "var files = " + platform + ".files;\n"
                             + "files.mkdir('tmp/empty-pkg');\n"
                             + "files.write('tmp/empty-pkg/[Content_Types].xml',"
                             + " '<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"></Types>');\n"

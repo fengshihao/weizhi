@@ -155,7 +155,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
 - `Buffer` 是 `Uint8Array` 子类；`fetch` 与 `mcp` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。
-- Caps 文件 API：`list`/`read`/`write`/`mkdir`/`rename`/`move`/`undo`/`zipExtract`/`zipCreate`；Android 另有 `pickDirectory`、`media.resize`、`share`、`reminders`。
+- Caps 文件 API：`list`/`read`/`write`/`mkdir`/`rename`/`move`/`undo`/`zipExtract`/`zipCreate`；Android 另有 `pickDirectory`、`media.resize`、`share`、`intent.start`、`reminders`。
 
 ---
 
@@ -166,7 +166,8 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 - [ ] 依赖 `:weizhi`（+ 需要时 `:caps`、`:agent-tools`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
 - [ ] App 私有目录创建 **workspace**，`setFsRoot`（与 `AndroidCaps.Session.workspace` 同一路径）
 - [ ] （可选）`setScriptFolder` 指向 App 决定的可写技能/库目录（若与 workspace 分离）
-- [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI
+- [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI。要真正打开界面时设 `session.launchShareSheet` / `session.launchIntent`（默认都不 `startActivity`）
+- [ ] 若脚本会 `android.intent.start({ action, path })`：Manifest 声明 `androidx.core.content.FileProvider`，`android:authorities="${applicationId}.fileprovider"`，paths 覆盖 workspace（`files` / `cache` 等）。Caps 用 `context.getPackageName() + ".fileprovider"`。并声明 `<queries>`，否则 Android 11+ 看不到可处理 `VIEW` / `SEND` 的应用
 - [ ] （可选）`enableFetch(allowlist)` + Manifest `INTERNET`
 - [ ] 工具环：`run_js` 工具（或等价）把模型产出的 JS 交给 `WeizhiEngine.runJs`；超时与 `cancel` 接到会话取消
 - [ ] 行号读写 / grep / glob：用 **`:agent-tools`**（或自建 `@Tool` + `WorkspaceSandbox`），不要塞进 Weizhi C 引擎
@@ -216,10 +217,23 @@ android.files.zipExtract(file, dest?)  // dest 省略 → tmp/<zip名>/
 android.files.zipCreate(sourceDir, file)
 android.files.pickDirectory()          // 仅 Android；取消则错误含 cancelled
 android.media.resize(path, maxEdge)    // 需 ensureNative("image_resize")
-android.share.send({ title, text })
+android.share.send({ title, text })    // 纯文本分享；语义不变
+android.intent.start({
+  action: "view",          // view | send | panel
+  path: "每周AI新闻.docx",  // 可选，仅 workspace 相对路径
+  type: "application/...", // 可选，省略则按扩展名推断
+  text: "纯文本",           // send 时可选
+  title: "分享",            // chooser 标题，可选
+  panel: "wifi",           // action=panel：wifi | bluetooth | location | nfc | internet
+  data: "https://example.com", // 可选，仅 http(s) | geo: | tel: | mailto:
+  chooser: true            // 默认 view 不弹选择器，send/panel 弹
+})
+// { ok: true, action: "android.intent.action.VIEW", mime: "..." }
 android.reminders.schedule|cancel|fire(...)
 android.audit.recent()
 ```
+
+`intent.start` 失败时错误原文含 `unsupported: intent.action`、`unsupported: intent.panel`、`bad argument`、`path escape`，或「未找到可打开此文件的应用」。mac / linux 上调用 `android.intent.start` 仍是 `unsupported: android.* on this host`。
 
 实现入口：`AndroidCaps.install` / `DesktopCaps.install` → `PlatformHost` + `PlatformScripts.install`。
 

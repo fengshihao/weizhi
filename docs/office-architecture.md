@@ -15,7 +15,7 @@
 1. `setScriptFolder` 提供 `docx.js`（catalog 同步）。  
 2. `setFsRoot` 与 caps workspace 一致。  
 3. `execute_script` 内 `import { markdownToDocx } from "./docx.js"`。  
-4. 打开 docx：App 层 `FileProvider` + `ACTION_VIEW`（不在 Weizhi）。
+4. 打开 docx：`android.intent.start({ action: "view", path })`（宿主 FileProvider + `launchIntent`）。
 
 ## 演进
 

@@ -31,6 +31,8 @@ public final class AndroidCaps {
         public PlatformHost.ShareSink shareSink;
         /** When false, {@code share.send} records the payload and does not open the share sheet. */
         public boolean launchShareSheet;
+        /** When false, {@code intent.start} validates and returns the action without {@code startActivity}. */
+        public boolean launchIntent;
         /** Set by {@link #install}. Used to call a plugin that was ensured in the current engine. */
         public WeizhiEngine engine;
 
@@ -85,6 +87,9 @@ public final class AndroidCaps {
                         return resize(MiniJson.str(args, "path"), MiniJson.intVal(args, "maxEdge"));
                     case "share.send":
                         return share(MiniJson.str(args, "title"), MiniJson.str(args, "text"));
+                    case "intent.start":
+                        return IntentStarts.start(session.context, workspace, session.workspace, args,
+                                session.launchIntent);
                     case "reminders.schedule":
                         return ReminderScheduler.schedule(session.context, workspace,
                                 MiniJson.str(args, "title"), MiniJson.str(args, "body"), MiniJson.longVal(args, "atMs"));

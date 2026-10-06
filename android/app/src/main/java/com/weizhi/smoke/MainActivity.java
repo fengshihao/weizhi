@@ -76,6 +76,7 @@ public final class MainActivity extends Activity {
         addButton(column, "整理所选文件夹",
                 "android.files.pickDirectory(); " + OrganizeFiles.run("android"));
         addButton(column, "分享文案", "android.share.send({title:'朋友圈草稿', text:'今天的行程已排好'})");
+        addButton(column, "打开示例文本", "android.intent.start({action:'view', path:'发票.txt'})");
         addButton(column, "5 秒后提醒",
                 "var s = android.reminders.schedule({title:'出发', body:'检查证件', atMs: Date.now()+5000}); s");
         addButton(column, "Agent bash", null);
@@ -212,6 +213,7 @@ public final class MainActivity extends Activity {
                     };
                 }
                 session.launchShareSheet = shareSheet;
+                session.launchIntent = "打开示例文本".equals(label);
                 try (WeizhiEngine engine = new WeizhiEngine()) {
                     AndroidCaps.install(engine, session);
                     String out = engine.runJs(js, 120000);

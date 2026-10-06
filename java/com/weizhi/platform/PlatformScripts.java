@@ -3,7 +3,7 @@ package com.weizhi.platform;
 /**
  * JS prelude that installs exactly one live platform object and stubs the others.
  * Shared shape: {@code ui.confirm}, {@code files.*} (incl. {@code zipExtract}/{@code zipCreate}),
- * {@code media.resize}, {@code share.send}, {@code reminders.*}, {@code audit.recent}.
+ * {@code media.resize}, {@code share.send}, {@code intent.start}, {@code reminders.*}, {@code audit.recent}.
  * Hosts that lack a capability return {@code unsupported}.
  */
 public final class PlatformScripts {
@@ -33,6 +33,7 @@ public final class PlatformScripts {
                 + "  fail.files = { list: fail, read: fail, write: fail, mkdir: fail, rename: fail, move: fail, undo: fail, pickDirectory: fail, zipExtract: fail, zipCreate: fail };\n"
                 + "  fail.media = { resize: fail };\n"
                 + "  fail.share = { send: fail };\n"
+                + "  fail.intent = { start: fail };\n"
                 + "  fail.reminders = { schedule: fail, cancel: fail, fire: fail };\n"
                 + "  fail.audit = { recent: fail };\n"
                 + "  return fail;\n"
@@ -54,6 +55,18 @@ public final class PlatformScripts {
                 + "  },\n"
                 + "  media: { resize: function(path, maxEdge){ return call('media.resize', {path: path, maxEdge: maxEdge}); } },\n"
                 + "  share: { send: function(spec){ spec = spec || {}; return call('share.send', {text: String(spec.text||''), title: String(spec.title||'')}); } },\n"
+                + "  intent: { start: function(spec){\n"
+                + "    spec = spec || {};\n"
+                + "    var extra = { action: String(spec.action||'') };\n"
+                + "    if (spec.path != null) extra.path = String(spec.path);\n"
+                + "    if (spec.type != null) extra.type = String(spec.type);\n"
+                + "    if (spec.text != null) extra.text = String(spec.text);\n"
+                + "    if (spec.title != null) extra.title = String(spec.title);\n"
+                + "    if (spec.panel != null) extra.panel = String(spec.panel);\n"
+                + "    if (spec.data != null) extra.data = String(spec.data);\n"
+                + "    if (spec.chooser != null) extra.chooser = !!spec.chooser;\n"
+                + "    return call('intent.start', extra);\n"
+                + "  } },\n"
                 + "  reminders: {\n"
                 + "    schedule: function(spec){ spec = spec || {}; return call('reminders.schedule', {title: String(spec.title||''), body: String(spec.body||''), atMs: spec.atMs}); },\n"
                 + "    cancel: function(id){ return call('reminders.cancel', {id: String(id)}); },\n"

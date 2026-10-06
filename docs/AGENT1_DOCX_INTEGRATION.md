@@ -40,7 +40,7 @@
 
 4. **系统提示**：把 [office-js-api.md](office-js-api.md) 摘要或链接放进 Agent 工具说明；沙盒契约见 [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md)（**只用 `import`，不用 `require`**，无 `loadScript`）。
 
-5. **打开 docx 给用户看**：仍在 App 层 `FileProvider` + `ACTION_VIEW`（Weizhi 引擎不负责）。
+5. **打开 docx 给用户看**：`android.intent.start({ action: "view", path })`。宿主声明 `${applicationId}.fileprovider`（paths 覆盖 workspace），并设 `session.launchIntent = true`。
 
 ---
 
@@ -128,7 +128,7 @@ Agent1 CI 建议在集成后增加：拷贝 `assets/office/*.js` → 跑一次 `
 - [ ] workspace 与 `setFsRoot` 一致
 - [ ] 至少 1 个 `@Tool` 或固定 `runJs` 模板能产出 `.docx` 并通过 `validateDocx`
 - [ ] Agent 系统提示说明：优先 `docx.js`，失败再 `docx-raw.js` + validate
-- [ ] 用户从 App 打开生成的 docx（FileProvider）
+- [ ] 用户从 App 打开生成的 docx：`android.intent.start({ action: "view", path })` + FileProvider
 
 ---
 

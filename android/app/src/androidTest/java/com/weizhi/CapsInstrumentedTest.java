@@ -67,9 +67,36 @@ public final class CapsInstrumentedTest {
                     "try { mac.files.read('a') } catch (e) { e.message }", 3000);
             String linux = engine.runJs(
                     "try { linux.share.send({text:'x'}) } catch (e) { e.message }", 3000);
+            String linuxIntent = engine.runJs(
+                    "try { linux.intent.start({action:'view', path:'a.txt'}) } catch (e) { e.message }", 3000);
             assertTrue(mac.contains("unsupported"));
             assertTrue(mac.contains("platform is android"));
             assertTrue(linux.contains("unsupported"));
+            assertTrue(linuxIntent.contains("unsupported"));
+        }
+    }
+
+    @Test
+    public void intentStartViewAndRejects() throws Exception {
+        File workspace = workspace("intent");
+        write(new File(workspace, "note.txt"), "hello");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
+            session.launchIntent = false;
+            AndroidCaps.install(engine, session);
+            String view = engine.runJs("android.intent.start({action:'view', path:'note.txt'})", 3000);
+            assertTrue(view, view.contains("\"ok\":true"));
+            assertTrue(view, view.contains("android.intent.action.VIEW"));
+            assertTrue(view, view.contains("text/plain"));
+            String panel = engine.runJs("android.intent.start({action:'panel', panel:'wifi', chooser:false})", 3000);
+            assertTrue(panel, panel.contains("android.settings.panel.action.WIFI"));
+            expectFail(engine, "android.intent.start({action:'view', path:'../note.txt'})", "escape");
+            expectFail(engine, "android.intent.start({action:'view', path:'/etc/passwd'})", "escape");
+            expectFail(engine, "android.intent.start({action:'view', data:'file:///etc/passwd'})", "bad argument");
+            expectFail(engine, "android.intent.start({action:'view', data:'content://x'})", "bad argument");
+            expectFail(engine, "android.intent.start({action:'view', data:'intent://x'})", "bad argument");
+            expectFail(engine, "android.intent.start({action:'delete'})", "unsupported");
+            expectFail(engine, "android.intent.start({action:'panel', panel:'airplane'})", "unsupported");
         }
     }
 
@@ -278,6 +305,15 @@ public final class CapsInstrumentedTest {
             while ((n = in.read(buf)) > 0) {
                 out.write(buf, 0, n);
             }
+        }
+    }
+
+    private static void expectFail(WeizhiEngine engine, String js, String needle) {
+        try {
+            engine.runJs(js, 3000);
+            fail(js);
+        } catch (RuntimeException e) {
+            assertTrue(e.getMessage(), e.getMessage() != null && e.getMessage().contains(needle));
         }
     }
 
