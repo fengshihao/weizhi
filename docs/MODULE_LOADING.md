@@ -9,7 +9,8 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 | 加载什么 | AI 怎么写 |
 |---|---|
 | **引擎内置**（`fs`、`path`、`buffer`、`process`、`zlib`、`zip`） | `import fs from "fs"`、`import zip from "zip"` 等 |
-| **脚本目录自建库**（`setScriptFolder` 下叶子 `.js`） | `import … from "./名字.js"`、`import … from "名字"`，或 `await import(...)` |
+| **脚本目录自建库**（`setScriptFolder` 下叶子 `.js`） | `import … from "叶子名.js"`（**不要** `./`），或 `await import(...)` |
+| **用户放在 workspace、与当前脚本同目录的文件** | `import … from "./名字.js"` |
 
 整段 `runJs` 含 `import` / `export` 时按 **ES 模块** 执行；用 `export default` 作为本轮返回值。
 
@@ -22,7 +23,7 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 - **`setFsRoot`** — 工作区（用户文件、`fs`、orchestrator 入口如 `jobs/run.js`）
 - **`setScriptFolder`** — catalog 脚本库（`docx.js` 等）
 
-**解析顺序（ES module）**：先按当前模块路径在工作区找；找不到时，对单层 `./leaf.js` **回退**到 `setScriptFolder/leaf.js`。bare 名 `docx` / `docx.js` 在 catalog 根目录查找。
+**解析顺序（ES module）**：内置模块名走引擎；裸说明符 `docx` / `docx.js` 在 `setScriptFolder` 根目录查找；`./leaf.js` 先按当前模块路径在工作区找，找不到时**回退**到 `setScriptFolder/leaf.js`。
 
 ---
 
@@ -38,7 +39,8 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 
 ```
 import 内置模块名（fs / path / buffer / process / zlib / zip）→ from "模块名"
-否则 → import … from "./某库.js"
+import catalog 脚本库（setScriptFolder 下的 leaf.js）→ from "叶子名.js"（不要 ./）
+否则（用户 workspace 里与当前脚本同目录的文件）→ from "./名字.js"
 ```
 
 ---
@@ -48,7 +50,7 @@ import 内置模块名（fs / path / buffer / process / zlib / zip）→ from "�
 ```javascript
 import fs from "fs";
 import zip from "zip";
-import { markdownToDocx, Document, renderDocx } from "./docx.js";
+import { markdownToDocx, Document, renderDocx } from "docx.js";
 
 markdownToDocx({ inputPath: "a.md", outputPath: "out/a.docx" });
 const doc = Document.create({ title: "标题" });

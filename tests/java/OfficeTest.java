@@ -40,7 +40,7 @@ public final class OfficeTest {
                             + "```\ncode();\n```\n");
 
             String mdOut = engine.runJs(
-                    "import { markdownToDocx } from './docx.js';\n"
+                    "import { markdownToDocx } from 'docx.js';\n"
                             + "export default markdownToDocx({"
                             + "inputPath:'notes/report.md', outputPath:'out/report.docx', title:'Report'});\n",
                     10000);

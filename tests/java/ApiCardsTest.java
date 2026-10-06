@@ -126,6 +126,9 @@ public final class ApiCardsTest {
         if (entry.isBlank() || entryLines > MAX_ENTRY_LINES) {
             throw new AssertionError(id + " entry lines " + entryLines);
         }
+        if (module.startsWith("./") && (entry.contains("from \"./") || entry.contains("from './"))) {
+            throw new AssertionError(id + " catalog entry must use bare import from \"leaf.js\", not ./");
+        }
         String blob = card.toString() + entry;
         String[] banned = {"office-js-api", "AGENT_SANDBOX", "read_file", "docs/", "详见"};
         for (String needle : banned) {
@@ -169,7 +172,7 @@ public final class ApiCardsTest {
             write(root.resolve("notes/大纲.md"), "# 大纲\n\n- 一点\n");
         } else if ("docx.readEdit".equals(id) || "docx.raw".equals(id)) {
             engine.runJs(
-                    "import { markdownToDocx } from './docx.js';\n"
+                    "import { markdownToDocx } from 'docx.js';\n"
                             + "export default markdownToDocx({ markdown: 'ABCD', outputPath: 'in/sample.docx' });\n",
                     15000);
         }
