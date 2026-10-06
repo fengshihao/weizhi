@@ -219,21 +219,24 @@ android.files.pickDirectory()          // 仅 Android；取消则错误含 cance
 android.media.resize(path, maxEdge)    // 需 ensureNative("image_resize")
 android.share.send({ title, text })    // 纯文本分享；语义不变
 android.intent.start({
-  action: "view",          // view | send | panel
-  path: "每周AI新闻.docx",  // 可选，仅 workspace 相对路径
+  action: "view",          // view | edit | send | send_multiple | panel | settings
+  path: "每周AI新闻.docx",  // view | edit | send；仅 workspace 相对路径
+  paths: ["a.docx","b.pdf"], // send_multiple，最多 20 个
   type: "application/...", // 可选，省略则按扩展名推断
-  text: "纯文本",           // send 时可选
+  text: "纯文本",           // send / send_multiple 时可选
   title: "分享",            // chooser 标题，可选
-  panel: "wifi",           // action=panel：wifi | bluetooth | location | nfc | internet
-  data: "https://example.com", // 可选，仅 http(s) | geo: | tel: | mailto:
-  chooser: true            // 默认 view 不弹选择器，send/panel 弹
+  panel: "wifi",           // action=panel：wifi | bluetooth | location | nfc | internet | volume
+  screen: "locale",        // action=settings：locale | accessibility | wifi | bluetooth | location | app_notifications | app_details（后两者仅宿主包）
+  data: "https://example.com", // view 时与 path 二选一：http(s) | geo: | tel: | mailto:
+  chooser: true            // 默认 view/edit/settings/panel 不弹；send/send_multiple 弹
 })
-// { ok: true, action: "android.intent.action.VIEW", mime: "..." }
+// { ok: true, action: "...", mime: "...", count?: N, screen?: "..." }
+// 国民 App 深链白名单（讨论稿，未实现）：docs/intent-app-whitelist-proposal.md
 android.reminders.schedule|cancel|fire(...)
 android.audit.recent()
 ```
 
-`intent.start` 失败时错误原文含 `unsupported: intent.action`、`unsupported: intent.panel`、`bad argument`、`path escape`，或「未找到可打开此文件的应用」。mac / linux 上调用 `android.intent.start` 仍是 `unsupported: android.* on this host`。
+`intent.start` 失败时错误原文含 `unsupported: intent.action`、`unsupported: intent.panel`、`unsupported: intent.settings`、`bad argument`、`path escape`，或「未找到可打开此文件的应用」。mac / linux 上调用 `android.intent.start` 仍是 `unsupported: android.* on this host`。
 
 实现入口：`AndroidCaps.install` / `DesktopCaps.install` → `PlatformHost` + `PlatformScripts.install`。
 

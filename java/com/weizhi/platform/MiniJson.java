@@ -57,6 +57,23 @@ public final class MiniJson {
         return Integer.parseInt(String.valueOf(v));
     }
 
+    /** Non-empty list of strings (e.g. {@code paths} for intent.start). */
+    public static List<String> strList(Map<String, Object> obj, String key) {
+        Object v = obj.get(key);
+        if (!(v instanceof List)) {
+            throw new IllegalArgumentException("bad argument: " + key + " must be array");
+        }
+        List<?> raw = (List<?>) v;
+        List<String> out = new ArrayList<>(raw.size());
+        for (Object item : raw) {
+            if (!(item instanceof String) || ((String) item).isEmpty()) {
+                throw new IllegalArgumentException("bad argument: " + key + " must be non-empty strings");
+            }
+            out.add((String) item);
+        }
+        return out;
+    }
+
     public static String quote(String s) {
         if (s == null) {
             return "null";

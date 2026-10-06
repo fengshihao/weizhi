@@ -64,6 +64,8 @@ public final class PlatformScripts {
                 + "    if (spec.title != null) extra.title = String(spec.title);\n"
                 + "    if (spec.panel != null) extra.panel = String(spec.panel);\n"
                 + "    if (spec.data != null) extra.data = String(spec.data);\n"
+                + "    if (spec.screen != null) extra.screen = String(spec.screen);\n"
+                + "    if (spec.paths != null) extra.paths = spec.paths;\n"
                 + "    if (spec.chooser != null) extra.chooser = !!spec.chooser;\n"
                 + "    return call('intent.start', extra);\n"
                 + "  } },\n"

@@ -24,7 +24,7 @@
 - 宿主只安装一个平台对象，名字是 `android`、`mac` 或 `linux`。调用另外两个名字会抛 `unsupported: … on this host (platform is …)`。
   - 三个平台都有：`ui.confirm`、`files.list` / `read` / `write` / `mkdir` / `rename` / `move` / `undo`、`files.zipExtract(file, dest?)` / `files.zipCreate(sourceDir, file)`、`audit.recent`。`mkdir` 不进撤销栈。`zipExtract` 默认解压到 `tmp/<zip名>/`；含 `..` 的条目会跳过。
   - 仅 Android：`files.pickDirectory`（用户选目录后，后续 `files.*` 走该目录）、`media.resize`（先 `await host.ensureNative("image_resize")`）、`share.send`、`intent.start`、`reminders.schedule` / `cancel` / `fire`。
-  - 打开工作区里的文件（例如 docx）：`android.intent.start({ action: "view", path: "每周AI新闻.docx" })`。`path` 只能是工作区相对路径。分享文件用 `action: "send"` 加 `path`。纯文本分享仍用 `share.send({ title, text })`。系统面板用 `action: "panel"`，`panel` 为 `wifi` / `bluetooth` / `location` / `nfc` / `internet`。不要传 `component`、`package`、任意 extras 或 flags。
+  - 打开工作区里的文件（例如 docx）：`android.intent.start({ action: "view", path: "每周AI新闻.docx" })`。`path` 只能是工作区相对路径。外链/电话/地图用 `action: "view", data: "https://…" | tel:… | geo:… | mailto:…`。分享文件用 `action: "send"` 或 `send_multiple` + `paths`。外部 App 编辑用 `action: "edit"`。系统浮层 `action: "panel"`（`wifi` / `bluetooth` / `location` / `nfc` / `internet` / **volume**）；整页设置 `action: "settings"` + `screen`（如 `locale`、`app_notifications` 仅宿主）。纯文本分享仍用 `share.send({ title, text })`。国民 App 固定页白名单见 [intent-app-whitelist-proposal.md](intent-app-whitelist-proposal.md)（尚未实现 `action: "app"`）。不要传 `component`、`package`、任意 extras 或 flags。
   - 整理文档：只处理顶层文件，按扩展名归入 `文档` / `图片` / `视频`；先 `ui.confirm`，移动失败则对已成功的移动逐个 `undo`。
   - docx/xlsx 打包解包优先用 caps 的 `files.zipExtract` / `zipCreate`；否则用 `import zip from "zip"`。
 - 若宿主启用了原生插件：`const p = await host.ensureNative("echo_math")`，再调用导出（如 `p.add([1,2])`）。只传插件名，不要传 SO URL。

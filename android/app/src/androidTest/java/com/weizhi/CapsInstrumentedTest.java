@@ -92,6 +92,23 @@ public final class CapsInstrumentedTest {
             assertTrue(view, view.contains("text/plain"));
             String panel = engine.runJs("android.intent.start({action:'panel', panel:'wifi', chooser:false})", 3000);
             assertTrue(panel, panel.contains("android.settings.panel.action.WIFI"));
+            String volume = engine.runJs("android.intent.start({action:'panel', panel:'volume', chooser:false})", 3000);
+            assertTrue(volume, volume.contains("panel.action.VOLUME"));
+            String edit = engine.runJs("android.intent.start({action:'edit', path:'note.txt'})", 3000);
+            assertTrue(edit, edit.contains("android.intent.action.EDIT"));
+            write(new File(workspace, "b.txt"), "b");
+            String multi = engine.runJs(
+                    "android.intent.start({action:'send_multiple', paths:['note.txt','b.txt'], chooser:false})",
+                    3000);
+            assertTrue(multi, multi.contains("android.intent.action.SEND_MULTIPLE"));
+            assertTrue(multi, multi.contains("\"count\":2"));
+            String settings = engine.runJs(
+                    "android.intent.start({action:'settings', screen:'locale', chooser:false})", 3000);
+            assertTrue(settings, settings.contains("LOCALE"));
+            assertTrue(settings, settings.contains("\"screen\":\"locale\""));
+            String link = engine.runJs(
+                    "android.intent.start({action:'view', data:'https://example.com', chooser:false})", 3000);
+            assertTrue(link, link.contains("android.intent.action.VIEW"));
             expectFail(engine, "android.intent.start({action:'view', path:'../note.txt'})", "escape");
             expectFail(engine, "android.intent.start({action:'view', path:'/etc/passwd'})", "escape");
             expectFail(engine, "android.intent.start({action:'view', data:'file:///etc/passwd'})", "bad argument");
@@ -99,6 +116,7 @@ public final class CapsInstrumentedTest {
             expectFail(engine, "android.intent.start({action:'view', data:'intent://x'})", "bad argument");
             expectFail(engine, "android.intent.start({action:'delete'})", "unsupported");
             expectFail(engine, "android.intent.start({action:'panel', panel:'airplane'})", "unsupported");
+            expectFail(engine, "android.intent.start({action:'settings', screen:'airplane'})", "unsupported");
         }
     }
 
@@ -300,6 +318,8 @@ public final class CapsInstrumentedTest {
             File workspace = workspace("card-" + id.replace('.', '-'));
             if ("android.intent.start".equals(id)) {
                 write(new File(workspace, "每周AI新闻.docx"), "docx");
+                write(new File(workspace, "a.docx"), "a");
+                write(new File(workspace, "b.pdf"), "b");
             }
             try (WeizhiEngine engine = new WeizhiEngine()) {
                 AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
