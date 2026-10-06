@@ -226,60 +226,33 @@ export function checkXmlWellFormed(xml, fileLabel) {
       break;
     }
     if (s.charAt(i) !== "<") {
-      return err("unexpected text outside root element", i);
-    }
-    if (skipDeclOrPI() !== true && skipDeclOrPI() && skipDeclOrPI().ok === false) {
-      return skipDeclOrPI();
+      if (stack.length === 0) {
+        return err("unexpected text outside root element", i);
+      }
+      while (i < len && s.charAt(i) !== "<") {
+        i++;
+      }
+      continue;
     }
     if (s.slice(i, i + 2) === "<?") {
       var pi = skipDeclOrPI();
-      if (pi && pi.ok === false) {
+      if (pi !== true) {
         return pi;
       }
-      if (pi === true) {
-        continue;
-      }
-    }
-    if (s.slice(i, i + 4) === "<!--") {
-      var c = skipComment();
-      if (c && c.ok === false) {
-        return c;
-      }
-      if (c === true) {
-        continue;
-      }
-    }
-    if (s.slice(i, i + 9) === "<!DOCTYPE") {
-      var d = skipDoctype();
-      if (d && d.ok === false) {
-        return d;
-      }
-      if (d === true) {
-        continue;
-      }
-    }
-    if (s.slice(i, i + 2) === "<?") {
-      var endPi = s.indexOf("?>", i);
-      if (endPi < 0) {
-        return err("unclosed <?", i);
-      }
-      i = endPi + 2;
       continue;
     }
     if (s.slice(i, i + 4) === "<!--") {
-      var endC = s.indexOf("-->", i);
-      if (endC < 0) {
-        return err("unclosed comment", i);
+      var com = skipComment();
+      if (com !== true) {
+        return com;
       }
-      i = endC + 3;
       continue;
     }
     if (s.slice(i, i + 9) === "<!DOCTYPE") {
-      var endD = s.indexOf(">", i);
-      if (endD < 0) {
-        return err("unclosed doctype", i);
+      var dt = skipDoctype();
+      if (dt !== true) {
+        return dt;
       }
-      i = endD + 1;
       continue;
     }
 

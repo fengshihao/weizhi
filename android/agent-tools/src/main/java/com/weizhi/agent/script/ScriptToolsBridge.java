@@ -50,8 +50,95 @@ public final class ScriptToolsBridge {
         if (jsExposed == null || jsExposed.isEmpty()) {
             return userSource;
         }
-        String prelude = prelude();
-        return prelude + "\n;(async () => {\n" + userSource + "\n})();\n";
+        // runJs evaluates with JS_EVAL_FLAG_ASYNC: top-level await is legal, top-level
+        // return is not. Strip only a top-level return so `return await $tools...`
+        // becomes the script completion value. Do not wrap another async function;
+        // JSON.stringify of that Promise is "{}".
+        return prelude() + "\n" + stripTopLevelReturn(userSource);
+    }
+
+    /** Drop {@code return} keywords that are not inside a function, string, or comment. */
+    static String stripTopLevelReturn(String source) {
+        if (source == null || source.isEmpty()) {
+            return source == null ? "" : source;
+        }
+        StringBuilder out = new StringBuilder(source.length());
+        int n = source.length();
+        int i = 0;
+        int depth = 0;
+        while (i < n) {
+            char c = source.charAt(i);
+            if (c == '/' && i + 1 < n && source.charAt(i + 1) == '/') {
+                int end = source.indexOf('\n', i);
+                if (end < 0) {
+                    out.append(source.substring(i));
+                    break;
+                }
+                out.append(source, i, end);
+                i = end;
+                continue;
+            }
+            if (c == '/' && i + 1 < n && source.charAt(i + 1) == '*') {
+                int end = source.indexOf("*/", i + 2);
+                if (end < 0) {
+                    out.append(source.substring(i));
+                    break;
+                }
+                out.append(source, i, end + 2);
+                i = end + 2;
+                continue;
+            }
+            if (c == '\'' || c == '"' || c == '`') {
+                int end = skipString(source, i);
+                out.append(source, i, end);
+                i = end;
+                continue;
+            }
+            if (depth == 0 && isReturnKeyword(source, i)) {
+                i += "return".length();
+                continue;
+            }
+            if (c == '{' || c == '(' || c == '[') {
+                depth++;
+            } else if ((c == '}' || c == ')' || c == ']') && depth > 0) {
+                depth--;
+            }
+            out.append(c);
+            i++;
+        }
+        return out.toString();
+    }
+
+    private static boolean isReturnKeyword(String source, int i) {
+        if (!source.startsWith("return", i)) {
+            return false;
+        }
+        if (i > 0 && isIdent(source.charAt(i - 1))) {
+            return false;
+        }
+        int after = i + "return".length();
+        return after >= source.length() || !isIdent(source.charAt(after));
+    }
+
+    private static boolean isIdent(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
+    }
+
+    private static int skipString(String source, int start) {
+        char quote = source.charAt(start);
+        int i = start + 1;
+        while (i < source.length()) {
+            char c = source.charAt(i);
+            if (c == '\\') {
+                i += 2;
+                continue;
+            }
+            if (c == quote) {
+                return i + 1;
+            }
+            i++;
+        }
+        return source.length();
     }
 
     static String prelude() {
@@ -60,7 +147,7 @@ public final class ScriptToolsBridge {
                 + "  get: function(_, name) {\n"
                 + "    return async function(input) {\n"
                 + "      var req = { op: '" + OP + "', name: String(name), input: input || {} };\n"
-                + "      var r = __caps(JSON.stringify(req));\n"
+                + "      var r = __caps(req);\n"
                 + "      if (typeof r === 'string') { try { r = JSON.parse(r); } catch (e) {} }\n"
                 + "      if (r && r.error) throw new Error(r.error);\n"
                 + "      return (r && r.result !== undefined) ? r.result : r;\n"

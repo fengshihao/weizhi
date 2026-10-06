@@ -77,6 +77,6 @@ public final class AgentToolsInstrumentedTest {
         tk.call("write_file", Map.of("path", "hay.txt", "content", "needle in haystack\n"));
         String code = "return await $tools.grep({pattern:'needle', path:'.'});";
         String out = tk.call("run_js", Map.of("code", code, "timeout_ms", 60_000));
-        assertTrue(out.contains("needle"));
+        assertTrue(out, out.contains("needle"));
     }
 }

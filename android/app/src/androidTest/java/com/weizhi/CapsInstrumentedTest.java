@@ -227,9 +227,8 @@ public final class CapsInstrumentedTest {
 
     @Test
     public void docxJsMarkdownToDocx() throws Exception {
-        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
-        File scriptDir = new File(ctx.getCacheDir(), "office-scripts-" + System.currentTimeMillis());
-        assertTrue(scriptDir.mkdirs());
+        File scriptDir = new File(context().getCacheDir(), "office-scripts-" + System.nanoTime());
+        assertTrue(scriptDir.getAbsolutePath(), scriptDir.mkdirs());
         copyAsset("office/docx.js", new File(scriptDir, "docx.js"));
         File workspace = workspace("office");
         write(new File(workspace, "in.md"), "# Title\n\nBody line\n");
@@ -251,9 +250,8 @@ public final class CapsInstrumentedTest {
 
     @Test
     public void docxJsGrepValidate() throws Exception {
-        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
-        File scriptDir = new File(ctx.getCacheDir(), "office-scripts-grep-" + System.currentTimeMillis());
-        assertTrue(scriptDir.mkdirs());
+        File scriptDir = new File(context().getCacheDir(), "office-scripts-grep-" + System.nanoTime());
+        assertTrue(scriptDir.getAbsolutePath(), scriptDir.mkdirs());
         copyAsset("office/docx.js", new File(scriptDir, "docx.js"));
         copyAsset("office/docx-raw.js", new File(scriptDir, "docx-raw.js"));
         File workspace = workspace("office-grep");
@@ -272,9 +270,9 @@ public final class CapsInstrumentedTest {
                             + "var v = validateDocx({ path: 'out/y.docx' });\n"
                             + "export default { matches: g.matches.length, valid: v.ok, text: doc.plainText() };\n",
                     15000);
-            assertTrue(out.contains("\"matches\":1"));
-            assertTrue(out.contains("\"valid\":true"));
-            assertTrue(out.contains("found"));
+            assertTrue(out, out.contains("\"matches\":1"));
+            assertTrue(out, out.contains("\"valid\":true"));
+            assertTrue(out, out.contains("found"));
         }
     }
 
@@ -297,15 +295,25 @@ public final class CapsInstrumentedTest {
     }
 
     private static void copyAsset(String assetPath, File dest) throws Exception {
-        Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
-        try (java.io.InputStream in = ctx.getAssets().open(assetPath);
-                java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
+        Context[] contexts = new Context[] {
+                InstrumentationRegistry.getInstrumentation().getContext(),
+                context()
+        };
+        java.io.FileNotFoundException missing = null;
+        for (Context ctx : contexts) {
+            try (java.io.InputStream in = ctx.getAssets().open(assetPath);
+                    java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+                return;
+            } catch (java.io.FileNotFoundException e) {
+                missing = e;
             }
         }
+        throw missing == null ? new java.io.FileNotFoundException(assetPath) : missing;
     }
 
     private static void expectFail(WeizhiEngine engine, String js, String needle) {
