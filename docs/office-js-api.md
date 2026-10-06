@@ -2,6 +2,8 @@
 
 路径：`assets/office/docx.js`。QuickJS **ES module**，无 npm。
 
+Agent 的发现面是 [`api-cards.jsonl`](api-cards.jsonl)（一行一张可粘贴调用）。本页给人读；API 变更时同时改对应卡的 `entry` / `summary`。
+
 ## 加载
 
 ```javascript

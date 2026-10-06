@@ -11,6 +11,8 @@ import com.weizhi.caps.AndroidCaps;
 import com.weizhi.platform.OrganizeFiles;
 import com.weizhi.platform.PlatformHost;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -274,6 +276,59 @@ public final class CapsInstrumentedTest {
             assertTrue(out, out.contains("\"valid\":true"));
             assertTrue(out, out.contains("found"));
         }
+    }
+
+    @Test
+    public void apiCardsRunOnAndroid() throws Exception {
+        String jsonl;
+        try (java.io.InputStream in = InstrumentationRegistry.getInstrumentation().getContext()
+                .getAssets().open("api-cards.jsonl")) {
+            jsonl = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        int ran = 0;
+        for (String line : jsonl.split("\n")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            JSONObject card = new JSONObject(line);
+            JSONArray platforms = card.getJSONArray("platforms");
+            if (platforms.length() != 1 || !"android".equals(platforms.getString(0))) {
+                continue;
+            }
+            String id = card.getString("id");
+            String entry = card.getString("entry");
+            File workspace = workspace("card-" + id.replace('.', '-'));
+            if ("android.intent.start".equals(id)) {
+                write(new File(workspace, "每周AI新闻.docx"), "docx");
+            }
+            try (WeizhiEngine engine = new WeizhiEngine()) {
+                AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
+                session.launchIntent = false;
+                session.launchShareSheet = false;
+                session.directoryPicker = new PlatformHost.DirectoryPicker() {
+                    @Override
+                    public String pick() {
+                        return "content://com.weizhi.smoke.documents/tree/picked";
+                    }
+                };
+                session.shareSink = new PlatformHost.ShareSink() {
+                    @Override
+                    public void onShare(String title, String text) {
+                    }
+                };
+                AndroidCaps.install(engine, session);
+                String out = engine.runJs(entry, 8000);
+                assertTrue(id + " => " + out, out != null && out.length() > 2);
+                if ("android.intent.start".equals(id) || "android.share.send".equals(id)) {
+                    assertTrue(id + " => " + out, out.contains("\"ok\":true"));
+                }
+                if ("android.files.pickDirectory".equals(id)) {
+                    assertTrue(id + " => " + out, out.contains("content://"));
+                }
+            }
+            ran++;
+        }
+        assertTrue("no android-only api cards", ran >= 3);
     }
 
     @Test

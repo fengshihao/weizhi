@@ -1,6 +1,6 @@
 # Agent1 集成：Word（docx.js / docx-raw.js）
 
-日期：2026-09-29。来源：Issue #6 演进。真源 API 见 [office-js-api.md](office-js-api.md)。
+日期：2026-09-29。来源：Issue #6 演进。给人读的 API 见 [office-js-api.md](office-js-api.md)。Agent 发现面是 [api-cards.jsonl](api-cards.jsonl)（`./sync-weizhi.sh` 之后导入能力索引）；不要把 `office-js-api.md` 或 `docs/system/*.md` 打进 APK。
 
 ---
 

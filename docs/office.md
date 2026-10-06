@@ -14,7 +14,7 @@
 
 ## API 摘要
 
-见 **[office-js-api.md](office-js-api.md)**。Agent1 接线见 **[AGENT1_DOCX_INTEGRATION.md](AGENT1_DOCX_INTEGRATION.md)**。
+给人读：**[office-js-api.md](office-js-api.md)**。Agent 检索：**[api-cards.jsonl](api-cards.jsonl)**。Agent1 接线见 **[AGENT1_DOCX_INTEGRATION.md](AGENT1_DOCX_INTEGRATION.md)**。
 
 ## 测试
 

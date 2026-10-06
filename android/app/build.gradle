@@ -28,6 +28,15 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    sourceSets {
+        androidTest {
+            assets {
+                srcDir("${rootDir}/../docs")
+                include("api-cards.jsonl")
+            }
+        }
+    }
 }
 
 dependencies {
