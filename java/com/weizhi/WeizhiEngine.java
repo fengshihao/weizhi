@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -361,74 +362,142 @@ public final class WeizhiEngine implements AutoCloseable {
         });
     }
 
+    private static final int MAX_FETCH_REDIRECTS = 8;
+
     private void doFetch(long engine, long requestId, String method, String url, String headersJson, byte[] body)
             throws IOException {
-        URL parsed = new URL(url);
-        String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
-        if (fetchHostAllowlist != null && fetchHostAllowlist.length > 0) {
-            boolean allowed = false;
-            for (String suffix : fetchHostAllowlist) {
-                if (suffix == null || suffix.isEmpty()) {
-                    continue;
-                }
-                String s = suffix.toLowerCase(Locale.US);
-                if (host.equals(s) || host.endsWith("." + s)) {
-                    allowed = true;
-                    break;
-                }
-            }
-            if (!allowed) {
+        String currentUrl = url;
+        String currentMethod = method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US);
+        byte[] currentBody = body;
+        int redirects = 0;
+
+        while (true) {
+            URL parsed = new URL(currentUrl);
+            String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
+            if (!isFetchHostAllowed(host)) {
                 nativeCompleteFetch(engine, requestId, 0, null, null,
                         "fetch blocked: host \"" + host + "\" is not allowlisted "
                                 + "(ask the host to widen enableFetch allowlist, or use an approved URL)");
                 return;
             }
-        }
 
-        HttpURLConnection conn = (HttpURLConnection) parsed.openConnection();
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(30_000);
-        conn.setRequestMethod(method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US));
-        conn.setInstanceFollowRedirects(true);
-        if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
-            try {
-                applyHeaders(conn, headersJson);
-            } catch (Exception e) {
-                nativeCompleteFetch(engine, requestId, 0, null, null,
-                        "bad argument: fetch headers must be a flat JSON object of string values");
-                return;
-            }
-        }
-        if (body != null && body.length > 0) {
-            conn.setDoOutput(true);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body);
-            }
-        }
-
-        int status = conn.getResponseCode();
-        InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-        if (stream == null) {
-            stream = conn.getInputStream();
-        }
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        if (stream != null) {
-            byte[] buf = new byte[8192];
-            int n;
-            long total = 0;
-            while ((n = stream.read(buf)) >= 0) {
-                total += n;
-                if (total > maxIoBytes) {
+            HttpURLConnection conn = (HttpURLConnection) parsed.openConnection();
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(30_000);
+            conn.setRequestMethod(currentMethod);
+            conn.setInstanceFollowRedirects(false);
+            if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
+                try {
+                    applyHeaders(conn, headersJson);
+                } catch (Exception e) {
+                    conn.disconnect();
                     nativeCompleteFetch(engine, requestId, 0, null, null,
-                            "too large: fetch response exceeds " + maxIoBytes
-                                    + " bytes (raise WeizhiLimits.fsIoBytes or request a smaller payload)");
+                            "bad argument: fetch headers must be a flat JSON object of string values");
                     return;
                 }
-                bos.write(buf, 0, n);
+            }
+            if (currentBody != null && currentBody.length > 0) {
+                conn.setDoOutput(true);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(currentBody);
+                }
+            }
+
+            int status = conn.getResponseCode();
+            if (status >= 300 && status < 400) {
+                String location = conn.getHeaderField("Location");
+                drainAndDisconnect(conn);
+                if (location == null || location.isEmpty()) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: redirect response missing Location header");
+                    return;
+                }
+                if (redirects >= MAX_FETCH_REDIRECTS) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: too many redirects");
+                    return;
+                }
+                redirects++;
+                try {
+                    currentUrl = new URL(parsed, location).toString();
+                } catch (MalformedURLException e) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: invalid redirect Location");
+                    return;
+                }
+                if (status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_SEE_OTHER) {
+                    if (!"GET".equals(currentMethod) && !"HEAD".equals(currentMethod)) {
+                        currentMethod = "GET";
+                        currentBody = null;
+                    }
+                }
+                continue;
+            }
+
+            InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (stream == null) {
+                stream = conn.getInputStream();
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            if (stream != null) {
+                byte[] buf = new byte[8192];
+                int n;
+                long total = 0;
+                while ((n = stream.read(buf)) >= 0) {
+                    total += n;
+                    if (total > maxIoBytes) {
+                        conn.disconnect();
+                        nativeCompleteFetch(engine, requestId, 0, null, null,
+                                "too large: fetch response exceeds " + maxIoBytes
+                                        + " bytes (raise WeizhiLimits.fsIoBytes or request a smaller payload)");
+                        return;
+                    }
+                    bos.write(buf, 0, n);
+                }
+            }
+            String headersOut = headersToJson(conn.getHeaderFields());
+            conn.disconnect();
+            nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
+            return;
+        }
+    }
+
+    private boolean isFetchHostAllowed(String host) {
+        if (fetchHostAllowlist == null || fetchHostAllowlist.length == 0) {
+            return true;
+        }
+        String h = host == null ? "" : host.toLowerCase(Locale.US);
+        for (String suffix : fetchHostAllowlist) {
+            if (suffix == null || suffix.isEmpty()) {
+                continue;
+            }
+            String s = suffix.toLowerCase(Locale.US);
+            if (h.equals(s) || h.endsWith("." + s)) {
+                return true;
             }
         }
-        String headersOut = headersToJson(conn.getHeaderFields());
-        nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
+        return false;
+    }
+
+    private static void drainAndDisconnect(HttpURLConnection conn) {
+        try {
+            InputStream stream = conn.getErrorStream();
+            if (stream == null) {
+                stream = conn.getInputStream();
+            }
+            if (stream != null) {
+                byte[] buf = new byte[4096];
+                while (stream.read(buf) >= 0) {
+                    // discard redirect body
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        } finally {
+            conn.disconnect();
+        }
     }
 
     private static void applyHeaders(HttpURLConnection conn, String headersJson) {

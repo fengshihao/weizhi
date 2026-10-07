@@ -57,6 +57,7 @@ public final class SmokeTest {
 
         System.out.println("JNI smoke OK");
         desktopCaps();
+        FetchRedirectTest.run();
         OfficeTest.main(args);
         ApiCardsTest.main(args);
     }
