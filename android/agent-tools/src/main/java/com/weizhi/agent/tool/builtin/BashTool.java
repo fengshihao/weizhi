@@ -14,7 +14,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * 白名单 bash（无 shell）：{@link ProcessBuilder} 直执行 + {@link WorkspaceSandbox} 路径校验。
@@ -224,13 +227,31 @@ public class BashTool {
             pb.redirectErrorStream(true);
             Process proc = pb.start();
 
+            FutureTask<String> outputTask = new FutureTask<>(() -> readOutput(proc.getInputStream()));
+            Thread drainThread = new Thread(outputTask, "bash-drain");
+            drainThread.setDaemon(true);
+            drainThread.start();
+
             boolean finished = proc.waitFor(TIMEOUT_MS, TimeUnit.MILLISECONDS);
             if (!finished) {
-                proc.destroy();
+                proc.destroyForcibly();
+                outputTask.cancel(true);
                 return "Error: command timed out after " + TIMEOUT_MS + "ms";
             }
 
-            String output = readOutput(proc.getInputStream());
+            String output;
+            try {
+                output = outputTask.get(2000, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                return "Error: failed to read command output";
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                String msg = cause == null ? e.getMessage() : cause.getMessage();
+                return "Error: read failed: " + (msg == null ? "unknown" : msg);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return "Error: command interrupted";
+            }
             int exitCode = proc.exitValue();
             if (exitCode != 0 && output.isEmpty()) {
                 return "Error: command exited with code " + exitCode;
@@ -255,6 +276,9 @@ public class BashTool {
                 if (byteCount + n > MAX_OUTPUT_BYTES) {
                     sb.append(buf, 0, MAX_OUTPUT_BYTES - byteCount);
                     truncated = true;
+                    while ((n = reader.read(buf)) >= 0) {
+                        // discard remainder so the child process cannot block on a full pipe
+                    }
                     break;
                 }
                 sb.append(buf, 0, n);
