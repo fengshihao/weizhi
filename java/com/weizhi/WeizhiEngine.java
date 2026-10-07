@@ -380,17 +380,7 @@ public final class WeizhiEngine implements AutoCloseable {
                     return;
                 }
                 try {
-                    Path root = Paths.get(fsRoot == null ? "." : fsRoot).toAbsolutePath().normalize();
-                    Path target = root.resolve(relpath).normalize();
-                    if (!target.startsWith(root)) {
-                        nativeComplete(engine, requestId, false, null, "path escape");
-                        return;
-                    }
-                    if (containsSymlinkUnder(root, target)) {
-                        nativeComplete(engine, requestId, false, null,
-                                "path escape: symlink inside workspace is not allowed");
-                        return;
-                    }
+                    Path target = resolveFsTarget(relpath);
                     switch (op) {
                         case 1: { // READ
                             byte[] bytes = Files.readAllBytes(target);
@@ -414,6 +404,23 @@ public final class WeizhiEngine implements AutoCloseable {
             nativeComplete(engine, requestId, false, null,
                     "queue full: too many pending async I/O requests (script is flooding async operations)");
         }
+    }
+
+    /** 相对或绝对路径：normalize 后必须在 fsRoot 下（与 C 层 weizhi_resolve_workspace_path 对齐）。 */
+    private Path resolveFsTarget(String path) throws IOException {
+        if (path == null || path.isEmpty() || path.indexOf('\\') >= 0) {
+            throw new IOException("invalid path");
+        }
+        Path root = Paths.get(fsRoot == null ? "." : fsRoot).toAbsolutePath().normalize();
+        Path input = Paths.get(path);
+        Path target = input.isAbsolute() ? input.normalize() : root.resolve(input).normalize();
+        if (!target.startsWith(root)) {
+            throw new IOException("path escape");
+        }
+        if (containsSymlinkUnder(root, target)) {
+            throw new IOException("path escape: symlink inside workspace is not allowed");
+        }
+        return target;
     }
 
     /** workspace 内任何一段为符号链接都拒绝：normalize+startsWith 挡不住 symlink 逃逸。 */

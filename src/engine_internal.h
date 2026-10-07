@@ -157,6 +157,9 @@ void weizhi_wake(Engine *engine);
 JSValue weizhi_await_value(Engine *engine, JSValue value);
 int64_t weizhi_pending_add(Engine *engine, JSValue resolve, JSValue reject);
 int weizhi_path_ok(const char *relpath);
+/* fs / zip VFS: workspace-relative or absolute; resolved under fs_root by weizhi_resolve_workspace_path. */
+int weizhi_fs_path_ok(const char *path);
+int weizhi_resolve_workspace_path(Engine *engine, const char *path, char *out, size_t out_len, const char **error);
 JSValue weizhi_bytes_to_buffer(JSContext *ctx, const unsigned char *bytes, size_t len);
 JSValue weizhi_throw_unsupported(JSContext *ctx, const char *what);
 JSValue weizhi_throw_bad_arg(JSContext *ctx, const char *api, const char *detail);

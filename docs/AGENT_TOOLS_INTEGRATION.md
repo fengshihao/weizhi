@@ -85,8 +85,9 @@ Path ws = workspace.toPath();
 
 **工具环沙箱**（`WorkspaceSandbox`）与 **引擎 `fs`** 是两套实现，但应对准同一磁盘目录：
 
-- 写操作：仅 workspace 内相对路径  
-- **可选** `extraReadRoot`：用户授权只读目录（如 SAF 映射后的路径）；**引擎 `fs` 侧双根尚未实现**（ROADMAP A），只读外部文件可先用工具环 `read_file`/`grep`/`bash` 读绝对路径  
+- 引擎 **`fs` / workspace `import`**：相对或绝对路径，归一化后须在 `setFsRoot` 下（见 [INTEGRATION_FOR_AI.md §0.1](INTEGRATION_FOR_AI.md#01-路径策略引擎-fs--workspace-import)）。
+- 工具环写操作：`WorkspaceSandbox.resolveWrite`（相对路径为主；绝对路径若在 baseDir 下也可解析）。
+- **可选** `extraReadRoot`：用户授权只读目录（如 SAF 映射后的路径）；**引擎 `fs` 侧双根尚未实现**（ROADMAP A），只读外部文件可先用工具环 `read_file`/`grep`/`bash`  
 - **可选** `readMounts`：`ReadMount(logicalPrefix, root)` 前缀只读挂载（Agent1 文档区 `docs/system`、`docs/capabilities` 等）；`grep`/`glob`/`read_file` 输出与入参均用逻辑路径。与 `extraReadRoot` 二选一，挂载优先。
 
 ```java

@@ -39,7 +39,7 @@
 - 没有 npm、没有 Node 的 `http`/`net` 模块、没有流式 Response.body。有精简的 `Blob` / `FormData`（够 `fetch` 上传用）。
 - **没有 Wasm `loadPack`**：不要写 `loadPack(...)`；能力扩展走宿主签名 SO 或 `addFunction`。
 - 没有跨多次 `runJs` 的持久事件循环；上一轮的 timer / 未完成异步不会带到下一轮。注意：同一引擎里多次 `runJs` 共用全局词法环境，`const` / `let` 不能重复声明同名绑定。
-- 文件系统是沙盒：只用相对路径；试图逃出工作区会失败（错误里含 `path` 或 `escape`）。
+- 文件系统是沙盒：`fs` 与 workspace 内的 `import` 可用相对或绝对路径，归一化后必须在 `setFsRoot` 工作区内；逃出会失败（错误里含 `path` 或 `escape`）。Caps 的 `android.files.*` / `intent.start({ path })` 仍用工作区**相对**路径。
 - 单次 `fs` 读/写以及单次 `fetch` 请求/响应载荷上限约 **32 MB**（不是整盘配额）；超限错误含 `too large`。
 - 不能自己指定 SO 下载 URL，也不能 `dlopen`；只能按宿主目录里的**插件名**请求。
 

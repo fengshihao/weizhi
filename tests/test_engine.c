@@ -538,6 +538,27 @@ static void test_fs_sync_and_promises(void) {
     EXPECT(result.ok == 0);
     EXPECT(result.error != NULL && (strstr(result.error, "path") != NULL || strstr(result.error, "escape") != NULL));
     weizhi_result_free(&result);
+    {
+        char folder_real[512];
+        char js[640];
+        EXPECT(realpath(dir, folder_real) != NULL);
+        result = weizhi_run_js(engine, "fs.writeFileSync('abs.txt','abs');", 2000);
+        EXPECT(result.ok == 1);
+        weizhi_result_free(&result);
+        snprintf(js, sizeof(js), "fs.readFileSync('%s/abs.txt').toString()", folder_real);
+        result = weizhi_run_js(engine, js, 2000);
+        EXPECT(result.ok == 1);
+        EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"abs\"") == 0);
+        weizhi_result_free(&result);
+        result = weizhi_run_js(engine, "fs.readFileSync('./abs.txt').toString()", 2000);
+        EXPECT(result.ok == 1);
+        EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"abs\"") == 0);
+        weizhi_result_free(&result);
+        result = weizhi_run_js(engine, "fs.readFileSync('/etc/passwd').toString()", 1000);
+        EXPECT(result.ok == 0);
+        EXPECT(result.error != NULL && strstr(result.error, "escape") != NULL);
+        weizhi_result_free(&result);
+    }
     result = weizhi_run_js(engine,
                            "await fs.promises.writeFile('b.txt','world'); "
                            "(await fs.promises.readFile('b.txt')).toString()",
@@ -615,6 +636,19 @@ static void test_workspace_catalog_module_fallback(void) {
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
     weizhi_result_free(&result);
+    {
+        char abs_helper[512];
+        char js[640];
+        EXPECT(realpath(fs_dir, abs_helper) != NULL);
+        snprintf(js, sizeof(js),
+                 "import { fromWorkspace } from '%s/jobs/helper.js';\n"
+                 "export default fromWorkspace;\n",
+                 abs_helper);
+        result = weizhi_run_js_ex(engine, js, 2000, "jobs/run.js");
+        EXPECT(result.ok == 1);
+        EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
+        weizhi_result_free(&result);
+    }
     result = weizhi_run_js_ex(engine,
                               "import { fromCatalog } from 'docx';\n"
                               "export default fromCatalog;\n",

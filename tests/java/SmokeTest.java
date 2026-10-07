@@ -28,11 +28,25 @@ public final class SmokeTest {
             out = engine.runJs("fs.writeFileSync('a.txt','hello'); fs.readFileSync('a.txt').toString()", 2000);
             expectEq("\"hello\"", out);
 
+            Path absInWs = fsRoot.resolve("abs-sync.txt").toAbsolutePath().normalize();
+            out = engine.runJs(
+                    "fs.writeFileSync('" + jsString(absInWs) + "','abs');"
+                            + "fs.readFileSync('" + jsString(absInWs) + "').toString()",
+                    2000);
+            expectEq("\"abs\"", out);
+
             out = engine.runJs(
                     "await fs.promises.writeFile('b.txt','world');"
                             + "(await fs.promises.readFile('b.txt')).toString()",
                     5000);
             expectEq("\"world\"", out);
+
+            Path absAsync = fsRoot.resolve("abs-async.txt").toAbsolutePath().normalize();
+            out = engine.runJs(
+                    "await fs.promises.writeFile('" + jsString(absAsync) + "','async-abs');"
+                            + "(await fs.promises.readFile('" + jsString(absAsync) + "')).toString()",
+                    5000);
+            expectEq("\"async-abs\"", out);
 
             out = engine.runJs(
                     "const z = require('zlib');"
@@ -149,6 +163,10 @@ public final class SmokeTest {
             }
         }
         System.out.println("Desktop caps OK (" + platform + ")");
+    }
+
+    private static String jsString(Path path) {
+        return path.toString().replace("\\", "\\\\").replace("'", "\\'");
     }
 
     private static void expectEq(String want, String got) {

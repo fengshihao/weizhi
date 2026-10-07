@@ -405,55 +405,7 @@ static JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val, int argc,
 }
 
 static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_t out_len, const char **error) {
-    char folder_real[PATH_MAX];
-    char joined[PATH_MAX];
-    char file_real[PATH_MAX];
-    size_t folder_len;
-    if (engine->fs_root == NULL) {
-        *error = "workspace not set";
-        return -1;
-    }
-    if (!weizhi_path_ok(relpath)) {
-        *error = "invalid path";
-        return -1;
-    }
-    if (realpath(engine->fs_root, folder_real) == NULL) {
-        *error = "workspace not found";
-        return -1;
-    }
-    snprintf(joined, sizeof(joined), "%s/%s", folder_real, relpath);
-    if (realpath(joined, file_real) == NULL) {
-        /* Parent directory must exist when creating a new file */
-        char parent[PATH_MAX];
-        char *slash;
-        snprintf(parent, sizeof(parent), "%s", joined);
-        slash = strrchr(parent, '/');
-        if (slash == NULL) {
-            *error = "invalid path";
-            return -1;
-        }
-        *slash = '\0';
-        if (realpath(parent, file_real) == NULL) {
-            *error = "path not found";
-            return -1;
-        }
-        folder_len = strlen(folder_real);
-        if (strncmp(file_real, folder_real, folder_len) != 0 ||
-            (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-            *error = "path escape";
-            return -1;
-        }
-        snprintf(out, out_len, "%s/%s", file_real, slash + 1);
-        return 0;
-    }
-    folder_len = strlen(folder_real);
-    if (strncmp(file_real, folder_real, folder_len) != 0 ||
-        (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-        *error = "path escape";
-        return -1;
-    }
-    snprintf(out, out_len, "%s", file_real);
-    return 0;
+    return weizhi_resolve_workspace_path(engine, relpath, out, out_len, error);
 }
 
 static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
@@ -1426,17 +1378,8 @@ static JSModuleDef *compile_js_module(JSContext *ctx, const char *module_name, c
     return m;
 }
 
-static int module_name_rejected(const char *module_name) {
-    if (module_name == NULL || module_name[0] == '\0') {
-        return 1;
-    }
-    if (module_name[0] == '/' || strchr(module_name, '\\') != NULL) {
-        return 1;
-    }
-    if (strstr(module_name, "..") != NULL) {
-        return 1;
-    }
-    return 0;
+static int module_path_spec(const char *module_name) {
+    return module_name != NULL && (module_name[0] == '/' || strchr(module_name, '/') != NULL);
 }
 
 static int is_catalog_leaf_js(const char *leaf) {
@@ -1472,13 +1415,14 @@ static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const ch
     char bare_leaf[72];
     JSModuleDef *m;
 
-    if (module_name_rejected(module_name)) {
+    errbuf[0] = '\0';
+    if (module_name == NULL || module_name[0] == '\0' || strchr(module_name, '\\') != NULL) {
         JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid path", module_name);
         return NULL;
     }
 
     slash = strchr(module_name, '/');
-    if (slash == NULL) {
+    if (!module_path_spec(module_name)) {
         leaf = module_name;
         if (!is_catalog_leaf_js(leaf)) {
             if (strlen(module_name) + 4 >= sizeof(bare_leaf)) {
@@ -1495,11 +1439,23 @@ static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const ch
         return load_catalog_leaf_module(ctx, engine, module_name, leaf);
     }
 
-    if (weizhi_path_ok(module_name) &&
-        weizhi_read_workspace_script(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf)) == 0) {
-        m = compile_js_module(ctx, module_name, bytes, length);
-        free(bytes);
-        return m;
+    {
+        int rc = weizhi_read_workspace_script(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf));
+        if (rc == 0) {
+            m = compile_js_module(ctx, module_name, bytes, length);
+            free(bytes);
+            return m;
+        }
+        if (rc == -2) {
+            JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
+                                   errbuf[0] != '\0' ? errbuf : "path escape");
+            return NULL;
+        }
+        if (rc != -1 || strcmp(errbuf, "script not found") != 0) {
+            JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
+                                   errbuf[0] != '\0' ? errbuf : "not found");
+            return NULL;
+        }
     }
 
     leaf = strrchr(module_name, '/');
@@ -1548,7 +1504,7 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
         }
         return m;
     }
-    if (strchr(module_name, '/') != NULL) {
+    if (module_path_spec(module_name)) {
         return load_user_js_module(ctx, engine, module_name);
     }
     if (is_catalog_leaf_js(module_name)) {

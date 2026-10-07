@@ -126,7 +126,7 @@ static int mkdir_p(Engine *engine, const char *relpath, char *errbuf, size_t err
     char tmp[PATH_MAX];
     size_t i;
     size_t len;
-    if (relpath == NULL || relpath[0] == '\0' || !weizhi_path_ok(relpath)) {
+    if (relpath == NULL || relpath[0] == '\0' || !weizhi_fs_path_ok(relpath)) {
         snprintf(errbuf, errbuf_len, "invalid path");
         return -1;
     }
@@ -138,7 +138,7 @@ static int mkdir_p(Engine *engine, const char *relpath, char *errbuf, size_t err
     for (i = 1; i < len; i++) {
         if (tmp[i] == '/') {
             tmp[i] = '\0';
-            if (tmp[0] != '\0' && weizhi_path_ok(tmp)) {
+            if (tmp[0] != '\0' && weizhi_fs_path_ok(tmp)) {
                 if (call_vfs(engine, WEIZHI_VFS_MKDIR, tmp, NULL, NULL, NULL, errbuf, errbuf_len) != 0) {
                     return -1;
                 }
@@ -348,7 +348,7 @@ int weizhi_zip_extract(Engine *engine, const char *zip_rel, const char *dest_rel
         snprintf(errbuf, errbuf_len, "bad argument: zip.extractSync");
         return -1;
     }
-    if (!weizhi_path_ok(zip_rel) || !weizhi_path_ok(dest_rel)) {
+    if (!weizhi_fs_path_ok(zip_rel) || !weizhi_fs_path_ok(dest_rel)) {
         snprintf(errbuf, errbuf_len, "invalid path");
         return -1;
     }
@@ -431,7 +431,7 @@ int weizhi_zip_extract(Engine *engine, const char *zip_rel, const char *dest_rel
             continue;
         }
         if (snprintf(joined, sizeof(joined), "%s/%s", dest_rel, name) >= (int)sizeof(joined) ||
-            !weizhi_path_ok(joined)) {
+            !weizhi_fs_path_ok(joined)) {
             skipped++;
             off = data_off + comp_size;
             continue;
@@ -681,7 +681,7 @@ static int walk_add_file(ZipCreateWalk *w, const char *abs_path) {
         return 0;
     }
     if (snprintf(vfs_rel, sizeof(vfs_rel), "%s/%s", w->src_root_rel, entry) >= (int)sizeof(vfs_rel) ||
-        !weizhi_path_ok(vfs_rel)) {
+        !weizhi_fs_path_ok(vfs_rel)) {
         snprintf(w->errbuf, w->errbuf_len, "invalid path");
         return -1;
     }
@@ -765,7 +765,7 @@ int weizhi_zip_create(Engine *engine, const char *src_rel, const char *zip_rel, 
         snprintf(errbuf, errbuf_len, "bad argument: zip.createSync");
         return -1;
     }
-    if (!weizhi_path_ok(src_rel) || !weizhi_path_ok(zip_rel)) {
+    if (!weizhi_fs_path_ok(src_rel) || !weizhi_fs_path_ok(zip_rel)) {
         snprintf(errbuf, errbuf_len, "invalid path");
         return -1;
     }

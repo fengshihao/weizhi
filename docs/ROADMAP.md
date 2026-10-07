@@ -20,7 +20,7 @@
 ### 工作区（可读写）
 
 - 宿主 `setFsRoot` / caps 工作区：AI **可读可写**。
-- 相对路径、`process.cwd`、脚本里的 `fs` / `files.*` 默认锚定这里。
+- 脚本里引擎 `fs` / workspace `import`：相对或绝对路径均可，归一化后须在本根下；Caps `files.*` 仍多用相对路径。`process.cwd` 锚定工作区。
 
 ### 只读根（保护，不是「技能库」）
 

@@ -219,10 +219,7 @@ int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, siz
 
 int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **out, size_t *out_len,
                                  char *errbuf, size_t errbuf_len) {
-    char folder_real[PATH_MAX];
-    char joined[PATH_MAX];
-    char file_real[PATH_MAX];
-    size_t folder_len;
+    char path[PATH_MAX];
     const char *error = NULL;
     uint8_t *bytes;
     size_t length = 0;
@@ -237,13 +234,7 @@ int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **
         }
         return -1;
     }
-    if (engine->fs_root == NULL) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "workspace not set");
-        }
-        return -1;
-    }
-    if (!weizhi_path_ok(relpath)) {
+    if (!weizhi_fs_path_ok(relpath)) {
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "invalid path");
         }
@@ -255,28 +246,13 @@ int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **
         }
         return -1;
     }
-    if (realpath(engine->fs_root, folder_real) == NULL) {
+    if (weizhi_resolve_workspace_path(engine, relpath, path, sizeof(path), &error) != 0) {
         if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "workspace not found");
+            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "invalid path");
         }
-        return -1;
+        return (error != NULL && strcmp(error, "path escape") == 0) ? -2 : -1;
     }
-    snprintf(joined, sizeof(joined), "%s/%s", folder_real, relpath);
-    if (realpath(joined, file_real) == NULL) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "script not found");
-        }
-        return -1;
-    }
-    folder_len = strlen(folder_real);
-    if (strncmp(file_real, folder_real, folder_len) != 0 ||
-        (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "path escape");
-        }
-        return -2;
-    }
-    bytes = read_file(file_real, &length, &error);
+    bytes = read_file(path, &length, &error);
     if (bytes == NULL) {
         if (errbuf != NULL && errbuf_len > 0) {
             snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "script not found");
@@ -1106,4 +1082,94 @@ int weizhi_path_ok(const char *relpath) {
         }
     }
     return 1;
+}
+
+int weizhi_fs_path_ok(const char *path) {
+    size_t i;
+    if (path == NULL || path[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; path[i] != '\0'; i++) {
+        if (path[i] == '\\') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int workspace_path_under_root(const char *folder_real, const char *file_real) {
+    size_t folder_len = strlen(folder_real);
+    if (strncmp(file_real, folder_real, folder_len) != 0) {
+        return 0;
+    }
+    if (file_real[folder_len] != '/' && file_real[folder_len] != '\0') {
+        return 0;
+    }
+    return 1;
+}
+
+int weizhi_resolve_workspace_path(Engine *engine, const char *path, char *out, size_t out_len, const char **error) {
+    char folder_real[PATH_MAX];
+    char joined[PATH_MAX];
+    char file_real[PATH_MAX];
+    if (error == NULL) {
+        return -1;
+    }
+    if (engine == NULL || engine->fs_root == NULL) {
+        *error = "workspace not set";
+        return -1;
+    }
+    if (!weizhi_fs_path_ok(path)) {
+        *error = "invalid path";
+        return -1;
+    }
+    if (realpath(engine->fs_root, folder_real) == NULL) {
+        *error = "workspace not found";
+        return -1;
+    }
+    if (path[0] == '/') {
+        if (snprintf(joined, sizeof(joined), "%s", path) >= (int)sizeof(joined)) {
+            *error = "invalid path";
+            return -1;
+        }
+    } else if (snprintf(joined, sizeof(joined), "%s/%s", folder_real, path) >= (int)sizeof(joined)) {
+        *error = "invalid path";
+        return -1;
+    }
+    if (realpath(joined, file_real) == NULL) {
+        char parent[PATH_MAX];
+        char *slash;
+        if (snprintf(parent, sizeof(parent), "%s", joined) >= (int)sizeof(parent)) {
+            *error = "invalid path";
+            return -1;
+        }
+        slash = strrchr(parent, '/');
+        if (slash == NULL) {
+            *error = "invalid path";
+            return -1;
+        }
+        *slash = '\0';
+        if (realpath(parent, file_real) == NULL) {
+            *error = "path not found";
+            return -1;
+        }
+        if (!workspace_path_under_root(folder_real, file_real)) {
+            *error = "path escape";
+            return -1;
+        }
+        if (snprintf(out, out_len, "%s/%s", file_real, slash + 1) >= (int)out_len) {
+            *error = "invalid path";
+            return -1;
+        }
+        return 0;
+    }
+    if (!workspace_path_under_root(folder_real, file_real)) {
+        *error = "path escape";
+        return -1;
+    }
+    if (snprintf(out, out_len, "%s", file_real) >= (int)out_len) {
+        *error = "invalid path";
+        return -1;
+    }
+    return 0;
 }
