@@ -297,6 +297,33 @@ public final class CapsInstrumentedTest {
     }
 
     @Test
+    public void pptxJsRender() throws Exception {
+        File scriptDir = new File(context().getCacheDir(), "office-scripts-pptx-" + System.nanoTime());
+        assertTrue(scriptDir.getAbsolutePath(), scriptDir.mkdirs());
+        copyAsset("office/pptx.js", new File(scriptDir, "pptx.js"));
+        copyAsset("office/pptx-build.js", new File(scriptDir, "pptx-build.js"));
+        File workspace = workspace("office-pptx");
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            AndroidCaps.install(engine, new AndroidCaps.Session(context(), workspace));
+            engine.setScriptFolder(scriptDir.getAbsolutePath());
+            String out = engine.runJs(
+                    "import { renderPptx } from './pptx.js';\n"
+                            + "export default renderPptx({ theme:'briefing', slides:["
+                            + "{ layout:'title', title:'封面' },"
+                            + "{ layout:'bullets', title:'结论', items:['一点'] },"
+                            + "{ layout:'shapes', shapes:[{ preset:'ellipse', col:0, row:0, colSpan:4, rowSpan:3, fill:'accent', text:'A' }] }"
+                            + "]}, 'out/deck.pptx');\n",
+                    15000);
+            assertTrue(out, out.contains("\"ok\":true"));
+            assertTrue(out, out.contains("\"slides\":3"));
+        }
+        byte[] head = java.nio.file.Files.readAllBytes(new File(workspace, "out/deck.pptx").toPath());
+        assertTrue(head.length >= 2);
+        assertEquals('P', (char) head[0]);
+        assertEquals('K', (char) head[1]);
+    }
+
+    @Test
     public void apiCardsRunOnAndroid() throws Exception {
         String jsonl;
         try (java.io.InputStream in = InstrumentationRegistry.getInstrumentation().getContext()
