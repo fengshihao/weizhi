@@ -5,15 +5,21 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import com.weizhi.platform.MiniJson;
+import java.lang.ref.Cleaner;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Weizhi Java wrapper. Async I/O uses {@link ExecutorService} by default, then completes back into the C queue.
@@ -29,7 +35,16 @@ public final class WeizhiEngine implements AutoCloseable {
         System.loadLibrary("weizhijni");
     }
 
+    /** 兜底回收 native 句柄：宿主忘记 {@link #close()} 时避免泄漏；守护线程不影响 JVM 退出。 */
+    private static final Cleaner NATIVE_CLEANER = Cleaner.create(task -> {
+        Thread t = new Thread(task, "weizhi-native-cleaner");
+        t.setDaemon(true);
+        return t;
+    });
+
     private long nativeHandle;
+    private final AtomicBoolean nativeReleased = new AtomicBoolean(false);
+    private final Cleaner.Cleanable nativeGuard;
     private final ExecutorService executor;
     private final boolean ownsExecutor;
     private final long maxIoBytes;
@@ -38,6 +53,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private boolean fetchEnabled;
     private boolean hostCallInstalled;
     private HostCall hostCall;
+    /** Java 侧镜像的取消标记：cancel() 后排队中的异步任务直接拒绝，避免取消后仍执行全量 I/O。 */
+    private volatile boolean cancelRequested;
 
     /** Sync host bridge used by platform objects (`android` / `mac` / `linux`). Args and return are JSON. */
     public interface HostCall {
@@ -63,7 +80,20 @@ public final class WeizhiEngine implements AutoCloseable {
             this.executor = executor;
             this.ownsExecutor = false;
         } else {
-            this.executor = Executors.newFixedThreadPool(asyncIo);
+            // 有界队列：脚本可以疯狂排队 async I/O，不能让队列无界增长吃内存；
+            // 拒绝时由 onVfsAsync/onFetchAsync 以错误完成请求。
+            int queueCapacity = Math.max(asyncIo * 4, 64);
+            ThreadPoolExecutor pool = new ThreadPoolExecutor(
+                    asyncIo, asyncIo, 60L, TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(queueCapacity),
+                    task -> {
+                        Thread t = new Thread(task, "weizhi-async-io");
+                        t.setDaemon(true);
+                        return t;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
+            pool.allowCoreThreadTimeOut(true);
+            this.executor = pool;
             this.ownsExecutor = true;
         }
         this.nativeHandle = nativeOpen(
@@ -77,6 +107,31 @@ public final class WeizhiEngine implements AutoCloseable {
                 this.executor.shutdownNow();
             }
             throw new IllegalStateException("weizhi_open failed");
+        }
+        this.nativeGuard = NATIVE_CLEANER.register(this, new NativeHandleGuard(
+                this.nativeHandle, this.nativeReleased, this.ownsExecutor ? this.executor : null));
+    }
+
+    /** 只允许 close() 与 GC Cleaner 其中一方释放一次 native 句柄。 */
+    private static final class NativeHandleGuard implements Runnable {
+        private final long handle;
+        private final AtomicBoolean released;
+        private final ExecutorService ownedExecutor;
+
+        NativeHandleGuard(long handle, AtomicBoolean released, ExecutorService ownedExecutor) {
+            this.handle = handle;
+            this.released = released;
+            this.ownedExecutor = ownedExecutor;
+        }
+
+        @Override
+        public void run() {
+            if (handle != 0 && released.compareAndSet(false, true)) {
+                nativeClose(handle);
+            }
+            if (ownedExecutor != null) {
+                ownedExecutor.shutdownNow();
+            }
         }
     }
 
@@ -287,6 +342,7 @@ public final class WeizhiEngine implements AutoCloseable {
      * @param filename QuickJS eval filename for stack traces (workspace-relative path); null uses {@code <eval>}.
      */
     public String runJs(String source, int timeoutMs, String filename) {
+        cancelRequested = false;
         String out = nativeRunJs(nativeHandle, source, timeoutMs, filename);
         if (out != null && out.startsWith("!")) {
             throw new RuntimeException(out.substring(1));
@@ -304,6 +360,7 @@ public final class WeizhiEngine implements AutoCloseable {
      * rather than by the wall-clock limit.
      */
     public void cancel() {
+        cancelRequested = true;
         if (nativeHandle != 0) {
             nativeCancel(nativeHandle);
         }
@@ -312,123 +369,235 @@ public final class WeizhiEngine implements AutoCloseable {
     /** Called from JNI: dispatch real I/O onto the thread pool. */
     @SuppressWarnings("unused")
     void onVfsAsync(long engine, long requestId, int op, String relpath, byte[] data) {
-        executor.execute(() -> {
-            try {
-                Path root = Paths.get(fsRoot == null ? "." : fsRoot).toAbsolutePath().normalize();
-                Path target = root.resolve(relpath).normalize();
-                if (!target.startsWith(root)) {
-                    nativeComplete(engine, requestId, false, null, "path escape");
+        if (cancelRequested) {
+            nativeComplete(engine, requestId, false, null, "cancelled");
+            return;
+        }
+        try {
+            executor.execute(() -> {
+                if (cancelRequested) {
+                    nativeComplete(engine, requestId, false, null, "cancelled");
                     return;
                 }
-                switch (op) {
-                    case 1: { // READ
-                        byte[] bytes = Files.readAllBytes(target);
-                        nativeComplete(engine, requestId, true, bytes, null);
-                        break;
+                try {
+                    Path root = Paths.get(fsRoot == null ? "." : fsRoot).toAbsolutePath().normalize();
+                    Path target = root.resolve(relpath).normalize();
+                    if (!target.startsWith(root)) {
+                        nativeComplete(engine, requestId, false, null, "path escape");
+                        return;
                     }
-                    case 2: { // WRITE
-                        Files.write(target, data == null ? new byte[0] : data);
-                        nativeComplete(engine, requestId, true, null, null);
-                        break;
+                    if (containsSymlinkUnder(root, target)) {
+                        nativeComplete(engine, requestId, false, null,
+                                "path escape: symlink inside workspace is not allowed");
+                        return;
                     }
-                    default:
-                        nativeComplete(engine, requestId, false, null, "unsupported operation");
+                    switch (op) {
+                        case 1: { // READ
+                            byte[] bytes = Files.readAllBytes(target);
+                            nativeComplete(engine, requestId, true, bytes, null);
+                            break;
+                        }
+                        case 2: { // WRITE
+                            Files.write(target, data == null ? new byte[0] : data);
+                            nativeComplete(engine, requestId, true, null, null);
+                            break;
+                        }
+                        default:
+                            nativeComplete(engine, requestId, false, null, "unsupported operation");
+                    }
+                } catch (IOException e) {
+                    nativeComplete(engine, requestId, false, null,
+                            e.getMessage() == null ? "I/O failed" : e.getMessage());
                 }
-            } catch (IOException e) {
-                nativeComplete(engine, requestId, false, null, e.getMessage() == null ? "I/O failed" : e.getMessage());
+            });
+        } catch (RejectedExecutionException e) {
+            nativeComplete(engine, requestId, false, null,
+                    "queue full: too many pending async I/O requests (script is flooding async operations)");
+        }
+    }
+
+    /** workspace 内任何一段为符号链接都拒绝：normalize+startsWith 挡不住 symlink 逃逸。 */
+    private static boolean containsSymlinkUnder(Path root, Path target) {
+        Path cur = root;
+        for (int i = root.getNameCount(); i < target.getNameCount(); i++) {
+            cur = cur.resolve(target.getName(i));
+            if (Files.isSymbolicLink(cur)) {
+                return true;
             }
-        });
+        }
+        return false;
     }
 
     /** Called from JNI: run HTTP on the thread pool, then complete_fetch. */
     @SuppressWarnings("unused")
     void onFetchAsync(long engine, long requestId, String method, String url, String headersJson, byte[] body) {
-        executor.execute(() -> {
-            if (!fetchEnabled) {
-                nativeCompleteFetch(engine, requestId, 0, null, null,
-                        "unsupported: fetch (call WeizhiEngine.enableFetch() on the host first)");
-                return;
-            }
-            try {
-                doFetch(engine, requestId, method, url, headersJson, body);
-            } catch (Exception e) {
-                String msg = e.getMessage() == null ? "fetch network error" : e.getMessage();
-                String hint = msg.toLowerCase(Locale.US).contains("permission")
-                        ? " (add android.permission.INTERNET to the app manifest)"
-                        : " (check URL, connectivity, host allowlist, and INTERNET permission)";
-                nativeCompleteFetch(engine, requestId, 0, null, null, "fetch failed: " + msg + hint);
-            }
-        });
+        if (cancelRequested) {
+            nativeCompleteFetch(engine, requestId, 0, null, null, "cancelled");
+            return;
+        }
+        try {
+            executor.execute(() -> {
+                if (!fetchEnabled) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "unsupported: fetch (call WeizhiEngine.enableFetch() on the host first)");
+                    return;
+                }
+                if (cancelRequested) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null, "cancelled");
+                    return;
+                }
+                try {
+                    doFetch(engine, requestId, method, url, headersJson, body);
+                } catch (Exception e) {
+                    String msg = e.getMessage() == null ? "fetch network error" : e.getMessage();
+                    String hint = msg.toLowerCase(Locale.US).contains("permission")
+                            ? " (add android.permission.INTERNET to the app manifest)"
+                            : " (check URL, connectivity, host allowlist, and INTERNET permission)";
+                    nativeCompleteFetch(engine, requestId, 0, null, null, "fetch failed: " + msg + hint);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            nativeCompleteFetch(engine, requestId, 0, null, null,
+                    "queue full: too many pending fetch requests (script is flooding async operations)");
+        }
     }
+
+    private static final int MAX_FETCH_REDIRECTS = 8;
 
     private void doFetch(long engine, long requestId, String method, String url, String headersJson, byte[] body)
             throws IOException {
-        URL parsed = new URL(url);
-        String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
-        if (fetchHostAllowlist != null && fetchHostAllowlist.length > 0) {
-            boolean allowed = false;
-            for (String suffix : fetchHostAllowlist) {
-                if (suffix == null || suffix.isEmpty()) {
-                    continue;
-                }
-                String s = suffix.toLowerCase(Locale.US);
-                if (host.equals(s) || host.endsWith("." + s)) {
-                    allowed = true;
-                    break;
-                }
-            }
-            if (!allowed) {
+        String currentUrl = url;
+        String currentMethod = method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US);
+        byte[] currentBody = body;
+        int redirects = 0;
+
+        while (true) {
+            URL parsed = new URL(currentUrl);
+            String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
+            if (!isFetchHostAllowed(host)) {
                 nativeCompleteFetch(engine, requestId, 0, null, null,
                         "fetch blocked: host \"" + host + "\" is not allowlisted "
                                 + "(ask the host to widen enableFetch allowlist, or use an approved URL)");
                 return;
             }
-        }
 
-        HttpURLConnection conn = (HttpURLConnection) parsed.openConnection();
-        conn.setConnectTimeout(10_000);
-        conn.setReadTimeout(30_000);
-        conn.setRequestMethod(method == null || method.isEmpty() ? "GET" : method.toUpperCase(Locale.US));
-        conn.setInstanceFollowRedirects(true);
-        if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
-            try {
-                applyHeaders(conn, headersJson);
-            } catch (Exception e) {
-                nativeCompleteFetch(engine, requestId, 0, null, null,
-                        "bad argument: fetch headers must be a flat JSON object of string values");
-                return;
-            }
-        }
-        if (body != null && body.length > 0) {
-            conn.setDoOutput(true);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body);
-            }
-        }
-
-        int status = conn.getResponseCode();
-        InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
-        if (stream == null) {
-            stream = conn.getInputStream();
-        }
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        if (stream != null) {
-            byte[] buf = new byte[8192];
-            int n;
-            long total = 0;
-            while ((n = stream.read(buf)) >= 0) {
-                total += n;
-                if (total > maxIoBytes) {
+            HttpURLConnection conn = (HttpURLConnection) parsed.openConnection();
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(30_000);
+            conn.setRequestMethod(currentMethod);
+            conn.setInstanceFollowRedirects(false);
+            if (headersJson != null && !headersJson.isEmpty() && !headersJson.equals("{}")) {
+                try {
+                    applyHeaders(conn, headersJson);
+                } catch (Exception e) {
+                    conn.disconnect();
                     nativeCompleteFetch(engine, requestId, 0, null, null,
-                            "too large: fetch response exceeds " + maxIoBytes
-                                    + " bytes (raise WeizhiLimits.fsIoBytes or request a smaller payload)");
+                            "bad argument: fetch headers must be a flat JSON object of string values");
                     return;
                 }
-                bos.write(buf, 0, n);
+            }
+            if (currentBody != null && currentBody.length > 0) {
+                conn.setDoOutput(true);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(currentBody);
+                }
+            }
+
+            int status = conn.getResponseCode();
+            if (status >= 300 && status < 400) {
+                String location = conn.getHeaderField("Location");
+                drainAndDisconnect(conn);
+                if (location == null || location.isEmpty()) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: redirect response missing Location header");
+                    return;
+                }
+                if (redirects >= MAX_FETCH_REDIRECTS) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: too many redirects");
+                    return;
+                }
+                redirects++;
+                try {
+                    currentUrl = new URL(parsed, location).toString();
+                } catch (MalformedURLException e) {
+                    nativeCompleteFetch(engine, requestId, 0, null, null,
+                            "fetch failed: invalid redirect Location");
+                    return;
+                }
+                if (status == HttpURLConnection.HTTP_MOVED_PERM
+                        || status == HttpURLConnection.HTTP_MOVED_TEMP
+                        || status == HttpURLConnection.HTTP_SEE_OTHER) {
+                    if (!"GET".equals(currentMethod) && !"HEAD".equals(currentMethod)) {
+                        currentMethod = "GET";
+                        currentBody = null;
+                    }
+                }
+                continue;
+            }
+
+            InputStream stream = status >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            if (stream == null) {
+                stream = conn.getInputStream();
+            }
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            if (stream != null) {
+                byte[] buf = new byte[8192];
+                int n;
+                long total = 0;
+                while ((n = stream.read(buf)) >= 0) {
+                    total += n;
+                    if (total > maxIoBytes) {
+                        conn.disconnect();
+                        nativeCompleteFetch(engine, requestId, 0, null, null,
+                                "too large: fetch response exceeds " + maxIoBytes
+                                        + " bytes (raise WeizhiLimits.fsIoBytes or request a smaller payload)");
+                        return;
+                    }
+                    bos.write(buf, 0, n);
+                }
+            }
+            String headersOut = headersToJson(conn.getHeaderFields());
+            conn.disconnect();
+            nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
+            return;
+        }
+    }
+
+    private boolean isFetchHostAllowed(String host) {
+        if (fetchHostAllowlist == null || fetchHostAllowlist.length == 0) {
+            return true;
+        }
+        String h = host == null ? "" : host.toLowerCase(Locale.US);
+        for (String suffix : fetchHostAllowlist) {
+            if (suffix == null || suffix.isEmpty()) {
+                continue;
+            }
+            String s = suffix.toLowerCase(Locale.US);
+            if (h.equals(s) || h.endsWith("." + s)) {
+                return true;
             }
         }
-        String headersOut = headersToJson(conn.getHeaderFields());
-        nativeCompleteFetch(engine, requestId, status, headersOut, bos.toByteArray(), null);
+        return false;
+    }
+
+    private static void drainAndDisconnect(HttpURLConnection conn) {
+        try {
+            InputStream stream = conn.getErrorStream();
+            if (stream == null) {
+                stream = conn.getInputStream();
+            }
+            if (stream != null) {
+                byte[] buf = new byte[4096];
+                while (stream.read(buf) >= 0) {
+                    // discard redirect body
+                }
+            }
+        } catch (IOException ignored) {
+            // best effort
+        } finally {
+            conn.disconnect();
+        }
     }
 
     private static void applyHeaders(HttpURLConnection conn, String headersJson) {
@@ -468,12 +637,16 @@ public final class WeizhiEngine implements AutoCloseable {
 
     @Override
     public void close() {
-        if (nativeHandle != 0) {
-            nativeClose(nativeHandle);
-            nativeHandle = 0;
+        long handle = nativeHandle;
+        nativeHandle = 0;
+        if (handle != 0 && nativeReleased.compareAndSet(false, true)) {
+            nativeClose(handle);
         }
         if (ownsExecutor) {
             executor.shutdownNow();
+        }
+        if (nativeGuard != null) {
+            nativeGuard.clean();
         }
     }
 

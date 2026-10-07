@@ -39,6 +39,31 @@ public final class SmokeTest {
                             + "z.gunzipSync(z.gzipSync(Buffer.from('hello zlib'))).toString()",
                     3000);
             expectEq("\"hello zlib\"", out);
+
+            // 回归：workspace 内的 symlink 不得逃逸（对齐 agent1 WorkspaceSandbox 行为）
+            // 同步 fs 走 C 的 default_vfs_sync（realpath 包含检查，报 "path escape"）；
+            // 异步 promises fs 走 Java onVfsAsync（containsSymlinkUnder，报 "symlink"）。
+            Path outsideSecret = fsRoot.getParent().resolve("leak-target.txt");
+            Files.writeString(outsideSecret, "secret");
+            Files.createSymbolicLink(fsRoot.resolve("leak.txt"), outsideSecret);
+            try {
+                engine.runJs("fs.readFileSync('leak.txt').toString()", 2000);
+                fail("expected symlink escape to be rejected");
+            } catch (RuntimeException e) {
+                String msg = e.getMessage();
+                if (msg == null || !(msg.contains("path escape") || msg.contains("symlink"))) {
+                    throw e;
+                }
+            }
+            try {
+                engine.runJs("await fs.promises.readFile('leak.txt')", 2000);
+                fail("expected symlink escape to be rejected (async)");
+            } catch (RuntimeException e) {
+                String msg = e.getMessage();
+                if (msg == null || !(msg.contains("path escape") || msg.contains("symlink"))) {
+                    throw e;
+                }
+            }
         }
 
         WeizhiLimits limits = new WeizhiLimits();
@@ -57,6 +82,7 @@ public final class SmokeTest {
 
         System.out.println("JNI smoke OK");
         desktopCaps();
+        FetchRedirectTest.run();
         OfficeTest.main(args);
         ApiCardsTest.main(args);
     }
