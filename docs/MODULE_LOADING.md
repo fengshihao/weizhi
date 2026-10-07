@@ -19,9 +19,9 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 **两个根（勿混）**：
 
 - **`setFsRoot`** — 工作区（用户文件、`fs`、orchestrator 入口如 `jobs/run.js`）
-- **`setScriptFolder`** — catalog 脚本库（`docx.js` 等）
+- **`setScriptFolder`** — catalog 脚本库（宿主放入的单层 `leaf.js`；docx/pptx 由 Agent1 提供，不在本仓库）
 
-**解析顺序（ES module）**：内置模块名走引擎；裸说明符 `docx` / `docx.js` 在 `setScriptFolder` 根目录查找；带 `/` 或绝对路径的说明符先按 **workspace** 解析（见下节），文件不存在且叶子名合法时**回退**到 `setScriptFolder/<叶子>.js`。
+**解析顺序（ES module）**：内置模块名走引擎；裸说明符 `leaf` / `leaf.js` 在 `setScriptFolder` 根目录查找；带 `/` 或绝对路径的说明符先按 **workspace** 解析（见下节），文件不存在且叶子名合法时**回退**到 `setScriptFolder/<叶子>.js`。
 
 ---
 
@@ -40,7 +40,7 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 
 **`import './util.js'` 相对谁？** QuickJS 相对**当前模块路径**；入口模块路径来自 `runJs(source, timeoutMs, filename)` 的 `filename`（如 `jobs/run.js`）。未传 `filename` 时为 `<eval>`，相对 import 不可靠——编排入口应始终传 `filename`。
 
-**Catalog 裸导入**（`import from "docx.js"` / `"docx"`）仍只在 `setScriptFolder` **根目录**找 **单层叶子** `[A-Za-z0-9._-]+.js`，不支持 `catalog/sub/foo.js`。
+**Catalog 裸导入**（`import from "leaf.js"` / `"leaf"`）仍只在 `setScriptFolder` **根目录**找 **单层叶子** `[A-Za-z0-9._-]+.js`，不支持 `catalog/sub/foo.js`。
 
 **集成方变更提示**：旧版会拒绝「绝对路径」或路径中含 `..` 的 `fs` / workspace `import`（`invalid path`）。现版改为**先归一化再校验**；越界仍失败。若你们曾在宿主侧把路径强行改成相对路径，可逐步去掉，交给引擎统一处理。
 
@@ -68,13 +68,10 @@ import catalog 脚本库（setScriptFolder 下的 leaf.js）→ from "叶子名.
 
 ```javascript
 import fs from "fs";
-import zip from "zip";
-import { markdownToDocx, Document, renderDocx } from "docx.js";
+import { ping } from "leaf.js";
 
-markdownToDocx({ inputPath: "a.md", outputPath: "out/a.docx" });
-const doc = Document.create({ title: "标题" });
-doc.addParagraph("正文");
-export default renderDocx(doc, "out/b.docx");
+fs.writeFileSync("note.txt", ping());
+export default fs.readFileSync("note.txt").toString();
 ```
 
 ---

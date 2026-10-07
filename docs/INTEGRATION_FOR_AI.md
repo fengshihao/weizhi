@@ -14,7 +14,7 @@
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
 | [HOST_ABI.md](HOST_ABI.md) / [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) | 签名原生插件 |
 | [QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md) | 第三方 JS 库能不能塞进脚本 |
-| **[AGENT1_DOCX_INTEGRATION.md](AGENT1_DOCX_INTEGRATION.md)** | **Agent1 接 Word（docx.js / docx-raw.js、catalog、工具环、验收）** |
+| **[office.md](office.md)** | **docx/pptx 不在本仓库**；引擎只保证 `zip` / `fs` / `setScriptFolder` |
 
 ---
 
@@ -25,7 +25,7 @@
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
 4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps` + 可选 `:agent-tools*`）。
 5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。**工具环** `:agent-tools` 另有 `WorkspaceSandbox` + 可选 `extraReadRoot`（见 [AGENT_TOOLS_INTEGRATION.md §3](AGENT_TOOLS_INTEGRATION.md#3-路径与工作区必对齐)）；技能目录用 `workspace/skills` 或 assets + `compositeSkills`，不要发明未文档化的引擎 API。
-6. **`setScriptFolder`**：catalog 脚本库根目录（`import "docx.js"` 等**单层叶子**）。workspace 内用户模块走 **`setFsRoot`** + `import "./…"` / 带路径说明符，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
+6. **`setScriptFolder`**：catalog 脚本库根目录（`import "leaf.js"` 等**单层叶子**）。docx/pptx 由宿主放入该目录，引擎不自带。workspace 内用户模块走 **`setFsRoot`** + `import "./…"` / 带路径说明符，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
 ### 0.1 路径策略（引擎 `fs` + workspace `import`）

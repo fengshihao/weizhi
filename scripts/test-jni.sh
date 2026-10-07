@@ -29,7 +29,7 @@ javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/platform/PlatformHost.java" \
     "$root/java/com/weizhi/platform/OrganizeFiles.java" \
     "$root/java/com/weizhi/desktop/DesktopCaps.java" \
-    "$root/tests/java/OfficeTest.java" \
+    "$root/tests/java/CatalogSmokeTest.java" \
     "$root/tests/java/ApiCardsTest.java" \
     "$root/tests/java/FetchRedirectTest.java" \
     "$root/tests/java/SmokeTest.java"

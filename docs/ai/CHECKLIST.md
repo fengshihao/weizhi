@@ -20,7 +20,7 @@
 - [ ] 已运行 `WEIZHI_SKIP_ASAN=1 ./scripts/test.sh` 且通过
 - [ ] 本地有时间跑完整 `./scripts/test.sh`（含 ASan）优先跑全量
 - [ ] 改了 `android/`、`jni/`、`java/`：已跑或说明为何无法跑 `./scripts/test.sh android`
-- [ ] 改了 office / docx：已跑 `./scripts/test-office-strict.sh`
+- [ ] 未把 docx/pptx 脚本或调用卡加回本仓库（归 Agent1）
 - [ ] **新功能或 bugfix** 已添加/更新 `tests/` 或 `androidTest/`
 
 ## 构建（按需）

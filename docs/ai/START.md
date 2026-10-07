@@ -51,8 +51,7 @@ I want to contribute: 〈one scoped change〉. Follow AGENTS.md and docs/ai/CHEC
 WEIZHI_SKIP_ASAN=1 ./scripts/test.sh
 # 若改了 android/、jni/、java/：
 ./scripts/test.sh android
-# 若改了 assets/office 或 docx：
-./scripts/test-office-strict.sh
+# Office 脚本不在本仓库。引擎冒烟含在 test.sh 的 CatalogSmokeTest。
 ```
 
 细则：[CHECKLIST.md](./CHECKLIST.md) · [PR_PLAYBOOK.md](./PR_PLAYBOOK.md)

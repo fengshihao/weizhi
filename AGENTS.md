@@ -45,7 +45,7 @@
 ./scripts/test.sh                # 桌面：C 单测 + JNI 冒烟 + ASan（本地可 WEIZHI_SKIP_ASAN=1）
 WEIZHI_SKIP_ASAN=1 ./scripts/test.sh   # 与 GitHub Actions desktop job 相同
 ./scripts/test.sh android        # 真机 / 模拟器 instrumented（改 JNI/Android 时）
-./scripts/test-office-strict.sh  # 动 office / docx 资产时
+# docx/pptx 脚本不在本仓库；Office 回归在 Agent1
 ```
 
 | 改动范围 | 最低要求 |

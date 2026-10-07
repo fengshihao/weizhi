@@ -13,13 +13,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
  * Parses {@code docs/api-cards.jsonl} and runs every card whose entry can succeed
- * on the desktop Office / Caps host. Android-only cards are schema-checked here
- * and executed in {@code CapsInstrumentedTest}.
+ * on the desktop Caps host. Android-only cards are schema-checked here and
+ * executed in {@code CapsInstrumentedTest}. Office cards live in Agent1.
  */
 public final class ApiCardsTest {
     private static final int MAX_ENTRY_LINES = 20;
@@ -151,8 +149,9 @@ public final class ApiCardsTest {
         Path root = Files.createTempDirectory("weizhi-api-card-");
         try (WeizhiEngine engine = new WeizhiEngine()) {
             DesktopCaps.install(engine, root, message -> true);
-            engine.setScriptFolder(scriptDir.toString());
-            prepare(engine, root, id);
+            if (Files.isDirectory(scriptDir)) {
+                engine.setScriptFolder(scriptDir.toString());
+            }
             String source = str(card, "entry");
             if (source.contains("android.") && !"android".equals(platform)) {
                 source = "globalThis.android = globalThis." + platform + ";\n" + source;
@@ -167,51 +166,11 @@ public final class ApiCardsTest {
         }
     }
 
-    private static void prepare(WeizhiEngine engine, Path root, String id) throws Exception {
-        if ("docx.markdownToDocx".equals(id)) {
-            write(root.resolve("notes/大纲.md"), "# 大纲\n\n- 一点\n");
-        } else if ("docx.readEdit".equals(id) || "docx.raw".equals(id)) {
-            engine.runJs(
-                    "import { markdownToDocx } from 'docx.js';\n"
-                            + "export default markdownToDocx({ markdown: 'ABCD', outputPath: 'in/sample.docx' });\n",
-                    15000);
-        }
-    }
-
     private static void assertOutcome(Path root, String id, String out) throws IOException {
         if (out == null) {
             throw new AssertionError(id + " returned null");
         }
         switch (id) {
-            case "docx.markdownToDocx":
-                assertContains(id, out, "\"ok\":true");
-                assertPk(root.resolve("大纲.docx"));
-                assertZipContains(root.resolve("大纲.docx"), "大纲");
-                break;
-            case "docx.create":
-                assertContains(id, out, "\"ok\":true");
-                assertPk(root.resolve("out/report.docx"));
-                assertZipContains(root.resolve("out/report.docx"), "摘要");
-                break;
-            case "docx.readEdit":
-                assertContains(id, out, "\"ok\":true");
-                assertZipContains(root.resolve("out/sample-edited.docx"), "EFGH");
-                break;
-            case "docx.raw":
-                assertContains(id, out, "\"ok\":true");
-                assertZipContains(root.resolve("out/raw-edited.docx"), "NEW");
-                break;
-            case "pptx.render":
-                assertContains(id, out, "\"ok\":true");
-                assertPk(root.resolve("out/q3.pptx"));
-                assertZipContains(root.resolve("out/q3.pptx"), "季度复盘");
-                assertZipContains(root.resolve("out/q3.pptx"), "prst=");
-                break;
-            case "pptx.build":
-                assertContains(id, out, "\"ok\":true");
-                assertPk(root.resolve("out/deck.pptx"));
-                assertZipContains(root.resolve("out/deck.pptx"), "chevron");
-                break;
             case "android.files.zipCreate":
                 assertContains(id, out, "Created");
                 assertPk(root.resolve("bundle.zip"));
@@ -231,11 +190,6 @@ public final class ApiCardsTest {
         }
     }
 
-    private static void write(Path file, String text) throws IOException {
-        Files.createDirectories(file.getParent());
-        Files.writeString(file, text, StandardCharsets.UTF_8);
-    }
-
     private static void assertContains(String id, String haystack, String needle) {
         if (!haystack.contains(needle)) {
             throw new AssertionError(id + " missing " + needle + " in " + haystack);
@@ -247,39 +201,6 @@ public final class ApiCardsTest {
         if (head.length < 2 || head[0] != 'P' || head[1] != 'K') {
             throw new AssertionError("not a PK zip: " + zipPath);
         }
-    }
-
-    private static void assertZipContains(Path zipPath, String text) throws IOException {
-        boolean sawDocument = false;
-        boolean sawSlide = false;
-        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipPath))) {
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                String name = entry.getName();
-                boolean document = "word/document.xml".equals(name);
-                boolean slide = name.startsWith("ppt/slides/slide") && name.endsWith(".xml");
-                if (!document && !slide) {
-                    continue;
-                }
-                if (document) {
-                    sawDocument = true;
-                }
-                if (slide) {
-                    sawSlide = true;
-                }
-                String xml = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
-                if (xml.contains(text)) {
-                    return;
-                }
-            }
-        }
-        if (sawDocument) {
-            throw new AssertionError(zipPath + " document.xml missing " + text);
-        }
-        if (sawSlide) {
-            throw new AssertionError(zipPath + " slides missing " + text);
-        }
-        throw new AssertionError(zipPath + " missing word/document.xml or ppt/slides");
     }
 
     private static String str(Map<String, Object> card, String key) {

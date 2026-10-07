@@ -1,24 +1,23 @@
-# Office 架构（当前）
+# Office 架构
 
 日期：2026-10-07。
 
-## 现状
+## 分层
 
-- **docx（高级）**：`assets/office/docx.js` — 内存 **Document** → **renderDocx** → OOXML zip；grep/样式。  
-- **docx（原始）**：`assets/office/docx-raw.js` — **unpackDocx** / **packDocx** + **validateDocx**（良构 XML + 包结构；非 XSD）。  
-- **Markdown→Word**：`markdownToDocx` / `documentFromMarkdown` + `renderDocx`。  
-- **Java `host.office`**：已移除（无 AAR 内 OOXML 生成）。  
-- **pptx**：`assets/office/pptx.js` — **Deck** → **renderPptx** → PresentationML zip。版式自带背景与装饰形状；`shapes` 用 12×6 网格。Skill：`agent_skills/pptx`。
-- **xlsx / PDF**：未实现。
+| 留在 Weizhi | 在 Agent1 |
+|---|---|
+| QuickJS、`runJs`、限额、沙箱 | `docx.js` / `docx-build.js` / `docx-raw.js`、`pptx.js` / `pptx-build.js` |
+| `fs`、`zip`、UTF-8、XML 解析等通用内置 | Office 相关 Skill、`@Tool` 薄封装 |
+| `setScriptFolder` + workspace `import` | 系统提示里的 Office 摘要、`office-api-cards.jsonl` |
+| Caps / agent-tools 的机制（不是 Word 业务） | 与 FileProvider / `intent.view` 的宿主接线、Office 回归 |
 
-## Agent1 集成
+Office 是 ZIP + XML 的纯 JS。Java `host.office` 已从引擎移除。Agent1 把脚本放进 catalog，`setScriptFolder` 指向该目录，`runJs` 里 `import "docx.js"`。
 
-1. `setScriptFolder` 提供 `docx.js` / `pptx.js`（catalog 同步）。  
-2. `setFsRoot` 与 caps workspace 一致。  
-3. `execute_script` 内 `import { markdownToDocx } from "./docx.js"`。  
-4. 打开 docx：`android.intent.start({ action: "view", path })`（宿主 FileProvider + `launchIntent`）。
+## 集成方
 
-## 演进
+1. `setScriptFolder` 指向自备的脚本目录（Agent1 用自带 catalog，不读本仓库）。
+2. `setFsRoot` 与 caps workspace 一致。
+3. `runJs` 内 `import { markdownToDocx } from "docx.js"`（脚本由宿主提供）。
+4. 打开文件：`android.intent.start({ action: "view", path })`（宿主 FileProvider）。
 
-- 表格、图片、页眉页脚：扩展 **Document** 块类型 + renderer。
-- **pptx** 已与 docx 平行，仍走 JS catalog。不读已有 pptx，不导 PDF。
+xlsx / PDF：未实现。

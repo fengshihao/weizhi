@@ -17,7 +17,7 @@
 ## Test plan
 - [ ] WEIZHI_SKIP_ASAN=1 ./scripts/test.sh
 - [ ] （如适用）./scripts/test.sh android
-- [ ] （如适用）./scripts/test-office-strict.sh
+- [ ] 未把 docx/pptx 脚本加回本仓库
 
 （粘贴关键命令输出或 CI 链接）
 ```
