@@ -41,6 +41,19 @@ public final class SmokeTest {
                     5000);
             expectEq("\"world\"", out);
 
+            out = engine.runJs(
+                    "fs.mkdirSync('jni-out', { recursive: true });"
+                            + "fs.writeFileSync('jni-out/nested.txt','nested');"
+                            + "fs.readFileSync('jni-out/nested.txt').toString()",
+                    3000);
+            expectEq("\"nested\"", out);
+            out = engine.runJs(
+                    "await fs.promises.mkdir('jni-async-out', { recursive: true });"
+                            + "await fs.promises.writeFile('jni-async-out/x.txt','x');"
+                            + "(await fs.promises.readFile('jni-async-out/x.txt')).toString()",
+                    5000);
+            expectEq("\"x\"", out);
+
             Path absAsync = fsRoot.resolve("abs-async.txt").toAbsolutePath().normalize();
             out = engine.runJs(
                     "await fs.promises.writeFile('" + jsString(absAsync) + "','async-abs');"

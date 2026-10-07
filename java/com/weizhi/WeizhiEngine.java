@@ -388,7 +388,28 @@ public final class WeizhiEngine implements AutoCloseable {
                             break;
                         }
                         case 2: { // WRITE
+                            Path parent = target.getParent();
+                            if (parent != null) {
+                                Files.createDirectories(parent);
+                            }
                             Files.write(target, data == null ? new byte[0] : data);
+                            nativeComplete(engine, requestId, true, null, null);
+                            break;
+                        }
+                        case 5: { // MKDIR
+                            boolean recursive = data != null && data.length > 0 && data[0] == 1;
+                            if (recursive) {
+                                Files.createDirectories(target);
+                            } else if (Files.exists(target)) {
+                                if (Files.isDirectory(target)) {
+                                    nativeComplete(engine, requestId, false, null, "directory exists");
+                                } else {
+                                    nativeComplete(engine, requestId, false, null, "mkdir failed");
+                                }
+                                break;
+                            } else {
+                                Files.createDirectory(target);
+                            }
                             nativeComplete(engine, requestId, true, null, null);
                             break;
                         }

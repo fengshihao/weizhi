@@ -79,6 +79,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 
 - Built-in modules: Agent 脚本推荐 **`import fs from "fs"`** 等（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。**`require("fs")` 仍保留**（集成/旧脚本），但不写入 Agent 提示。Built-in names only, no npm.
 - Built-ins: `fs` (including `fs.promises`), `path`, `buffer`, `process` (read-only subset), `console`, `zlib` (`require("zlib")`: `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`), `zip` (`require("zip")`: `extractSync` / `createSync`; zip-slip skipped; entry cap 10000; sizes follow `fs_io_bytes`).
+- `fs.mkdirSync(path[, { recursive }])` / `fs.promises.mkdir`: same workspace path rules as other `fs` APIs; `recursive: true` is `mkdir -p` (existing directory is OK). Non-recursive on an existing directory → error contains `directory exists`. `fs.writeFileSync` / `fs.promises.writeFile` create missing parent directories automatically (still subject to sandbox / `path escape`).
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
 - User libraries: workspace modules via **`import`** with path specifiers resolved under `setFsRoot` (relative or absolute after normalize); catalog via bare **`import "leaf.js"`** under `setScriptFolder` (single-segment leaf only). **`loadScript` removed**. Static import scripts may `export default` as the `runJs` result.
@@ -95,6 +96,8 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 | Missing API on a module | `unsupported: fs.watch` (via Proxy, avoid `undefined is not a function`) |
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |
+| Missing parent dir (mkdir non-recursive) | `path not found` |
+| mkdir on existing dir (non-recursive) | `directory exists` |
 | Timeout / cancel / memory / stack | `timeout` / `cancelled` / `memory` / `stack` |
 | Fetch disabled | `unsupported: fetch (... enableFetch / weizhi_set_http ...)` |
 | Fetch host blocked | `fetch blocked: host "..." is not allowlisted ...` |

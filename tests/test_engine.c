@@ -580,6 +580,57 @@ static void test_fs_sync_and_promises(void) {
     free(dir);
 }
 
+static void test_fs_mkdir_and_nested_write(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char folder_real[512];
+    char js[640];
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    EXPECT(realpath(dir, folder_real) != NULL);
+    result = weizhi_run_js(engine,
+                           "fs.mkdirSync('out', { recursive: true });"
+                           "fs.writeFileSync('out/icon.png','png');"
+                           "fs.readFileSync('out/icon.png').toString()",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"png\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.writeFileSync('out2/nested/a.bin','bin'); fs.readFileSync('out2/nested/a.bin')",
+                           3000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    snprintf(js, sizeof(js), "fs.readFileSync('%s/abs.txt').toString()", folder_real);
+    result = weizhi_run_js(engine, "fs.writeFileSync('abs.txt','abs')", 2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, js, 3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"abs\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine,
+                           "await fs.promises.mkdir('async-out', { recursive: true });"
+                           "await fs.promises.writeFile('async-out/b.txt','async');"
+                           "(await fs.promises.readFile('async-out/b.txt')).toString()",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"async\"") == 0);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.mkdirSync('out', { recursive: true })", 2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.mkdirSync('out')", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "directory exists") != NULL);
+    weizhi_result_free(&result);
+    result = weizhi_run_js(engine, "fs.mkdirSync('../escape')", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && (strstr(result.error, "path") != NULL || strstr(result.error, "escape") != NULL));
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
 static void test_fs_size_limit(void) {
     char *dir = make_temp_dir();
     WeizhiLimits limits;
@@ -1364,6 +1415,7 @@ int main(void) {
     test_promise_await();
     test_buffer_path_require();
     test_fs_sync_and_promises();
+    test_fs_mkdir_and_nested_write();
     test_fs_size_limit();
     test_workspace_catalog_module_fallback();
     test_script_fs_roots_isolated();

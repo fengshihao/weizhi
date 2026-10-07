@@ -14,7 +14,7 @@
 
 ### 你可以做什么
 
-- 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`、`zlib`、`zip`。
+- 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`、`zlib`、`zip`。`fs` 同步：`readFileSync` / `writeFileSync` / `existsSync` / `unlinkSync` / `mkdirSync(path[, { recursive }])`；异步：`fs.promises.readFile` / `writeFile` / `mkdir`。写文件会自动创建缺失的父目录；建目录用 `mkdirSync('out', { recursive: true })` 或依赖写文件时的自动建父目录。
 - **没有 npm**。模块加载见 [MODULE_LOADING.md](MODULE_LOADING.md)：**AI 脚本一律用 `import`**（内置 `import fs from "fs"`，自建库 `import … from "./叶子.js"`）。**不要写 `require()`**（引擎虽保留给旧代码，但 Agent 不用）。**没有 `loadScript`**。含 `import`/`export` 时可用 `export default` 作为本轮 `runJs` 返回值。
 - 压缩：`import zlib from "zlib"` 后使用 `gzipSync` / `gunzipSync`（gzip）和 `deflateSync` / `inflateSync`（raw deflate）；参数与返回值都是 `Buffer`。`process.weizhiCaps.compress` 为 `true`。单次输入或输出超过 fs 载荷上限会报 `too large: zlib`。
 - Zip：`import zip from "zip"` 后使用 `zip.extractSync(zipPath, destDir)`（返回 `{entries, skipped}`）、`zip.createSync(sourceDir, zipPath)`（返回 `{files}`）。含 `..` 的恶意条目会跳过；单文件/整包受 fs 载荷上限约束。`process.weizhiCaps.zip` 为 `true`。xlsx/docx 等可解压后用 `fs` 改 XML，再 `createSync` 打回。
