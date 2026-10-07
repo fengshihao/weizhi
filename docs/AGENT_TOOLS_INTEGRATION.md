@@ -230,7 +230,7 @@ description: 何时触发（给模型看）
 
 模型工具：`load_skill_through_path(skillId, path)`，`path` 常用 `"SKILL.md"` 或 `references/...`。
 
-Demo 样例：仓库 `android/app/src/main/assets/agent_skills/demo/SKILL.md`。
+Demo 样例：仓库 `android/app/src/main/assets/agent_skills/demo/SKILL.md`。生成幻灯片：`agent_skills/pptx/SKILL.md`（配合 `assets/office/pptx.js`）。
 
 ---
 

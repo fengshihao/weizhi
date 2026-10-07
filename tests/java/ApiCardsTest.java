@@ -201,6 +201,17 @@ public final class ApiCardsTest {
                 assertContains(id, out, "\"ok\":true");
                 assertZipContains(root.resolve("out/raw-edited.docx"), "NEW");
                 break;
+            case "pptx.render":
+                assertContains(id, out, "\"ok\":true");
+                assertPk(root.resolve("out/q3.pptx"));
+                assertZipContains(root.resolve("out/q3.pptx"), "季度复盘");
+                assertZipContains(root.resolve("out/q3.pptx"), "prst=");
+                break;
+            case "pptx.build":
+                assertContains(id, out, "\"ok\":true");
+                assertPk(root.resolve("out/deck.pptx"));
+                assertZipContains(root.resolve("out/deck.pptx"), "chevron");
+                break;
             case "android.files.zipCreate":
                 assertContains(id, out, "Created");
                 assertPk(root.resolve("bundle.zip"));
@@ -239,19 +250,36 @@ public final class ApiCardsTest {
     }
 
     private static void assertZipContains(Path zipPath, String text) throws IOException {
+        boolean sawDocument = false;
+        boolean sawSlide = false;
         try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipPath))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if ("word/document.xml".equals(entry.getName())) {
-                    String xml = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
-                    if (!xml.contains(text)) {
-                        throw new AssertionError(zipPath + " document.xml missing " + text);
-                    }
+                String name = entry.getName();
+                boolean document = "word/document.xml".equals(name);
+                boolean slide = name.startsWith("ppt/slides/slide") && name.endsWith(".xml");
+                if (!document && !slide) {
+                    continue;
+                }
+                if (document) {
+                    sawDocument = true;
+                }
+                if (slide) {
+                    sawSlide = true;
+                }
+                String xml = new String(zis.readAllBytes(), StandardCharsets.UTF_8);
+                if (xml.contains(text)) {
                     return;
                 }
             }
         }
-        throw new AssertionError(zipPath + " missing word/document.xml");
+        if (sawDocument) {
+            throw new AssertionError(zipPath + " document.xml missing " + text);
+        }
+        if (sawSlide) {
+            throw new AssertionError(zipPath + " slides missing " + text);
+        }
+        throw new AssertionError(zipPath + " missing word/document.xml or ppt/slides");
     }
 
     private static String str(Map<String, Object> card, String key) {

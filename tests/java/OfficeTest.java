@@ -208,12 +208,116 @@ public final class OfficeTest {
                 }
             }
 
+            byte[] png = java.util.Base64.getDecoder().decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+            Files.write(root.resolve("notes/dot.png"), png);
+
+            String deck = engine.runJs(
+                    "import { renderPptx } from './pptx.js';\n"
+                            + "export default renderPptx({"
+                            + "title:'季度复盘', theme:'briefing', slides:["
+                            + "{layout:'title', title:'季度复盘', subtitle:'2026 Q3'},"
+                            + "{layout:'bullets', title:'结论', items:['收入 +12%','留存持平']},"
+                            + "{layout:'twoColumn', title:'对比', left:['线上'], right:['线下']},"
+                            + "{layout:'stat', title:'指标', items:[{value:'12%', label:'收入'}]},"
+                            + "{layout:'steps', title:'流程', items:['发现','修复','上线']},"
+                            + "{layout:'callout', title:'记住', text:'一句话结论'},"
+                            + "{layout:'cards', title:'要点', items:[{title:'产品', text:'稳定'}]},"
+                            + "{layout:'table', title:'表', rows:[['列A','列B'],['1','2']]},"
+                            + "{layout:'shapes', title:'示意', shapes:["
+                            + "{preset:'ellipse', col:0, row:1, colSpan:4, rowSpan:3, fill:'accent', text:'A'},"
+                            + "{preset:'rightArrow', col:4, row:2, colSpan:4, rowSpan:2, fill:'accent2', text:'到'},"
+                            + "{preset:'roundRect', col:8, row:1, colSpan:4, rowSpan:3, fill:'surface', text:'B'}"
+                            + "]},"
+                            + "{layout:'section', title:'下一章', subtitle:'继续'}"
+                            + "]}, 'out/deck.pptx');\n",
+                    20000);
+            assertContains(deck, "\"ok\":true");
+            assertContains(deck, "\"slides\":10");
+            assertPkZip(root.resolve("out/deck.pptx"));
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide1.xml", "季度复盘");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide1.xml", "1F4E79");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide1.xml", "prst=\"ellipse\"");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide2.xml", "收入 +12%");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide2.xml", "prst=\"roundRect\"");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide5.xml", "prst=\"chevron\"");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide6.xml", "一句话结论");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/slides/slide9.xml", "prst=\"rightArrow\"");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "[Content_Types].xml", "presentationml.slide+xml");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/presentation.xml", "screen16x9");
+            assertZipEntryContains(root.resolve("out/deck.pptx"), "ppt/theme/theme1.xml", "a:theme");
+
+            String dark = engine.runJs(
+                    "import { renderPptx } from './pptx.js';\n"
+                            + "export default renderPptx({ theme:'dark', slides:["
+                            + "{ layout:'title', title:'Night', background:'dark' },"
+                            + "{ layout:'title', title:'Cover', background:{ image:'notes/dot.png' } },"
+                            + "{ layout:'image', title:'图', image:'notes/dot.png', text:'说明' }"
+                            + "]}, 'out/dark.pptx');\n",
+                    15000);
+            assertContains(dark, "\"ok\":true");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/slide1.xml", "a:gradFill");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/slide1.xml", "1B2430");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/slide2.xml", "r:embed");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/_rels/slide2.xml.rels", "image");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/slide3.xml", "p:pic");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/slides/slide3.xml", "说明");
+            assertZipEntryContains(root.resolve("out/dark.pptx"), "ppt/media/image1.png", "PNG");
+
+            String built = engine.runJs(
+                    "import { buildPptx } from './pptx-build.js';\n"
+                            + "export default buildPptx({ title:'B', theme:'briefing' }, function (b) {"
+                            + "b.title('Built','Sub').bullets('要点',['一','二']).shapes('图', ["
+                            + "{ preset:'rect', col:0, row:0, colSpan:12, rowSpan:2, fill:'accent', text:'条' }"
+                            + "]); }, 'out/built.pptx');\n",
+                    15000);
+            assertContains(built, "\"ok\":true");
+            assertZipEntryContains(root.resolve("out/built.pptx"), "ppt/slides/slide1.xml", "Built");
+            assertZipEntryContains(root.resolve("out/built.pptx"), "ppt/slides/slide3.xml", "prst=\"rect\"");
+
+            String rejected = engine.runJs(
+                    "import { renderPptx } from './pptx.js';\n"
+                            + "function grab(fn){ try { fn(); return 'ok'; } catch (e) { return String(e && e.message ? e.message : e); } }\n"
+                            + "export default {\n"
+                            + "theme: grab(function(){ renderPptx({ theme:'neon', slides:[{layout:'title', title:'x'}] }, 'out/bad-theme.pptx'); }),\n"
+                            + "layout: grab(function(){ renderPptx({ slides:[{layout:'nope', title:'x'}] }, 'out/bad-layout.pptx'); }),\n"
+                            + "shapes: grab(function(){ renderPptx({ slides:[{layout:'shapes', shapes:["
+                            + "{col:0,row:0,colSpan:1,rowSpan:1},{col:1,row:0,colSpan:1,rowSpan:1},"
+                            + "{col:2,row:0,colSpan:1,rowSpan:1},{col:3,row:0,colSpan:1,rowSpan:1},"
+                            + "{col:4,row:0,colSpan:1,rowSpan:1},{col:5,row:0,colSpan:1,rowSpan:1},"
+                            + "{col:6,row:0,colSpan:1,rowSpan:1}] }] }, 'out/bad-shapes.pptx'); }),\n"
+                            + "grid: grab(function(){ renderPptx({ slides:[{layout:'shapes', shapes:[{col:11,row:0,colSpan:2,rowSpan:1}]}] }, 'out/bad-grid.pptx'); }),\n"
+                            + "empty: grab(function(){ renderPptx({}, 'out/bad-empty.pptx'); })\n"
+                            + "};\n",
+                    15000);
+            assertContains(rejected, "bad argument");
+            assertContains(rejected, "unknown theme");
+            assertContains(rejected, "unknown layout");
+            assertContains(rejected, "too many shapes");
+            assertContains(rejected, "shape out of grid");
+            assertContains(rejected, "slides required");
+
+            try {
+                engine.runJs(
+                        "import { renderPptx } from './pptx.js';\n"
+                                + "renderPptx({ slides:[{layout:'title', title:'x'}] }, '../outside.pptx');\n",
+                        5000);
+                throw new AssertionError("expected path escape");
+            } catch (RuntimeException e) {
+                String msg = e.getMessage();
+                if (msg == null || (!msg.contains("path") && !msg.contains("escape") && !msg.contains("invalid"))) {
+                    throw e;
+                }
+            }
+
             Path artifacts = Path.of(System.getProperty("user.dir"), "build", "office-artifacts");
             Files.createDirectories(artifacts);
             Files.copy(root.resolve("out/report.docx"), artifacts.resolve("report.docx"),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(root.resolve("out/deck.pptx"), artifacts.resolve("deck.pptx"),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
-        System.out.println("Office docx.js OK (" + platform + ")");
+        System.out.println("Office docx.js / pptx.js OK (" + platform + ")");
     }
 
     private static void write(Path file, String text) throws IOException {

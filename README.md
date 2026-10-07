@@ -59,6 +59,7 @@
 | 文件 / grep / 行号编辑 | 引擎只提供沙箱 `fs`；**grep、edit 在 `:agent-tools` 或 Agent 1 自有 Tool** | 工具环、工作区、用户目录与确认弹窗 |
 | 交付 | Maven / AAR（CI 产出 `weizhi-android-maven`） | `import-weizhi-prebuilt.sh` 拉预编译包联编，见 [INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md) |
 | Word / docx | 提供 `docx.js` 脚本与 [接入说明](docs/AGENT1_DOCX_INTEGRATION.md) | 在 App 内挂 catalog、`@Tool` 薄封装与验收 |
+| 幻灯片 / pptx | 提供 `pptx.js`（版式、主题、形状）与 [API](docs/pptx-js-api.md) | 在 App 内挂 catalog；内置 `pptx` Skill |
 
 集成 Agent 1 时：**workspace 路径**必须与 `setFsRoot` / `AndroidCaps` 对齐；Java 与 `libweizhijni.so` **必须同一次发布**，勿只替换 SO。其他 Agent 产品也可只依赖微智引擎，不必 fork Agent 1。
 
@@ -142,7 +143,7 @@ cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-too
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 已锁定设计与限额 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 产品方向与优先级 |
 | [docs/HOST_ABI.md](docs/HOST_ABI.md) / [docs/NATIVE_PLUGIN_IDL.md](docs/NATIVE_PLUGIN_IDL.md) | 宿主 ABI / 原生插件 |
-| [docs/office.md](docs/office.md) | docx.js（Markdown→Word） |
+| [docs/office.md](docs/office.md) | docx.js 与 pptx.js |
 
 ---
 
