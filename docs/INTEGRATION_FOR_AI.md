@@ -6,7 +6,7 @@
 | 文档 | 何时读 |
 |---|---|
 | **本文** | 宿主怎么开引擎、设沙箱、跑脚本、装 caps |
-| **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | **第三方接 Agent 工具环**（`:agent-tools` / WebView / Skill / `$tools`） |
+| **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | 模型工具不在本仓库；宿主自己实现 |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
 | [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI：`require` 内置 + `import` 自建库） |
 | [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
@@ -23,8 +23,8 @@
 1. **Agent 只有一个编程入口**：宿主调用 `WeizhiEngine.runJs(source[, timeoutMs])`，脚本返回值是 **JSON 文本**。
 2. **不要**把行号 `read_file` / `edit_file` / `grep` / `glob` 实现进引擎或 Caps；那些是 Agent `@Tool`。
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
-4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps` + 可选 `:agent-tools*`）。
-5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。**工具环** `:agent-tools` 另有 `WorkspaceSandbox` + 可选 `extraReadRoot`（见 [AGENT_TOOLS_INTEGRATION.md §3](AGENT_TOOLS_INTEGRATION.md#3-路径与工作区必对齐)）；技能目录用 `workspace/skills` 或 assets + `compositeSkills`，不要发明未文档化的引擎 API。
+4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps`）。模型工具由宿主实现。
+5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。grep / bash 等模型工具不在本仓库。
 6. **`setScriptFolder`**：catalog 脚本库根目录（`import "leaf.js"` 等**单层叶子**）。docx/pptx 由宿主放入该目录，引擎不自带。workspace 内用户模块走 **`setFsRoot`** + `import "./…"` / 带路径说明符，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
@@ -52,7 +52,7 @@
 ```bash
 # 在 weizhi 仓库根目录
 ./scripts/build-android.sh arm64-v8a   # 产出 stripped libweizhijni.so → android/weizhi/src/main/jniLibs/
-cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease :agent-tools:assembleRelease
+cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease
 ```
 
 **给 Agent1 的 Maven 预编译（推荐 CI / 无源码联编时）**：
@@ -79,7 +79,7 @@ cd android_agent && ./gradlew :app:assembleDebug
 
 - `:weizhi` → 引擎 + `WeizhiEngine` + `libweizhijni.so`（Release 应为 **stripped ~1.1MB**，不是未 strip 的 ~6MB）
 - `:caps` → `AndroidCaps`（`globalThis.android`）
-- `:agent-tools` → `AgentToolsBundle` / `AgentToolkit`（LLM 工具环 + `run_js`）；可选 `:agent-tools-webview`
+- 模型工具不在 Weizhi。宿主自己实现 grep / bash / WebView
 - `minSdk`：库侧 26；宿主须 `INTERNET` 若启用 `enableFetch`（脚本 `fetch` / `mcp` 都走这条网络栈）
 
 把 AAR 以 `project` 依赖或发布到本地 maven 均可；AI 改宿主工程时优先：
@@ -178,14 +178,14 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 按顺序做；不要跳步发明 API。
 
-- [ ] 依赖 `:weizhi`（+ 需要时 `:caps`、`:agent-tools`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
+- [ ] 依赖 `:weizhi`（需要端能力时加 `:caps`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
 - [ ] App 私有目录创建 **workspace**，`setFsRoot`（与 `AndroidCaps.Session.workspace` 同一路径）
 - [ ] （可选）`setScriptFolder` 指向 App 决定的可写技能/库目录（若与 workspace 分离）
 - [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI。要真正打开界面时设 `session.launchShareSheet` / `session.launchIntent`（默认都不 `startActivity`）
 - [ ] 若脚本会 `android.intent.start({ action, path })`：Manifest 声明 `androidx.core.content.FileProvider`，`android:authorities="${applicationId}.fileprovider"`，paths 覆盖 workspace（`files` / `cache` 等）。Caps 用 `context.getPackageName() + ".fileprovider"`。并声明 `<queries>`，否则 Android 11+ 看不到可处理 `VIEW` / `SEND` 的应用
 - [ ] （可选）`enableFetch(allowlist)` + Manifest `INTERNET`
 - [ ] 工具环：`run_js` 工具（或等价）把模型产出的 JS 交给 `WeizhiEngine.runJs`；超时与 `cancel` 接到会话取消
-- [ ] 行号读写 / grep / glob：用 **`:agent-tools`**（或自建 `@Tool` + `WorkspaceSandbox`），不要塞进 Weizhi C 引擎
+- [ ] 行号读写 / grep / glob：宿主自己的工具，不要塞进 Weizhi C 引擎
 - [ ] zip：工具环可薄包 `android.files.zip*` 或继续用 Agent 自有 `ZipTools`；脚本内用 `require("zip")`
 - [ ] 每次失败把 **完整英文 error** 回传模型；系统提示贴上 AGENT_SANDBOX_PROMPT
 - [ ] 任务结束 `engine.close()`；不要假定跨多次 `runJs` 保留 timer；**注意**同引擎全局词法：`const` 不能重复声明
@@ -204,8 +204,7 @@ open → setFsRoot → [setScriptFolder] → [AndroidCaps.install] → [enableFe
 
 | Gradle | 作用 |
 |--------|------|
-| `:agent-tools` | 默认工具 + `run_js` + `$tools` 桥 |
-| `:agent-tools-webview` | `WebViewAgentExtension` → `webview_exec` |
+| 模型工具 | 不在本仓库。宿主自行实现 |
 
 检查清单补充：
 
@@ -304,7 +303,7 @@ android.audit.recent()
 4. （若开网）`enableFetch` 后 `fetch` 成功；未开则错误含 `enableFetch`
 5. 另一线程 `cancel()` 长脚本 → 错误含 `cancelled`
 6. 真机：`./scripts/test.sh android` 或宿主自有 instrumented 测试
-7. （若接 `:agent-tools`）`tk.call("bash", …)`、`tk.call("run_js", …)`、`load_skill_through_path`、可选 `$tools.grep`（见 `AgentToolsInstrumentedTest`）
+7. 用 `WeizhiEngine.runJs` 跑一段读写 `fs` 的脚本，确认沙箱生效
 
 ---
 

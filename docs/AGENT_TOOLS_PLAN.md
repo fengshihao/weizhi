@@ -1,5 +1,7 @@
 # Agent 工具环接入计划
 
+> 已废弃。`:agent-tools` 与 `:agent-tools-webview` 已从仓库删除。模型工具在宿主。下文只作历史记录。
+
 日期：2026-09-25。与 [DECISIONS.md](DECISIONS.md)、[INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md) 一致：**引擎负责 `runJs` + 内置模块**（含 `globalThis.mcp`）；grep / bash / Skill / WebView 属于 **Java `@Tool` 工具环**，放在 Gradle 模块。MCP 的缓存和模型侧用法留在宿主。
 
 ## 1. 模块

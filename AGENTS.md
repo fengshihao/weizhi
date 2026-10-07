@@ -4,9 +4,9 @@
 
 ## 项目是什么
 
-**微智 Weizhi** 是基于 Bellard QuickJS 的**嵌入式 JavaScript 引擎**（C + JNI）：Release 核心 SO strip 后约 **1.1&nbsp;MB**，沙箱 + `runJs` 单一入口；可选 **caps**、**`:agent-tools`**、IDL 原生插件与脚本库，按需扩展。
+**微智 Weizhi** 是基于 Bellard QuickJS 的**嵌入式 JavaScript 引擎**（C + JNI）：Release 核心 SO strip 后约 **1.1&nbsp;MB**，沙箱 + `runJs` 单一入口；可选 **caps**、IDL 原生插件与脚本库。给模型调用的文件搜索和 bash 属于宿主，不在本引擎里。
 
-与 **[Agent 1](https://github.com/fengshihao/agent1)** 分仓：本仓库是引擎与 AAR；Agent 1 是参考宿主 App（工具环、UI、LLM 编排）。集成约定见 [docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)。
+与 **[Agent 1](https://github.com/fengshihao/agent1)** 分仓：本仓库是引擎与 AAR；Agent 1 拥有模型工具、UI 和 LLM 编排。本仓库没有 LLM 工具模块。集成约定见 [docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)。
 
 ## 分层（改代码前对齐）
 
@@ -14,7 +14,7 @@
 |----|-------------|------|
 | 引擎 | `src/`、`include/`、`jni/`、`java/com/weizhi/` | `runJs`、限额、`fs`、内置模块、插件加载 |
 | Caps | `android/caps/` | `globalThis.android` 等端能力 |
-| Agent 工具环 | `android/agent-tools*` | LLM `@Tool`，**不要**塞进 C 引擎 |
+| 无 LLM 工具模块 | — | grep / bash / WebView 在宿主。不要塞进 C 引擎 |
 | 原生插件 | `plugins/*` + IDL | 签名 SO；用 `scripts/weizhi-bindgen.py` |
 | 文档 | `docs/**` | 集成真源见 `INTEGRATION_FOR_AI.md` |
 
@@ -72,7 +72,7 @@ CI 定义： [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
 
 ## 集成方与引擎边界
 
-- Agent **只有一个编程入口**：`WeizhiEngine.runJs`；grep / 行号 edit 属于 **`:agent-tools`**，不进 C。
+- Agent **只有一个编程入口**：`WeizhiEngine.runJs`。grep / bash / WebView 属于宿主，不在本仓库。
 - 规格冲突时以 `include/weizhi.h`、`java/com/weizhi/WeizhiEngine.java` 与测试为准。
 - 第三方接 Agent： [`docs/INTEGRATION_FOR_AI.md`](docs/INTEGRATION_FOR_AI.md)、[`docs/AGENT_TOOLS_INTEGRATION.md`](docs/AGENT_TOOLS_INTEGRATION.md)。
 

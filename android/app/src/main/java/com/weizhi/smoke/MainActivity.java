@@ -16,14 +16,10 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.weizhi.WeizhiEngine;
-import com.weizhi.agent.AgentToolsBundle;
-import com.weizhi.agent.tool.AgentToolkit;
 import com.weizhi.caps.AndroidCaps;
 import com.weizhi.platform.OrganizeFiles;
 
 import java.io.File;
-import java.nio.file.Paths;
-import java.util.Map;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
@@ -79,9 +75,6 @@ public final class MainActivity extends Activity {
         addButton(column, "打开示例文本", "android.intent.start({action:'view', path:'发票.txt'})");
         addButton(column, "5 秒后提醒",
                 "var s = android.reminders.schedule({title:'出发', body:'检查证件', atMs: Date.now()+5000}); s");
-        addButton(column, "Agent bash", null);
-        addButton(column, "Agent run_js", null);
-        addButton(column, "Agent skill", null);
         log = new TextView(this);
         log.setPadding(0, 24, 0, 0);
         log.setText("Weizhi Demo\n平台对象: android\n工作区: " + workspace.getAbsolutePath());
@@ -108,51 +101,10 @@ public final class MainActivity extends Activity {
         button.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if ("Agent bash".equals(label)) {
-                    runAgentTools("bash", Map.of("command", "pwd"));
-                    return;
-                }
-                if ("Agent run_js".equals(label)) {
-                    runAgentTools("run_js", Map.of("code", "JSON.stringify(1+2)"));
-                    return;
-                }
-                if ("Agent skill".equals(label)) {
-                    runAgentTools("load_skill_through_path",
-                            Map.of("skillId", "demo", "path", "SKILL.md"));
-                    return;
-                }
                 runSnippet(label, js, "整理所选文件夹".equals(label), "分享文案".equals(label));
             }
         });
         column.addView(button);
-    }
-
-    private void runAgentTools(String tool, Map<String, Object> input) {
-        append(tool + " …");
-        worker.execute(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    AgentToolkit tk = AgentToolsBundle.builder(Paths.get(workspace.getAbsolutePath()))
-                            .compositeSkills(MainActivity.this, "agent_skills")
-                            .engineConfigure(engine -> {
-                                try {
-                                    AndroidCaps.Session session =
-                                            new AndroidCaps.Session(MainActivity.this, workspace);
-                                    session.confirmer = message -> true;
-                                    AndroidCaps.install(engine, session);
-                                } catch (Exception e) {
-                                    throw new RuntimeException(e);
-                                }
-                            })
-                            .build();
-                    String out = tk.call(tool, input);
-                    append(tool + "\n" + out);
-                } catch (Exception e) {
-                    append(tool + " 失败\n" + e.getMessage());
-                }
-            }
-        });
     }
 
     private void runSnippet(String label, String js, boolean pick, boolean shareSheet) {

@@ -25,7 +25,7 @@ When people step away, work continues against the agreed design. Below are the s
 
 ### Agent tools vs engine APIs
 
-- **Agent Java `@Tool`s** (read / edit with line numbers, grep, glob, agent-side `zip_extract` / `zip_create`, …) live in the **Agent host**, not in Weizhi. They serve the LLM tool loop and UX (line ranges, search hits). Do **not** reimplement those tools inside the engine.
+- **Agent Java `@Tool`s** (read / edit, grep, glob, zip, bash, skill load, webview) live in the **Agent host**. This repo does not ship an LLM tool module. Agent1 implements them in `java-agent-core`. Do **not** reimplement those tools inside the C engine.
 - **Weizhi built-ins** (`fs`, `path`, `zlib`, `zip`, `mcp`, …) are for **scripts** inside `runJs`: thin, program-shaped APIs (relative paths, `Buffer`). Ordinary file I/O stays on the engine; programming-agent search/edit ergonomics stay on Agent Java. `globalThis.mcp` is the MCP client; tool catalogs, caches, and model-facing tool names stay on the host.
 - **Caps** (`android` / `mac` / `linux`): generic productivity surface. Shared zip lives here as `files.zipExtract` / `files.zipCreate` (Java NIO, stream-based; Agent may thin-wrap as `@Tool`). Engine `require("zip")` remains for in-script pack/unpack.
 - Grep / workspace search need **not** be C-in-engine for speed — Java NIO (or equivalent) in the Agent is enough when those tools are required.

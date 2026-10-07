@@ -36,8 +36,6 @@ subprojects { sub ->
 def weizhiPublishModules = [
     ":weizhi",
     ":caps",
-    ":agent-tools",
-    ":agent-tools-webview",
 ]
 
 tasks.register("publishWeizhiAndroidLibraries") {

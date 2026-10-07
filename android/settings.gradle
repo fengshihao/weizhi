@@ -17,6 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "weizhi-android"
 include(":weizhi")
 include(":caps")
-include(":agent-tools")
-include(":agent-tools-webview")
 include(":app")

@@ -40,7 +40,7 @@ I want to contribute: 〈one scoped change〉. Follow AGENTS.md and docs/ai/CHEC
 给**集成方**的 AI（不是改本仓库）：
 
 ```text
-在我的 Android Agent 里集成 Weizhi：读 https://github.com/fengshihao/weizhi/blob/master/docs/INTEGRATION_FOR_AI.md，依赖 :weizhi（+ 可选 :caps、:agent-tools），workspace 与 setFsRoot 对齐，用 run_js 调 WeizhiEngine.runJs，系统提示粘贴 docs/AGENT_SANDBOX_PROMPT.md。
+在我的 Android Agent 里集成 Weizhi：读 https://github.com/fengshihao/weizhi/blob/master/docs/INTEGRATION_FOR_AI.md，依赖 :weizhi（+ 可选 :caps）。模型工具由宿主自己提供；Agent1 的 grep/bash 不在本仓库。workspace 与 setFsRoot 对齐，用 WeizhiEngine.runJs 跑脚本，系统提示粘贴 docs/AGENT_SANDBOX_PROMPT.md。
 ```
 
 ---

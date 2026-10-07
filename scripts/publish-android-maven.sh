@@ -58,9 +58,7 @@ fi
 echo "==> assembleRelease (all publishable modules)"
 "${GRADLE[@]}" --no-daemon "${GRADLE_PROPS[@]}" \
   :weizhi:assembleRelease \
-  :caps:assembleRelease \
-  :agent-tools:assembleRelease \
-  :agent-tools-webview:assembleRelease
+  :caps:assembleRelease
 
 case "$TARGET" in
   repo)

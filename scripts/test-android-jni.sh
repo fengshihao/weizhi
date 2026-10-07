@@ -54,6 +54,6 @@ else
 fi
 
 echo "Running connectedDebugAndroidTest with $gradlew ..."
-"$gradlew" :weizhi:assembleDebug :agent-tools:testReleaseUnitTest :app:connectedDebugAndroidTest
+"$gradlew" :weizhi:assembleDebug :app:connectedDebugAndroidTest
 
 echo "Android JNI smoke OK (Demo depends on :weizhi AAR)"
