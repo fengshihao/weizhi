@@ -408,6 +408,84 @@ static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_
     return weizhi_resolve_workspace_path(engine, relpath, out, out_len, error);
 }
 
+static int vfs_invoke(Engine *engine, WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
+                      WeizhiBytes *out, char *errbuf, size_t errbuf_len);
+
+static int fs_mkdir_p(Engine *engine, const char *relpath, char *errbuf, size_t errbuf_len) {
+    char tmp[PATH_MAX];
+    size_t i;
+    size_t len;
+    if (relpath == NULL || relpath[0] == '\0' || !weizhi_fs_path_ok(relpath)) {
+        snprintf(errbuf, errbuf_len, "invalid path");
+        return -1;
+    }
+    if (snprintf(tmp, sizeof(tmp), "%s", relpath) >= (int)sizeof(tmp)) {
+        snprintf(errbuf, errbuf_len, "path too long");
+        return -1;
+    }
+    len = strlen(tmp);
+    for (i = 1; i < len; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            if (tmp[0] != '\0' && weizhi_fs_path_ok(tmp)) {
+                if (vfs_invoke(engine, WEIZHI_VFS_MKDIR, tmp, NULL, NULL, NULL, errbuf, errbuf_len) != 0) {
+                    return -1;
+                }
+            }
+            tmp[i] = '/';
+        }
+    }
+    return vfs_invoke(engine, WEIZHI_VFS_MKDIR, relpath, NULL, NULL, NULL, errbuf, errbuf_len);
+}
+
+static int fs_ensure_parent_dirs(Engine *engine, const char *relpath, char *errbuf, size_t errbuf_len) {
+    char parent[PATH_MAX];
+    const char *slash;
+    size_t len;
+    if (relpath == NULL || relpath[0] == '\0') {
+        snprintf(errbuf, errbuf_len, "invalid path");
+        return -1;
+    }
+    /* Absolute paths: parent is usually the workspace root (already exists). Nested abs mkdir is rare; use relative paths or mkdirSync. */
+    if (relpath[0] == '/') {
+        return 0;
+    }
+    slash = strrchr(relpath, '/');
+    if (slash == NULL || slash == relpath) {
+        return 0;
+    }
+    len = (size_t)(slash - relpath);
+    if (len >= sizeof(parent)) {
+        snprintf(errbuf, errbuf_len, "path too long");
+        return -1;
+    }
+    memcpy(parent, relpath, len);
+    parent[len] = '\0';
+    if (parent[0] == '\0') {
+        return 0;
+    }
+    return fs_mkdir_p(engine, parent, errbuf, errbuf_len);
+}
+
+static int fs_mkdir_single_strict(Engine *engine, const char *relpath, char *errbuf, size_t errbuf_len) {
+    char path[PATH_MAX];
+    const char *error = NULL;
+    struct stat st;
+    if (resolve_fs_path(engine, relpath, path, sizeof(path), &error) != 0) {
+        snprintf(errbuf, errbuf_len, "%s", error);
+        return -1;
+    }
+    if (stat(path, &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+            snprintf(errbuf, errbuf_len, "directory exists");
+            return -1;
+        }
+        snprintf(errbuf, errbuf_len, "mkdir failed");
+        return -1;
+    }
+    return vfs_invoke(engine, WEIZHI_VFS_MKDIR, relpath, NULL, NULL, NULL, errbuf, errbuf_len);
+}
+
 static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
                             WeizhiBytes *out, char *errbuf, size_t errbuf_len, void *userdata) {
     Engine *engine = userdata;
@@ -415,6 +493,9 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     char path2[PATH_MAX];
     const char *error = NULL;
     memset(out, 0, sizeof(*out));
+    if (op == WEIZHI_VFS_WRITE && fs_ensure_parent_dirs(engine, relpath, errbuf, errbuf_len) != 0) {
+        return -1;
+    }
     if (resolve_fs_path(engine, relpath, path, sizeof(path), &error) != 0) {
         snprintf(errbuf, errbuf_len, "%s", error);
         return -1;
@@ -495,7 +576,7 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
         return 0;
     case WEIZHI_VFS_MKDIR:
         if (mkdir(path, 0755) != 0 && errno != EEXIST) {
-            snprintf(errbuf, errbuf_len, "mkdir failed");
+            snprintf(errbuf, errbuf_len, errno == ENOENT ? "path not found" : "mkdir failed");
             return -1;
         }
         return 0;
@@ -515,6 +596,27 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
     }
 }
 
+static int vfs_invoke(Engine *engine, WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
+                      WeizhiBytes *out, char *errbuf, size_t errbuf_len) {
+    WeizhiBytes local;
+    WeizhiBytes *use = out;
+    int rc;
+    if (use == NULL) {
+        memset(&local, 0, sizeof(local));
+        use = &local;
+    }
+    if (engine->vfs_sync != NULL) {
+        rc = engine->vfs_sync(op, relpath, relpath2, in, use, errbuf, errbuf_len,
+                              engine->vfs_ud != NULL ? engine->vfs_ud : engine);
+    } else {
+        rc = default_vfs_sync(op, relpath, relpath2, in, use, errbuf, errbuf_len, engine);
+    }
+    if (out == NULL) {
+        weizhi_bytes_free(&local);
+    }
+    return rc;
+}
+
 static void async_job_free(WeizhiAsyncJob *job) {
     if (job == NULL) {
         return;
@@ -531,6 +633,16 @@ static void async_job_run(WeizhiAsyncJob *job) {
     int rc;
     memset(&out, 0, sizeof(out));
     errbuf[0] = '\0';
+    if (job->op == WEIZHI_VFS_MKDIR && job->in.len >= 1 && job->in.data != NULL) {
+        if (job->in.data[0] == 1) {
+            rc = fs_mkdir_p(job->engine, job->relpath, errbuf, sizeof(errbuf));
+        } else {
+            rc = fs_mkdir_single_strict(job->engine, job->relpath, errbuf, sizeof(errbuf));
+        }
+        weizhi_complete(job->engine, job->request_id, rc == 0, NULL, errbuf);
+        async_job_free(job);
+        return;
+    }
     if (job->engine->vfs_sync != NULL) {
         rc = job->engine->vfs_sync(job->op, job->relpath, job->relpath2, &job->in, &out, errbuf, sizeof(errbuf),
                                    job->engine->vfs_ud != NULL ? job->engine->vfs_ud : job->engine);
@@ -850,6 +962,45 @@ static JSValue js_unlink_sync(JSContext *ctx, JSValueConst this_val, int argc, J
     return fs_sync_op(ctx, WEIZHI_VFS_UNLINK, argv[0], JS_UNDEFINED, JS_UNDEFINED, 0);
 }
 
+static int mkdir_recursive_from_options(JSContext *ctx, JSValueConst options) {
+    int recursive = 0;
+    if (!JS_IsUndefined(options) && !JS_IsNull(options) && JS_IsObject(options)) {
+        JSValue v = JS_GetPropertyStr(ctx, options, "recursive");
+        if (!JS_IsException(v) && !JS_IsUndefined(v)) {
+            recursive = JS_ToBool(ctx, v) ? 1 : 0;
+        }
+        JS_FreeValue(ctx, v);
+    }
+    return recursive;
+}
+
+static JSValue js_mkdir_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    int recursive;
+    char errbuf[128];
+    const char *relpath;
+    int rc;
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "fs.mkdirSync", "path required");
+    }
+    recursive = mkdir_recursive_from_options(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED);
+    relpath = JS_ToCString(ctx, argv[0]);
+    if (relpath == NULL) {
+        return JS_EXCEPTION;
+    }
+    if (recursive) {
+        rc = fs_mkdir_p(engine, relpath, errbuf, sizeof(errbuf));
+    } else {
+        rc = fs_mkdir_single_strict(engine, relpath, errbuf, sizeof(errbuf));
+    }
+    JS_FreeCString(ctx, relpath);
+    if (rc != 0) {
+        return JS_ThrowReferenceError(ctx, "%s", errbuf);
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val, JSValueConst data_val, int has_data) {
     Engine *engine = weizhi_from_ctx(ctx);
     JSValue funcs[2];
@@ -904,6 +1055,55 @@ static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val
     return promise;
 }
 
+static JSValue fs_async_mkdir(JSContext *ctx, JSValueConst path_val, int recursive) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    JSValue funcs[2];
+    JSValue promise;
+    const char *relpath;
+    WeizhiBytes in;
+    int64_t id;
+    int rc;
+    memset(&in, 0, sizeof(in));
+    in.data = malloc(1);
+    if (in.data == NULL) {
+        return JS_EXCEPTION;
+    }
+    in.data[0] = recursive ? 1 : 2;
+    in.len = 1;
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        free(in.data);
+        return promise;
+    }
+    relpath = JS_ToCString(ctx, path_val);
+    if (relpath == NULL) {
+        free(in.data);
+        JS_FreeValue(ctx, funcs[0]);
+        JS_FreeValue(ctx, funcs[1]);
+        JS_FreeValue(ctx, promise);
+        return JS_EXCEPTION;
+    }
+    id = weizhi_pending_add(engine, funcs[0], funcs[1]);
+    if (id < 0) {
+        JS_FreeCString(ctx, relpath);
+        free(in.data);
+        JS_FreeValue(ctx, promise);
+        return JS_ThrowRangeError(ctx, "too many async requests");
+    }
+    if (engine->vfs_async != NULL) {
+        void *ud = engine->vfs_async_ud != NULL ? engine->vfs_async_ud : engine->vfs_ud;
+        rc = engine->vfs_async(engine, id, WEIZHI_VFS_MKDIR, relpath, NULL, &in, ud);
+    } else {
+        rc = default_vfs_async(engine, id, WEIZHI_VFS_MKDIR, relpath, NULL, &in, engine);
+    }
+    JS_FreeCString(ctx, relpath);
+    free(in.data);
+    if (rc != 0) {
+        weizhi_complete(engine, id, 0, NULL, "failed to start async I/O");
+    }
+    return promise;
+}
+
 static JSValue js_promises_read_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     if (argc < 1) {
@@ -920,6 +1120,16 @@ static JSValue js_promises_write_file(JSContext *ctx, JSValueConst this_val, int
     return fs_async_op(ctx, WEIZHI_VFS_WRITE, argv[0], argv[1], 1);
 }
 
+static JSValue js_promises_mkdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int recursive;
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "fs.promises.mkdir", "path required");
+    }
+    recursive = mkdir_recursive_from_options(ctx, argc >= 2 ? argv[1] : JS_UNDEFINED);
+    return fs_async_mkdir(ctx, argv[0], recursive);
+}
+
 static JSValue make_fs_module(JSContext *ctx) {
     JSValue mod = JS_NewObject(ctx);
     JSValue promises = JS_NewObject(ctx);
@@ -929,8 +1139,10 @@ static JSValue make_fs_module(JSContext *ctx) {
     JS_SetPropertyStr(ctx, mod, "writeFileSync", JS_NewCFunction(ctx, js_write_file_sync, "writeFileSync", 2));
     JS_SetPropertyStr(ctx, mod, "existsSync", JS_NewCFunction(ctx, js_exists_sync, "existsSync", 1));
     JS_SetPropertyStr(ctx, mod, "unlinkSync", JS_NewCFunction(ctx, js_unlink_sync, "unlinkSync", 1));
+    JS_SetPropertyStr(ctx, mod, "mkdirSync", JS_NewCFunction(ctx, js_mkdir_sync, "mkdirSync", 2));
     JS_SetPropertyStr(ctx, promises, "readFile", JS_NewCFunction(ctx, js_promises_read_file, "readFile", 1));
     JS_SetPropertyStr(ctx, promises, "writeFile", JS_NewCFunction(ctx, js_promises_write_file, "writeFile", 2));
+    JS_SetPropertyStr(ctx, promises, "mkdir", JS_NewCFunction(ctx, js_promises_mkdir, "mkdir", 2));
     guarded_promises = weizhi_guard_module(ctx, promises, "fs.promises");
     if (JS_IsException(guarded_promises)) {
         JS_FreeValue(ctx, mod);
@@ -1339,6 +1551,7 @@ static int fs_module_init(JSContext *ctx, JSModuleDef *m) {
     JS_SetModuleExport(ctx, m, "writeFileSync", JS_GetPropertyStr(ctx, obj, "writeFileSync"));
     JS_SetModuleExport(ctx, m, "existsSync", JS_GetPropertyStr(ctx, obj, "existsSync"));
     JS_SetModuleExport(ctx, m, "unlinkSync", JS_GetPropertyStr(ctx, obj, "unlinkSync"));
+    JS_SetModuleExport(ctx, m, "mkdirSync", JS_GetPropertyStr(ctx, obj, "mkdirSync"));
     JS_SetModuleExport(ctx, m, "promises", JS_GetPropertyStr(ctx, obj, "promises"));
     JS_FreeValue(ctx, obj);
     return 0;
@@ -1480,6 +1693,7 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
             JS_AddModuleExport(ctx, m, "writeFileSync");
             JS_AddModuleExport(ctx, m, "existsSync");
             JS_AddModuleExport(ctx, m, "unlinkSync");
+            JS_AddModuleExport(ctx, m, "mkdirSync");
             JS_AddModuleExport(ctx, m, "promises");
         }
         return m;

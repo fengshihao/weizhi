@@ -34,7 +34,7 @@
 
 | API | 路径规则 |
 |---|---|
-| `setFsRoot` + `fs` / `fs.promises` / `zip` 等工作区 VFS | 相对 workspace 或绝对路径；归一化后须在根下 |
+| `setFsRoot` + `fs` / `fs.promises` / `zip` 等工作区 VFS | 相对 workspace 或绝对路径；归一化后须在根下；`mkdirSync`/`promises.mkdir` 支持 `{ recursive: true }`；`writeFile` 自动创建父目录 |
 | workspace `import`（说明符含 `/` 或 `/` 开头） | 同上；须为 `.js`；缺失文件时可按叶子名回退 `setScriptFolder` |
 | `import "leaf.js"` / `"leaf"`（无 `/`） | 仅 `setScriptFolder` 根下 catalog 叶子名 |
 | `runJs(..., filename)` | `filename` 为 workspace 逻辑路径（建议相对，如 `jobs/run.js`），供 `./` 解析 |
@@ -282,7 +282,7 @@ android.audit.recent()
 
 模型靠这些自纠（详见 DECISIONS）：
 
-`unsupported` / `bad argument` / `path` / `escape` / `timeout` / `cancelled` / `memory` / `stack` / `too large` / `enableFetch` / `fetch blocked`
+`unsupported` / `bad argument` / `path` / `escape` / `path not found` / `directory exists` / `timeout` / `cancelled` / `memory` / `stack` / `too large` / `enableFetch` / `fetch blocked`
 
 ---
 
