@@ -82,7 +82,7 @@ sequenceDiagram
 1. 实现纯 C ABI 插件（**禁止 `JNI_OnLoad`**），导出表写入 `manifest.json`。
 2. 为各 ABI 产出 `libfoo.so`（或统一包内多 ABI）。
 3. Manifest 字段（schema 实现时写死）：
-   - `name`（稳定 ID，如 `image_resize`）
+   - `name`（稳定 ID，如 `echo_math`）
    - `version`（semver）
    - `min_host_abi`（整数，对应 `WEIZHI_HOST_ABI_VERSION`）
    - `exports[]`

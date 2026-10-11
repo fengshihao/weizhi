@@ -1,8 +1,6 @@
 package com.weizhi;
 
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.Color;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -17,7 +15,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
-import java.io.FileOutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -121,23 +118,10 @@ public final class CapsInstrumentedTest {
     }
 
     @Test
-    public void resizeShareReminderAndCancelPick() throws Exception {
-        File workspace = workspace("media");
-        Bitmap bitmap = Bitmap.createBitmap(80, 40, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(Color.RED);
-        try (FileOutputStream out = new FileOutputStream(new File(workspace, "in.png"))) {
-            assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, out));
-        }
-        bitmap.recycle();
-
+    public void shareReminderAndCancelPick() throws Exception {
+        File workspace = workspace("share");
         String[] shared = new String[2];
         try (WeizhiEngine engine = new WeizhiEngine()) {
-            File pluginRoot = new File(context().getCacheDir(), "caps-plugins-" + System.currentTimeMillis());
-            File imageDir = new File(pluginRoot, "image_resize");
-            assertTrue(imageDir.mkdirs());
-            copyAsset("plugins/image_resize/manifest.json", new File(imageDir, "manifest.json"));
-            copyAsset("plugins/image_resize/libimage_resize.so", new File(imageDir, "libimage_resize.so"));
-            engine.enableNativePlugins(pluginRoot.getAbsolutePath());
             AndroidCaps.Session session = new AndroidCaps.Session(context(), workspace);
             session.shareSink = new PlatformHost.ShareSink() {
                 @Override
@@ -153,10 +137,8 @@ public final class CapsInstrumentedTest {
                 }
             };
             AndroidCaps.install(engine, session);
-            String resized = engine.runJs(
-                    "await host.ensureNative('image_resize'); android.media.resize('in.png', 20)", 8000);
-            assertTrue(resized.contains("\"width\":20"));
-            assertTrue(resized.contains("\"height\":10"));
+            assertEquals("\"undefined\"", engine.runJs("typeof android.media", 3000));
+            expectFail(engine, "android.media.resize('in.png', 20)", "undefined");
 
             engine.runJs("android.share.send({title:'草稿', text:'朋友圈文案'})", 3000);
             assertEquals("草稿", shared[0]);
@@ -316,28 +298,6 @@ public final class CapsInstrumentedTest {
             assertTrue(out, out.contains("entries"));
             assertTrue(out, out.contains("\"text\":\"hello zip\""));
         }
-    }
-
-    private static void copyAsset(String assetPath, File dest) throws Exception {
-        Context[] contexts = new Context[] {
-                InstrumentationRegistry.getInstrumentation().getContext(),
-                context()
-        };
-        java.io.FileNotFoundException missing = null;
-        for (Context ctx : contexts) {
-            try (java.io.InputStream in = ctx.getAssets().open(assetPath);
-                    java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
-                }
-                return;
-            } catch (java.io.FileNotFoundException e) {
-                missing = e;
-            }
-        }
-        throw missing == null ? new java.io.FileNotFoundException(assetPath) : missing;
     }
 
     private static void expectFail(WeizhiEngine engine, String js, String needle) {

@@ -172,7 +172,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 - `require("zip").extractSync/createSync`；Caps：`android.files.zipExtract` / `zipCreate`。
 - `Buffer` 是 `Uint8Array` 子类；`fetch` 与 `mcp` 需宿主 `enableFetch`。
 - 平台对象三选一：`android` / `mac` / `linux`；调错名字会 `unsupported`。
-- Caps 文件 API：`list`/`read`/`write`/`mkdir`/`rename`/`move`/`undo`/`zipExtract`/`zipCreate`；Android 另有 `pickDirectory`、`media.resize`、`share`、`intent.start`、`reminders`。
+- Caps 文件 API：`list`/`read`/`write`/`mkdir`/`rename`/`move`/`undo`/`zipExtract`/`zipCreate`；Android 另有 `pickDirectory`、`share`、`intent.start`、`reminders`。
 
 ---
 
@@ -232,7 +232,6 @@ android.files.rename(path, name) / move(path, toDir) / undo()
 android.files.zipExtract(file, dest?)  // dest 省略 → tmp/<zip名>/
 android.files.zipCreate(sourceDir, file)
 android.files.pickDirectory()          // 仅 Android；取消则错误含 cancelled
-android.media.resize(path, maxEdge)    // 需 ensureNative("image_resize")
 android.share.send({ title, text })    // 纯文本分享；语义不变
 android.intent.start({
   action: "view",          // view | edit | send | send_multiple | panel | settings

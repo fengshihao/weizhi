@@ -10,7 +10,7 @@
 
 - 文本和数据工具打成单个脚本就能跑。
 - ZIP、PDF、DOCX、表格要裁掉压缩和字体，把 deflate 交给宿主。引擎已提供 `require("zlib")`（`gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync`）和 `require("zip")`（`extractSync` / `createSync`，可直接解压/打包 Office 类 zip）。
-- 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `media.resize` 同一条路。
+- 图像编解码、PDF 渲染、WASM 库走签名原生 SO，和现有 `echo_math` 同一条路。
 
 QuickJS 保持上游，不改引擎源码。没有 `node_modules` 解析；库在引擎外打成 bundle 或 **Package 目录**（见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) 提案），用户任务脚本仍用 workspace `import './file.js'`（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。
 
@@ -72,7 +72,7 @@ Weizhi 暴露给脚本的表面更窄：
 
 | 库 | 原因 |
 | --- | --- |
-| sharp | libvips 绑定。和 `media.resize` 同一条路 |
+| sharp | libvips 绑定。和 `echo_math` 同一条路 |
 | jimp、pngjs、jpeg-js | 纯 JS 编解码又慢又吃内存。jpeg-js 有已知内存尖峰。jimp 还要类 Node 的 Buffer |
 | pdfjs-dist | 要 Canvas、Worker，可选 WASM |
 | opencv.js、@jsquash / squoosh | 产物是 WASM |

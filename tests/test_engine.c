@@ -1407,28 +1407,6 @@ static void test_zip_roundtrip(void) {
     free(dir);
 }
 
-static void test_image_resize_plugin(void) {
-    WeizhiEngine *engine = weizhi_open(NULL);
-    WeizhiResult result;
-    char plugin_dir[512];
-    const char *root = getenv("WEIZHI_BUILD_DIR");
-    if (root == NULL) {
-        root = "build";
-    }
-    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
-    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
-    result = weizhi_run_js(engine,
-                           "const p = await host.ensureNative('image_resize');"
-                           "const src = Buffer.from(String.fromCharCode(1,2,3,4,5,6,7,8));"
-                           "const out = p.resize_rgba(src, 2, 1, 1);"
-                           "out.length",
-                           5000);
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "12") == 0);
-    weizhi_result_free(&result);
-    weizhi_close(engine);
-}
-
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
@@ -1465,7 +1443,6 @@ int main(void) {
     test_typed_plugin_loader();
     test_zlib_roundtrip();
     test_zip_roundtrip();
-    test_image_resize_plugin();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);
         return 1;

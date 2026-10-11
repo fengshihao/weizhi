@@ -9,7 +9,7 @@ import java.nio.file.Path;
 
 /**
  * macOS / Linux productivity surface. Installs {@code mac} or {@code linux} only.
- * Photo resize, Android share sheet, and notification reminders are unsupported here.
+ * Android share sheet and notification reminders are unsupported here.
  */
 public final class DesktopCaps {
     private DesktopCaps() {

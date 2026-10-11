@@ -76,21 +76,6 @@ add_custom_command(TARGET echo_math POST_BUILD
         "$<TARGET_FILE_DIR:echo_math>/manifest.json"
 )
 
-add_library(image_resize SHARED plugins/image_resize/image_resize.c)
-target_include_directories(image_resize PRIVATE include plugins/image_resize/generated)
-target_compile_options(image_resize PRIVATE -fvisibility=hidden)
-set_target_properties(image_resize PROPERTIES
-    OUTPUT_NAME "image_resize"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/image_resize"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/image_resize"
-    PREFIX "lib"
-)
-add_custom_command(TARGET image_resize POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/plugins/image_resize/generated/manifest.json"
-        "$<TARGET_FILE_DIR:image_resize>/manifest.json"
-)
-
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)

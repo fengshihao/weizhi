@@ -139,10 +139,14 @@ public final class SmokeTest {
             }
             try {
                 engine.runJs(platform + ".media.resize('a.txt', 32)", 2000);
-                fail("expected media.resize unsupported on desktop");
+                fail("expected media.resize to be absent");
             } catch (RuntimeException e) {
-                if (e.getMessage() == null || !e.getMessage().contains("unsupported")) {
-                    throw e;
+                String msg = e.getMessage() == null ? "" : e.getMessage();
+                if (msg.contains("unsupported") || msg.contains("image_resize") || msg.contains("ensureNative")) {
+                    throw new AssertionError("media.resize should be absent, got: " + msg);
+                }
+                if (!msg.contains("undefined") && !msg.contains("not a function")) {
+                    throw new AssertionError("expected missing media.resize, got: " + msg);
                 }
             }
             try {
