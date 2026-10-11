@@ -1,6 +1,7 @@
 #include "weizhi.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -552,7 +553,7 @@ static void test_fs_sync_and_promises(void) {
     EXPECT(result.error != NULL && (strstr(result.error, "path") != NULL || strstr(result.error, "escape") != NULL));
     weizhi_result_free(&result);
     {
-        char folder_real[512];
+        char folder_real[PATH_MAX];
         char js[640];
         EXPECT(realpath(dir, folder_real) != NULL);
         result = weizhi_run_js(engine, "fs.writeFileSync('abs.txt','abs');", 2000);
@@ -597,7 +598,7 @@ static void test_fs_mkdir_and_nested_write(void) {
     char *dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    char folder_real[512];
+    char folder_real[PATH_MAX];
     char js[640];
     EXPECT(weizhi_set_fs_root(engine, dir) == 0);
     EXPECT(realpath(dir, folder_real) != NULL);
@@ -701,7 +702,7 @@ static void test_workspace_weizhi_package_import(void) {
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
     weizhi_result_free(&result);
     {
-        char abs_helper[512];
+        char abs_helper[PATH_MAX];
         char js[640];
         EXPECT(realpath(fs_dir, abs_helper) != NULL);
         snprintf(js, sizeof(js),

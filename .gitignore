@@ -2,3 +2,4 @@
 /build-asan/
 /build-android/
 /third_party/
+/.vscode/settings.json
