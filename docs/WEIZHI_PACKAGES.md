@@ -1,19 +1,24 @@
 # Weizhi Package（官方 JS 包）设计方案
 
-> **状态：提案（未实现）**  
-> 本文描述目标形态与迁移路径；**当前主干仍以** [`setScriptFolder` catalog](MODULE_LOADING.md) **为准**。规格定稿并落地后，再更新 DECISIONS / 引擎与宿主 API。  
-> 项目早期：**不保留 catalog 长期兼容层**；实现 Package 时可直接移除 `setScriptFolder` / `import "leaf.js"` 路径。
+> **状态：规格已定，待实现**  
+> **当前主干仍以** [`setScriptFolder` catalog](MODULE_LOADING.md) **为准**；按本文落地后更新 DECISIONS / 引擎与宿主 API。  
+> 项目早期：**不保留 catalog 兼容**；实现 Package 时直接移除 `setScriptFolder` / `import "leaf.js"`。
 
 **相关**：[MODULE_LOADING.md](MODULE_LOADING.md)、[HOST_ABI.md](HOST_ABI.md)、[NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)、[QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md)、[INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 
 ---
 
-## 0. 已锁定决策
+## 0. 已锁定决策（最简默认）
 
 | ID | 决策 |
 |----|------|
-| **D3** | 包内静态资源用 **方案 B**：引擎在加载官方 Package 模块时注入 **`getAssetPath(relative)`**（见 §5.2）。不用 `import.meta.url`、不用 `weizhi://` 路径前缀作为默认。 |
-| **D6** | **Skill 与 Package 分离**。用户/Agent 沉淀的技能仍在 **workspace 或 App 自定的可写技能目录**（普通 `.js` + `import "./…"`）；**不**纳入官方 `packages/`、不用 `weizhi:` 说明符。 |
+| **D1** | **`setPackageRoot(path)`** / C：`weizhi_set_package_root`。不用 `configurePackages({…})` 对象式 API（以后需要再加方法）。 |
+| **D2** | 脚本 **仅** `import … from "weizhi:<name>"`。**不支持** `weizhi:<name>@<version>` 钉版本。 |
+| **D3** | 包内静态资源：**`getAssetPath(relative)`** + `fs` 读 package 只读区（见 §5.2）。 |
+| **D4** | 远程 zip：**仅 sha256**（官方目录条目 + manifest）。不做 Package 专用平台签名（SO 仍走 HOST_ABI 验签）。 |
+| **D5** | **仅微智官方** package 目录；宿主不提供扩展目录 URL（企业私服以后再说）。 |
+| **D6** | **Skill 与 Package 分离**（workspace / App 可写技能目录；不用 `weizhi:`）。 |
+| **D7** | 每个 `name` 在 **`packages-index.json` 里只有一个「当前」版本**；`weizhi:<name>` 只解析该指针。磁盘上可保留旧版本目录，但脚本不可选。 |
 
 ---
 
@@ -34,7 +39,7 @@
 | 目标 | 说明 |
 |------|------|
 | **一种产物形态** | 官方库 = 带 `manifest.json` 的目录（或等价 zip），含入口 JS、可选静态资源、可选原生依赖声明 |
-| **一种导入语法（对 AI）** | 优先 `import … from "weizhi:<name>"`（可选钉版本）；不再教 `import "leaf.js"` 裸 catalog 名 |
+| **一种导入语法（对 AI）** | 仅 `import … from "weizhi:<name>"`；不再教 `import "leaf.js"` |
 | **内置 + 按需** | 发版可内置若干 package（离线可用）；可选从官方目录 CDN 拉取、验签/哈希后安装到同一目录布局 |
 | **与用户 workspace 分离** | 官方包装在 **宿主私有只读区**，默认不在用户可写的 `setFsRoot` 下 |
 | **原生扩展不塞进 .js** | 需要 SO 时在 manifest 声明 → 运行时 `host.ensureNative`，与 [HOST_ABI](HOST_ABI.md) 一致 |
@@ -143,13 +148,12 @@
 
 ```javascript
 import { buildDocx } from "weizhi:docx";
-import { parse } from "weizhi:csv@1.0.0";   // 可选：钉版本（二期可简化为仅 name）
 ```
 
-解析顺序（提案）：
+解析顺序：
 
 1. **引擎内置名**（`fs`、`path`、`buffer`、`process`、`zlib`、`zip`）→ 现有 C 模块。  
-2. **`weizhi:<name>`** 或 **`weizhi:<name>@<version>`** → Package 根下已安装目录 → `js.entry`。  
+2. **`weizhi:<name>`** → 读 `packages-index.json` 得当前 `name@version` → 该目录下 `js.entry`。  
 3. **路径说明符**（含 `/` 或以 `/` 开头）→ 仅 **`setFsRoot` workspace**（与今日一致），**不再**回退 catalog 叶子。  
 4. 失败 → `unsupported: package "…"` / `package not installed` 等（英文关键词，见 DECISIONS）。
 
@@ -217,8 +221,8 @@ flowchart LR
 
 | 今日（将移除） | 目标 |
 |----------------|------|
-| `setScriptFolder(path)` | `setPackageRoot(path)` 或 `configurePackages({ home, … })`（见 §12 D1） |
-| `weizhi_set_script_folder` | `weizhi_set_package_root`（C 对称） |
+| `setScriptFolder(path)` | **`setPackageRoot(path)`** |
+| `weizhi_set_script_folder` | **`weizhi_set_package_root`** |
 
 ### 8.2 集成方（Agent1 / 第三方）
 
@@ -240,7 +244,7 @@ flowchart LR
 
 ## 10. 安全
 
-- 远程 artifact：**固定官方目录** + `sha256`（与原生插件同级严谨度；是否签名待决，见 §12）。  
+- 远程 artifact：**仅微智官方目录** + **`sha256`**（见 §0 D4、D5）。  
 - 安装路径：仅 `<weizhi-home>/packages/`；zip slip 防护（与 `zip` 模块同类规则）。  
 - Package 树对 workspace **`fs` 默认不可写**；脚本通过受控 API 读 assets，避免用户脚本篡改官方包。  
 - `native_requires` 只允许 manifest 声明的 plugin **name**，禁止脚本传任意 SO URL。
@@ -263,19 +267,7 @@ flowchart LR
 
 ## 12. 决策清单
 
-### 12.1 已锁定
-
-见 [§0](#0-已锁定决策)（**D3** `getAssetPath`、**D6** Skill 与 Package 分离）。
-
-### 12.2 仍待决（实现前需拍板）
-
-| # | 问题 | 选项 | 说明（便于选型） |
-|---|------|------|------------------|
-| **D1** | Package 根怎么配给引擎 | **A** `setPackageRoot(path)` **B** `configurePackages({ home, … })` | A 与 `setFsRoot` 对称、好记；B 便于以后加 `builtinOnly`、`indexUrl` 等而不增方法。 |
-| **D2** | 脚本能否钉 package 版本 | **A** 一期仅 `weizhi:<name>`（解析到「当前安装版本」） **B** 一期支持 `weizhi:<name>@<semver>` | B 利于复现与回滚；A 实现更快，版本由宿主 `packages-index` 统一管理。 |
-| **D4** | 远程 zip 完整性 | **A** 仅 **sha256**（manifest / 目录条目） **B** 再加 **平台私钥签名**（与 SO 同套公钥） | A 够防 CDN 损坏与误传；B 防恶意目录投毒，成本与 HOST_ABI 对齐。 |
-| **D5** | 除微智官方外的包 | **A** 仅官方目录 **B** 宿主可配 **扩展目录 URL**（仍禁止脚本任意 URL） | B 方便企业内网私服；要在宿主审目录、不能放开脚本侧安装。 |
-| **D7** | 同一 `name` 多版本并存时，`weizhi:name` 指谁 | **A** **每 name 唯一「当前」版本**（`packages-index` 指针） **B** 允许多版本目录并存，默认解析 **最高兼容 semver** | 与 D2 联动：若 D2=A，通常配 D7=A 或「最高兼容」二选一写死。 |
+**D1–D7 均已锁定**，见 [§0](#0-已锁定决策最简默认)。实现按最简路径，不做钉版本、不做企业扩展目录、不做 Package 签名。
 
 ---
 
@@ -285,3 +277,4 @@ flowchart LR
 |------|------|
 | 2026-10-14 | 初稿：统一 catalog 与内置 Bundle 为 Package 提案 |
 | 2026-10-14 | 锁定 D3（getAssetPath）、D6（Skill 分离）；缩短 catalog 兼容策略 |
+| 2026-10-14 | 锁定 D1/D2/D4/D5/D7 为最简默认；状态改为规格已定 |
