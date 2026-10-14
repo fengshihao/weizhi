@@ -107,11 +107,15 @@ Hosts should pass the full `error` (and `error_location`) back to the orchestrat
 
 ## Script libraries
 
+**Current (implemented):**
+
 - **`setScriptFolder` / `weizhi_set_script_folder`**: catalog root; bare specifiers `import "util.js"` / `import "util"` resolve to a **single leaf** `[A-Za-z0-9._-]+.js` in that folder only (no `catalog/sub/foo.js`).
 - **Workspace modules**: path specifiers (`./x.js`, `jobs/x.js`, or absolute paths under the workspace) load from **`setFsRoot`** after `weizhi_resolve_workspace_path`; on miss, fallback to catalog leaf if the basename is a valid catalog leaf. See [MODULE_LOADING.md](MODULE_LOADING.md).
 - Invalid catalog **names** (not paths): only letters, digits, `.`, `_`, `-`; bad names fail with `name` in the error.
 - Script root and workspace (`fs`) root are separate.
 - Files over 16 MB are rejected.
+
+**Proposed (not implemented):** retire catalog as a separate concept; unify built-in and downloadable official JS libraries under **Weizhi Package** (`weizhi:<name>` import, host-private `packages/<name>@<version>/`). See [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md).
 
 ## Logging
 

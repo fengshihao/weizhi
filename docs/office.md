@@ -19,7 +19,7 @@ Word / PPT 是宿主侧脚本资产，**不在 Weizhi 引擎仓库里**。真源
 Office 脚本依赖这些，并应保持稳定：
 
 - `import zip from "zip"`、`fs` / `fs.promises`、文本编解码
-- `setFsRoot`（工作区）与 `setScriptFolder`（catalog 单层叶子 `import "leaf.js"`）
+- `setFsRoot`（工作区）与 `setScriptFolder`（catalog 单层叶子 `import "leaf.js"`；规划见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)）
 - caps 的 `files.zipExtract` / `files.zipCreate`（可选）
 
 引擎门禁只做最小冒烟：空模块加载 + zip 往返（`CatalogSmokeTest`）。完整 OOXML 回归在 Agent1。

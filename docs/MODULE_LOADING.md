@@ -2,6 +2,9 @@
 
 Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法，最不容易混用）。
 
+> **规划中的变化（尚未实现）**  
+> Catalog（`setScriptFolder` 扁平叶子）计划归并为 **[Weizhi Package](WEIZHI_PACKAGES.md)**：内置与可下载官方库同一目录形态，脚本侧优先 `import … from "weizhi:<name>"`。定稿并实现前，**以下条文仍以当前 catalog + workspace 双根为准**。
+
 ---
 
 ## AI 规则（一条）
@@ -80,3 +83,4 @@ export default fs.readFileSync("note.txt").toString();
 
 - [DECISIONS.md](DECISIONS.md)
 - [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)
+- [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（Package 统一方案，提案）
