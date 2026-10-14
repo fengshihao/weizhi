@@ -26,7 +26,7 @@
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
 4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps`）。模型工具由宿主实现。
 5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。grep / bash 等模型工具不在本仓库。
-6. **`setScriptFolder`**（**当前**）：catalog 脚本库根目录（`import "leaf.js"` 等**单层叶子**）。docx/pptx 由宿主放入该目录，引擎不自带。规划见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（内置 + 远程统一为 Package，`weizhi:<name>`）。workspace 内用户模块走 **`setFsRoot`** + `import "./…"` / 带路径说明符，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
+6. **`setPackageRoot`**：Weizhi home（`packages/` + `packages-index.json`）；脚本 `import … from "weizhi:<name>"`。docx 等由 Agent1 打成 Package 安装，见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)。workspace 走 **`setFsRoot`** + `import "./…"`，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
 ### 0.1 路径策略（引擎 `fs` + workspace `import`）
@@ -36,8 +36,8 @@
 | API | 路径规则 |
 |---|---|
 | `setFsRoot` + `fs` / `fs.promises` / `zip` 等工作区 VFS | 相对 workspace 或绝对路径；归一化后须在根下；`mkdirSync`/`promises.mkdir` 支持 `{ recursive: true }`；`writeFile` 自动创建父目录 |
-| workspace `import`（说明符含 `/` 或 `/` 开头） | 同上；须为 `.js`；缺失文件时可按叶子名回退 `setScriptFolder` |
-| `import "leaf.js"` / `"leaf"`（无 `/`） | 仅 `setScriptFolder` 根下 catalog 叶子名 |
+| workspace `import`（说明符含 `/` 或 `/` 开头） | 同上；须为 `.js` |
+| `import "weizhi:<name>"` | `setPackageRoot` + `packages-index.json` 当前版本 |
 | `runJs(..., filename)` | `filename` 为 workspace 逻辑路径（建议相对，如 `jobs/run.js`），供 `./` 解析 |
 | Caps `android.files.*` / `intent.start({ path })` | **仍**用 workspace 相对路径（与引擎 `fs` 策略独立） |
 | Agent 工具环 `read_file` 等 | `WorkspaceSandbox` 规则，见 [AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md) |
@@ -149,7 +149,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 |---|---|---|
 | `new WeizhiEngine()` / `(WeizhiLimits)` | 开引擎 | `close()` / try-with-resources；任务结束宜关掉 |
 | `setFsRoot(path)` | 可读写工作区 | 相对或绝对路径归一化后须在根下；逃逸错误含 `path`/`escape` |
-| `setScriptFolder(path)` | catalog 库根（**规划废弃**，见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)） | 裸 `import "leaf.js"` **仅单层叶子** `[A-Za-z0-9._-]+.js`；workspace 模块主要靠 `setFsRoot` |
+| `setPackageRoot(path)` | Weizhi home（官方 Package） | `import "weizhi:<name>"`；见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) |
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
 | `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` 与 `mcp` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |

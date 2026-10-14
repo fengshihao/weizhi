@@ -5,6 +5,8 @@ import android.content.Context;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.weizhi.caps.WeizhiPackages;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -55,6 +57,17 @@ public final class WeizhiJniInstrumentedTest {
             } catch (RuntimeException e) {
                 assertTrue(e.getMessage() != null && e.getMessage().contains("too large"));
             }
+        }
+    }
+
+    @Test
+    public void bundledWeizhiPackage() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setPackageRoot(pkgRoot);
+            assertEquals("\"pong\"", engine.runJs(
+                    "import { ping } from 'weizhi:demo';\nexport default ping();\n", 5000));
         }
     }
 

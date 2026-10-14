@@ -232,12 +232,16 @@ flowchart LR
 
 ## 9. 分层：引擎 vs 宿主库
 
-| 能力 | 建议归属 |
-|------|----------|
-| `weizhi:` 模块解析、读 package 内 `.js` | **引擎**（C module loader + 只读路径） |
-| 解压 zip、下载、目录 CDN、安装/升级策略 | **宿主**；可提供可选 **`com.weizhi.packages`** Java 库（非 LLM Tool） |
+| 能力 | 归属（当前代码） |
+|------|------------------|
+| `weizhi:` 模块解析、读 package 内 `.js` | **引擎** `src/package.c` |
+| 安装到 `packages/<name>@<ver>/`、写 `packages-index.json` | **`com.weizhi.packages.PackageInstaller`**（`:weizhi` AAR） |
+| Android 从 assets 同步 | **`com.weizhi.caps.WeizhiPackages.syncBundled(Context)`** |
+| 远程目录 CDN | **未实现**（宿主后续可调 `PackageInstaller.installPackageZip`） |
 | `ensureNative` | **已有 Host ABI** |
-| LLM 工具 `install_package` | **宿主注册**，内部调 Package 库 |
+| LLM 工具 `install_package` | **宿主注册**，内部调 `PackageInstaller` |
+
+**Android 内置包路径**：`app/src/main/assets/weizhi-packages/<name>@<version>/`（含 `manifest.json` + 入口 js）。
 
 ---
 
