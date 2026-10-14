@@ -22,6 +22,7 @@ mkdir -p "$outdir"
 javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/WeizhiLimits.java" \
     "$root/java/com/weizhi/WeizhiEngine.java" \
+    "$root/java/com/weizhi/packages/PackageInstaller.java" \
     "$root/java/com/weizhi/platform/MiniJson.java" \
     "$root/java/com/weizhi/platform/LocalWorkspace.java" \
     "$root/java/com/weizhi/platform/ZipTools.java" \
@@ -29,7 +30,8 @@ javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/platform/PlatformHost.java" \
     "$root/java/com/weizhi/platform/OrganizeFiles.java" \
     "$root/java/com/weizhi/desktop/DesktopCaps.java" \
-    "$root/tests/java/CatalogSmokeTest.java" \
+    "$root/tests/java/PackageInstallerTest.java" \
+    "$root/tests/java/PackageSmokeTest.java" \
     "$root/tests/java/ApiCardsTest.java" \
     "$root/tests/java/FetchRedirectTest.java" \
     "$root/tests/java/SmokeTest.java"

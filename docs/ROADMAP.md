@@ -48,6 +48,7 @@
 ## 脚本复用（方向）
 
 - 引擎：稳定相对模块加载（按需扩展多级路径）；技能以普通文件存在磁盘上。
+- **官方 JS 库**：catalog（`setScriptFolder`）计划归并为 **Weizhi Package**（内置 + 可下载、统一 manifest）；见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（**提案，未实现**）。
 - Agent：总结本轮成果 → 写入技能目录 → 后续 `import` / `runJs` 薄入口调用。
 - **不**在引擎里做「自动记忆」；复用 = 文件系统 + 模块系统。
 

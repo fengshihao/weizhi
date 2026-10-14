@@ -17,6 +17,7 @@ import android.widget.TextView;
 
 import com.weizhi.WeizhiEngine;
 import com.weizhi.caps.AndroidCaps;
+import com.weizhi.caps.WeizhiPackages;
 import com.weizhi.platform.OrganizeFiles;
 
 import java.io.File;
@@ -75,6 +76,8 @@ public final class MainActivity extends Activity {
         addButton(column, "打开示例文本", "android.intent.start({action:'view', path:'发票.txt'})");
         addButton(column, "5 秒后提醒",
                 "var s = android.reminders.schedule({title:'出发', body:'检查证件', atMs: Date.now()+5000}); s");
+        addButton(column, "官方 Package demo",
+                "import { ping } from 'weizhi:demo';\nexport default ping();");
         log = new TextView(this);
         log.setPadding(0, 24, 0, 0);
         log.setText("Weizhi Demo\n平台对象: android\n工作区: " + workspace.getAbsolutePath());
@@ -167,6 +170,9 @@ public final class MainActivity extends Activity {
                 session.launchShareSheet = shareSheet;
                 session.launchIntent = "打开示例文本".equals(label);
                 try (WeizhiEngine engine = new WeizhiEngine()) {
+                    String pkgRoot = WeizhiPackages.syncBundled(MainActivity.this);
+                    engine.setPackageRoot(pkgRoot);
+                    engine.setFsRoot(workspace.getAbsolutePath());
                     AndroidCaps.install(engine, session);
                     String out = engine.runJs(js, 120000);
                     append(label + "\n" + out);

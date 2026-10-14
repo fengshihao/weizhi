@@ -150,10 +150,10 @@ public final class WeizhiEngine implements AutoCloseable {
         nativeInstallJavaAsyncVfs(nativeHandle);
     }
 
-    /** Folder for {@code import './file.js'} libraries (leaf names only). */
-    public void setScriptFolder(String folder) {
-        if (nativeSetScriptFolder(nativeHandle, folder) != 0) {
-            throw new IllegalArgumentException("setScriptFolder failed");
+    /** Weizhi home ({@code packages/} + {@code packages-index.json}). See docs/WEIZHI_PACKAGES.md. */
+    public void setPackageRoot(String folder) {
+        if (nativeSetPackageRoot(nativeHandle, folder) != 0) {
+            throw new IllegalArgumentException("setPackageRoot failed");
         }
     }
 
@@ -685,7 +685,7 @@ public final class WeizhiEngine implements AutoCloseable {
 
     private static native int nativeSetFsRoot(long handle, String folder);
 
-    private static native int nativeSetScriptFolder(long handle, String folder);
+    private static native int nativeSetPackageRoot(long handle, String folder);
 
     private static native String nativeRunJs(long handle, String source, int timeoutMs, String filename);
 
