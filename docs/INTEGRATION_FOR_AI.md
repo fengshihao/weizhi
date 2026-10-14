@@ -9,7 +9,7 @@
 | **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)** | 模型工具不在本仓库；宿主自己实现 |
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
 | [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI：`require` 内置 + `import` 自建库） |
-| [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) | **提案**：catalog 归并为官方 Package（未实现） |
+| [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) | 官方 Package：`weizhi:` 导入、本地安装、Registry ensure |
 | [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
 | [DECISIONS.md](DECISIONS.md) | 限额、错误关键词、分层边界 |
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
@@ -26,7 +26,7 @@
 3. **脚本里**用 `fs` / `require("zip")`；**Caps** 用 `android.files.*`（含 `zipExtract`/`zipCreate`）；**Agent 工具环**自己注册 `@Tool`，可薄包 Caps。
 4. **Java + JNI**，不要假设 Kotlin API。Android 交付物是 **AAR**（`:weizhi` + 可选 `:caps`）。模型工具由宿主实现。
 5. **引擎 `fs`**：当前仅 `setFsRoot` 一个可读写工作区（引擎内双根只读见 ROADMAP，**未实现**）。grep / bash 等模型工具不在本仓库。
-6. **`setPackageRoot`**：Weizhi home（`packages/` + `packages-index.json`）；脚本 `import … from "weizhi:<name>"`。docx 等由 Agent1 打成 Package 安装，见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)。workspace 走 **`setFsRoot`** + `import "./…"`，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
+6. **`setPackageRoot`**：Weizhi home（`packages/` + `packages-index.json`）；脚本 `import … from "weizhi:<name>"`。远程包由宿主在 **`runJs` 之前**调用 `PackageRegistryClient.ensureInstalled`（见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) §7）。**不要**教模型先下载，**不要**在 `import` 里联网。workspace 走 **`setFsRoot`** + `import "./…"`，见 [MODULE_LOADING.md](MODULE_LOADING.md)。
 7. 失败时把 **完整** `RuntimeException` message（及 C 侧 error）回传给编排 Agent；错误里含固定英文关键词（见 §7）。
 
 ### 0.1 路径策略（引擎 `fs` + workspace `import`）
@@ -150,6 +150,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 | `new WeizhiEngine()` / `(WeizhiLimits)` | 开引擎 | `close()` / try-with-resources；任务结束宜关掉 |
 | `setFsRoot(path)` | 可读写工作区 | 相对或绝对路径归一化后须在根下；逃逸错误含 `path`/`escape` |
 | `setPackageRoot(path)` | Weizhi home（官方 Package） | `import "weizhi:<name>"`；见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) |
+| `PackageRegistryClient.ensureInstalled(home, names, options)` | `runJs` 前装/升级官方包 | 默认超时 180s，与 `runJs` 分开。失败含 `sha256 mismatch` / `package ensure timeout` / `package not in registry` / `fetch blocked`。不要让模型自己下载 |
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
 | `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` 与 `mcp` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
@@ -181,7 +182,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 
 - [ ] 依赖 `:weizhi`（需要端能力时加 `:caps`），确认 `jniLibs` 含 **stripped** `libweizhijni.so`
 - [ ] App 私有目录创建 **workspace**，`setFsRoot`（与 `AndroidCaps.Session.workspace` 同一路径）
-- [ ] （可选）`setScriptFolder` 指向 App 决定的可写技能/库目录（若与 workspace 分离）
+- [ ] `runJs` 前对脚本里的 `weizhi:<name>` 调用 `PackageRegistryClient.ensureInstalled`，再 `setPackageRoot`。默认 Registry 见 WEIZHI_PACKAGES §7.1。不要教模型先下载
 - [ ] `AndroidCaps.install`；confirmer / pickDirectory / share 接到真实 UI。要真正打开界面时设 `session.launchShareSheet` / `session.launchIntent`（默认都不 `startActivity`）
 - [ ] 若脚本会 `android.intent.start({ action, path })`：Manifest 声明 `androidx.core.content.FileProvider`，`android:authorities="${applicationId}.fileprovider"`，paths 覆盖 workspace（`files` / `cache` 等）。Caps 用 `context.getPackageName() + ".fileprovider"`。并声明 `<queries>`，否则 Android 11+ 看不到可处理 `VIEW` / `SEND` 的应用
 - [ ] （可选）`enableFetch(allowlist)` + Manifest `INTERNET`
@@ -194,7 +195,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 ### 推荐：一轮任务一个引擎
 
 ```text
-open → setFsRoot → [setScriptFolder] → [AndroidCaps.install] → [enableFetch]
+open → setFsRoot → [ensureInstalled → setPackageRoot] → [AndroidCaps.install] → [enableFetch]
   → loop: runJs / cancel
 → close
 ```

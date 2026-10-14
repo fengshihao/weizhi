@@ -380,9 +380,11 @@ int weizhi_resolve_package_fs_path(Engine *engine, const char *path, char *out, 
         return -1;
     }
     {
+        char packages_in[PATH_MAX];
         char packages_real[PATH_MAX];
-        snprintf(packages_real, sizeof(packages_real), "%s/%s", engine->package_root, WEIZHI_PKG_DIR);
-        if (realpath(packages_real, packages_real) == NULL) {
+        snprintf(packages_in, sizeof(packages_in), "%s/%s", engine->package_root, WEIZHI_PKG_DIR);
+        /* realpath() arguments must not alias (POSIX restrict). macOS rejects the overlap. */
+        if (realpath(packages_in, packages_real) == NULL) {
             if (error != NULL) {
                 *error = "path escape";
             }

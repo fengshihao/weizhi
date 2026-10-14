@@ -102,12 +102,18 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 | Fetch disabled | `unsupported: fetch (... enableFetch / weizhi_set_http ...)` |
 | Fetch host blocked | `fetch blocked: host "..." is not allowlisted ...` |
 | Fetch body/response too big | `too large: fetch ...` |
+| Package not in registry | `package not in registry` |
+| Package sha256 | `sha256 mismatch` |
+| Package ensure timeout / cancel | `package ensure timeout` / `package ensure cancelled` |
+| Package zip slip | `zip slip` and `path escape` |
+| Registry host blocked | `fetch blocked: host "..." is not allowlisted` |
 
 Hosts should pass the full `error` (and `error_location`) back to the orchestrating agent; do not swallow or rewrite into a vague “failed”.
 
 ## Script libraries
 
 - **`setPackageRoot` / `weizhi_set_package_root`**: Weizhi home with `packages/` and `packages-index.json`. Script import **`weizhi:<name>`** resolves the current version from the index, loads `manifest.json` → `js.entry`, optional package subpaths `weizhi:<name>/file.js`. Package modules get prelude **`getAssetPath(rel)`** → `@weizhi-package:` paths readable via `fs` (read-only). See [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md).
+- **`PackageRegistryClient`**: host downloads the official registry and installs zips **before** `runJs`. `import` does not open network connections. Default URL and error keywords: [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) §7.
 - **Workspace modules**: path specifiers load from **`setFsRoot`** after `weizhi_resolve_workspace_path` (no catalog fallback). See [MODULE_LOADING.md](MODULE_LOADING.md).
 - Package / workspace roots are separate.
 - Files over 16 MB are rejected.

@@ -108,7 +108,12 @@ public final class PackageInstaller {
     }
 
     private static Path packageDir(Path weizhiHome, String name, String version) {
-        return weizhiHome.resolve(PACKAGES_DIR).resolve(name + "@" + version);
+        Path packages = weizhiHome.resolve(PACKAGES_DIR).toAbsolutePath().normalize();
+        Path dest = packages.resolve(name + "@" + version).toAbsolutePath().normalize();
+        if (!dest.startsWith(packages)) {
+            throw new IllegalArgumentException("invalid package version");
+        }
+        return dest;
     }
 
     private static void validateNameVersion(String name, String version) {
@@ -117,6 +122,9 @@ public final class PackageInstaller {
         }
         if (!name.matches("[a-z0-9][a-z0-9._-]*")) {
             throw new IllegalArgumentException("invalid package name");
+        }
+        if (!version.matches("[0-9A-Za-z][0-9A-Za-z._+-]*")) {
+            throw new IllegalArgumentException("invalid package version");
         }
     }
 

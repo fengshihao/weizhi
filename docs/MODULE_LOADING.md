@@ -22,6 +22,7 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 
 - **`setFsRoot`** — 工作区（用户文件、`fs`、orchestrator 入口如 `jobs/run.js`）
 - **`setPackageRoot`** — Weizhi home（`packages/` + `packages-index.json`）；脚本用 `weizhi:<name>`，**不要**手写磁盘路径
+- **远程包**由宿主在 `runJs` 之前调用 `PackageRegistryClient.ensureInstalled`。`import` 不联网；不要让模型先下载
 
 **解析顺序（ES module）**：内置模块名 → **`weizhi:<name>`**（及包内 `weizhi:<name>/sub.js`）→ workspace 路径说明符（含 `/`）。
 
