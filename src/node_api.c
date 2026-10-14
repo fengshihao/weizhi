@@ -405,6 +405,9 @@ static JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val, int argc,
 }
 
 static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_t out_len, const char **error) {
+    if (weizhi_is_package_fs_path(relpath)) {
+        return weizhi_resolve_package_fs_path(engine, relpath, out, out_len, error);
+    }
     return weizhi_resolve_workspace_path(engine, relpath, out, out_len, error);
 }
 
@@ -1538,7 +1541,7 @@ static JSValue js_require(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     {
         char msg[192];
         snprintf(msg, sizeof(msg),
-                 "module \"%s\" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)", id);
+                 "module \"%s\" (available: buffer, fs, path, process, zlib, zip, weizhi:<name>, or workspace .js)", id);
         JS_FreeCString(ctx, id);
         return weizhi_throw_unsupported(ctx, msg);
     }
@@ -1591,41 +1594,97 @@ static JSModuleDef *compile_js_module(JSContext *ctx, const char *module_name, c
     return m;
 }
 
-static int module_path_spec(const char *module_name) {
-    return module_name != NULL && (module_name[0] == '/' || strchr(module_name, '/') != NULL);
-}
-
-static int is_catalog_leaf_js(const char *leaf) {
-    size_t len;
-    if (!weizhi_valid_script_leaf(leaf)) {
-        return 0;
+static void escape_js_string(const char *in, char *out, size_t out_len) {
+    size_t j = 0;
+    size_t i;
+    if (in == NULL || out == NULL || out_len < 2) {
+        return;
     }
-    len = strlen(leaf);
-    return len >= 4 && strcmp(leaf + len - 3, ".js") == 0;
+    for (i = 0; in[i] != '\0' && j + 2 < out_len; i++) {
+        char c = in[i];
+        if (c == '\\' || c == '"') {
+            if (j + 3 >= out_len) {
+                break;
+            }
+            out[j++] = '\\';
+        }
+        out[j++] = c;
+    }
+    out[j] = '\0';
 }
 
-static JSModuleDef *load_catalog_leaf_module(JSContext *ctx, Engine *engine, const char *module_name,
-                                             const char *catalog_leaf) {
+static JSModuleDef *compile_package_js_module(JSContext *ctx, const char *module_name, const char *install_dir,
+                                              const uint8_t *bytes, size_t length) {
+    char escaped[PATH_MAX * 2];
+    char header[PATH_MAX + 320];
+    char *combined;
+    size_t header_len;
+    JSModuleDef *m;
+    escape_js_string(install_dir, escaped, sizeof(escaped));
+    snprintf(header, sizeof(header),
+             "function getAssetPath(rel){return __weizhiGetAssetPath(\"%s\",rel);}\n", escaped);
+    header_len = strlen(header);
+    combined = malloc(header_len + length + 1);
+    if (combined == NULL) {
+        return NULL;
+    }
+    memcpy(combined, header, header_len);
+    memcpy(combined + header_len, bytes, length);
+    combined[header_len + length] = '\0';
+    m = compile_js_module(ctx, module_name, (const uint8_t *)combined, header_len + length);
+    free(combined);
+    return m;
+}
+
+#define WEIZHI_MAX_PKG_ENTRY 128
+
+static JSModuleDef *load_weizhi_package_module(JSContext *ctx, Engine *engine, const char *module_name) {
+    char pkg_name[72];
+    char rel[WEIZHI_MAX_PKG_ENTRY];
+    char compile_name[320];
+    char entry[WEIZHI_MAX_PKG_ENTRY];
+    char install_dir[PATH_MAX];
     uint8_t *bytes = NULL;
     size_t length = 0;
     char errbuf[128];
     JSModuleDef *m;
-    if (weizhi_read_script_leaf(engine, catalog_leaf, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
-        JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name, errbuf);
+
+    errbuf[0] = '\0';
+    if (weizhi_parse_weizhi_module_spec(module_name, pkg_name, sizeof(pkg_name), rel, sizeof(rel)) != 0) {
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid weizhi module", module_name);
         return NULL;
     }
-    m = compile_js_module(ctx, module_name, bytes, length);
+    if (weizhi_read_package_module(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf)) != 0) {
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
+                               errbuf[0] != '\0' ? errbuf : "not found");
+        return NULL;
+    }
+    if (weizhi_package_install_dir(engine, pkg_name, install_dir, sizeof(install_dir)) != 0) {
+        free(bytes);
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": package not installed", module_name);
+        return NULL;
+    }
+    if (rel[0] == '\0') {
+        if (weizhi_package_entry_rel(engine, install_dir, entry, sizeof(entry)) != 0) {
+            snprintf(entry, sizeof(entry), "index.js");
+        }
+        snprintf(compile_name, sizeof(compile_name), "weizhi:%s/%s", pkg_name, entry);
+    } else {
+        snprintf(compile_name, sizeof(compile_name), "%s", module_name);
+    }
+    m = compile_package_js_module(ctx, compile_name, install_dir, bytes, length);
     free(bytes);
     return m;
+}
+
+static int module_path_spec(const char *module_name) {
+    return module_name != NULL && (module_name[0] == '/' || strchr(module_name, '/') != NULL);
 }
 
 static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const char *module_name) {
     uint8_t *bytes = NULL;
     size_t length = 0;
     char errbuf[128];
-    const char *slash;
-    const char *leaf;
-    char bare_leaf[72];
     JSModuleDef *m;
 
     errbuf[0] = '\0';
@@ -1633,25 +1692,10 @@ static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const ch
         JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid path", module_name);
         return NULL;
     }
-
-    slash = strchr(module_name, '/');
     if (!module_path_spec(module_name)) {
-        leaf = module_name;
-        if (!is_catalog_leaf_js(leaf)) {
-            if (strlen(module_name) + 4 >= sizeof(bare_leaf)) {
-                JS_ThrowReferenceError(ctx, "could not load module \"%s\": invalid name", module_name);
-                return NULL;
-            }
-            snprintf(bare_leaf, sizeof(bare_leaf), "%s.js", module_name);
-            if (!is_catalog_leaf_js(bare_leaf)) {
-                JS_ThrowReferenceError(ctx, "could not load module \"%s\": not found", module_name);
-                return NULL;
-            }
-            leaf = bare_leaf;
-        }
-        return load_catalog_leaf_module(ctx, engine, module_name, leaf);
+        JS_ThrowReferenceError(ctx, "could not load module \"%s\": not found", module_name);
+        return NULL;
     }
-
     {
         int rc = weizhi_read_workspace_script(engine, module_name, &bytes, &length, errbuf, sizeof(errbuf));
         if (rc == 0) {
@@ -1664,19 +1708,7 @@ static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const ch
                                    errbuf[0] != '\0' ? errbuf : "path escape");
             return NULL;
         }
-        if (rc != -1 || strcmp(errbuf, "script not found") != 0) {
-            JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
-                                   errbuf[0] != '\0' ? errbuf : "not found");
-            return NULL;
-        }
     }
-
-    leaf = strrchr(module_name, '/');
-    leaf = leaf != NULL ? leaf + 1 : module_name;
-    if (is_catalog_leaf_js(leaf) && engine->script_folder != NULL) {
-        return load_catalog_leaf_module(ctx, engine, module_name, leaf);
-    }
-
     JS_ThrowReferenceError(ctx, "could not load module \"%s\": %s", module_name,
                            errbuf[0] != '\0' ? errbuf : "not found");
     return NULL;
@@ -1718,23 +1750,14 @@ static JSModuleDef *builtin_module_loader(JSContext *ctx, const char *module_nam
         }
         return m;
     }
+    if (strncmp(module_name, "weizhi:", 7) == 0) {
+        return load_weizhi_package_module(ctx, engine, module_name);
+    }
     if (module_path_spec(module_name)) {
         return load_user_js_module(ctx, engine, module_name);
     }
-    if (is_catalog_leaf_js(module_name)) {
-        return load_catalog_leaf_module(ctx, engine, module_name, module_name);
-    }
-    if (strchr(module_name, '.') == NULL && weizhi_valid_script_leaf(module_name) &&
-        strcmp(module_name, "process") != 0 && strcmp(module_name, "zlib") != 0 &&
-        strcmp(module_name, "zip") != 0) {
-        char bare_leaf[72];
-        snprintf(bare_leaf, sizeof(bare_leaf), "%s.js", module_name);
-        if (is_catalog_leaf_js(bare_leaf)) {
-            return load_catalog_leaf_module(ctx, engine, module_name, bare_leaf);
-        }
-    }
     JS_ThrowReferenceError(ctx,
-                           "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, zip, or workspace/catalog .js)",
+                           "unsupported: module \"%s\" (available: buffer, fs, path, process, zlib, zip, weizhi:<name>, or workspace .js)",
                            module_name);
     return NULL;
 }
@@ -2920,6 +2943,37 @@ static const char WEIZHI_AGENT_PRELUDE[] =
     "  };\n"
     "}\n";
 
+static JSValue js_weizhi_get_asset_path(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *install_dir;
+    const char *rel;
+    char abs[PATH_MAX];
+    char out[PATH_MAX + 32];
+    (void)this_val;
+    if (argc < 2) {
+        return weizhi_throw_bad_arg(ctx, "__weizhiGetAssetPath", "install dir and relative path required");
+    }
+    install_dir = JS_ToCString(ctx, argv[0]);
+    rel = JS_ToCString(ctx, argv[1]);
+    if (install_dir == NULL || rel == NULL) {
+        if (install_dir != NULL) {
+            JS_FreeCString(ctx, install_dir);
+        }
+        if (rel != NULL) {
+            JS_FreeCString(ctx, rel);
+        }
+        return weizhi_throw_bad_arg(ctx, "__weizhiGetAssetPath", "strings required");
+    }
+    if (weizhi_resolve_package_asset_path(install_dir, rel, abs, sizeof(abs)) != 0) {
+        JS_FreeCString(ctx, install_dir);
+        JS_FreeCString(ctx, rel);
+        return weizhi_throw_bad_arg(ctx, "getAssetPath", "invalid path or path escape");
+    }
+    snprintf(out, sizeof(out), "@weizhi-package:%s", abs);
+    JS_FreeCString(ctx, install_dir);
+    JS_FreeCString(ctx, rel);
+    return JS_NewString(ctx, out);
+}
+
 static int install_agent_prelude(JSContext *ctx) {
     JSValue ret = JS_Eval(ctx, WEIZHI_AGENT_PRELUDE, strlen(WEIZHI_AGENT_PRELUDE), "<weizhi-prelude>",
                           JS_EVAL_TYPE_GLOBAL);
@@ -2970,6 +3024,8 @@ int weizhi_install_node_api(Engine *engine) {
     JS_SetPropertyStr(engine->ctx, global, "crypto", make_crypto_object(engine->ctx));
     JS_SetPropertyStr(engine->ctx, global, "global", JS_DupValue(engine->ctx, global));
     JS_SetPropertyStr(engine->ctx, global, "globalThis", JS_DupValue(engine->ctx, global));
+    JS_SetPropertyStr(engine->ctx, global, "__weizhiGetAssetPath",
+                      JS_NewCFunction(engine->ctx, js_weizhi_get_asset_path, "__weizhiGetAssetPath", 2));
     if (install_agent_prelude(engine->ctx) != 0 || install_mcp_api(engine->ctx) != 0) {
         JS_FreeValue(engine->ctx, global);
         return -1;

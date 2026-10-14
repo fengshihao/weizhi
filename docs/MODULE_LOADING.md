@@ -2,8 +2,7 @@
 
 Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法，最不容易混用）。
 
-> **规划中的变化（尚未实现）**  
-> Catalog（`setScriptFolder` 扁平叶子）计划归并为 **[Weizhi Package](WEIZHI_PACKAGES.md)**：内置与可下载官方库同一目录形态，脚本侧优先 `import … from "weizhi:<name>"`。定稿并实现前，**以下条文仍以当前 catalog + workspace 双根为准**。
+> 官方库：**`setPackageRoot`** + `import … from "weizhi:<name>"`（见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)）。**`setScriptFolder` / catalog 已移除。**
 
 ---
 
@@ -12,8 +11,8 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 | 加载什么 | AI 怎么写 |
 |---|---|
 | **引擎内置**（`fs`、`path`、`buffer`、`process`、`zlib`、`zip`） | `import fs from "fs"`、`import zip from "zip"` 等 |
-| **脚本目录自建库**（`setScriptFolder` 下叶子 `.js`） | `import … from "叶子名.js"`（**不要** `./`），或 `await import(...)` |
-| **用户放在 workspace、与当前脚本同目录的文件** | `import … from "./名字.js"` |
+| **官方 Package**（`packages/<name>@<ver>/`，由宿主安装） | `import … from "weizhi:<name>"` |
+| **用户 workspace 脚本**（`setFsRoot` 下） | `import … from "./名字.js"` 或带 `/` 的路径 |
 
 整段 `runJs` 含 `import` / `export` 时按 **ES 模块** 执行；用 `export default` 作为本轮返回值。
 
@@ -22,9 +21,9 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 **两个根（勿混）**：
 
 - **`setFsRoot`** — 工作区（用户文件、`fs`、orchestrator 入口如 `jobs/run.js`）
-- **`setScriptFolder`** — catalog 脚本库（宿主放入的单层 `leaf.js`；docx/pptx 由 Agent1 提供，不在本仓库）
+- **`setPackageRoot`** — Weizhi home（`packages/` + `packages-index.json`）；脚本用 `weizhi:<name>`，**不要**手写磁盘路径
 
-**解析顺序（ES module）**：内置模块名走引擎；裸说明符 `leaf` / `leaf.js` 在 `setScriptFolder` 根目录查找；带 `/` 或绝对路径的说明符先按 **workspace** 解析（见下节），文件不存在且叶子名合法时**回退**到 `setScriptFolder/<叶子>.js`。
+**解析顺序（ES module）**：内置模块名 → **`weizhi:<name>`**（及包内 `weizhi:<name>/sub.js`）→ workspace 路径说明符（含 `/`）。
 
 ---
 
@@ -36,24 +35,19 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 |---|---|
 | workspace **相对**路径（`a.txt`、`jobs/run.js`、`./../x.js` 等） | 相对 `setFsRoot` 拼接后 `realpath` / `normalize` |
 | **绝对**路径 | 直接解析；仍必须在 `setFsRoot` 目录树下 |
+| **`@weizhi-package:`** 前缀（仅 `getAssetPath` 返回） | 只读官方包内文件；见 WEIZHI_PACKAGES §5.2 |
 | 越界（`path escape`）、符号链接逃逸（JNI 异步 `fs`） | 拒绝 |
 | 反斜杠 `\` | 拒绝（`invalid path`） |
 
-适用于：**`fs` / `fs.promises`**、**`require("zip")` 等工作区内路径**、以及 **从 workspace 加载的 `.js` 模块**（说明符含 `/` 或以 `/` 开头）。
-
-**`import './util.js'` 相对谁？** QuickJS 相对**当前模块路径**；入口模块路径来自 `runJs(source, timeoutMs, filename)` 的 `filename`（如 `jobs/run.js`）。未传 `filename` 时为 `<eval>`，相对 import 不可靠——编排入口应始终传 `filename`。
-
-**Catalog 裸导入**（`import from "leaf.js"` / `"leaf"`）仍只在 `setScriptFolder` **根目录**找 **单层叶子** `[A-Za-z0-9._-]+.js`，不支持 `catalog/sub/foo.js`。
-
-**集成方变更提示**：旧版会拒绝「绝对路径」或路径中含 `..` 的 `fs` / workspace `import`（`invalid path`）。现版改为**先归一化再校验**；越界仍失败。若你们曾在宿主侧把路径强行改成相对路径，可逐步去掉，交给引擎统一处理。
+**`import './util.js'` 相对谁？** QuickJS 相对**当前模块路径**；入口来自 `runJs(..., filename)`（如 `jobs/run.js`）。未传 `filename` 时为 `<eval>`，相对 import 不可靠。
 
 ---
 
 ## `require()`（保留，但不教 AI 用）
 
-引擎仍支持 **`require("fs")`** 等（与 Node 子集一致），供宿主集成、旧脚本、部分 catalog 库内部使用。
+引擎仍支持 **`require("fs")`** 等（与 Node 子集一致），供宿主集成、旧脚本使用。
 
-**Agent 系统提示里不要出现 `require`**，避免与 `import` 混写。若 AI 误写 `require`，宿主可提示改写成 `import … from "fs"`。
+**Agent 系统提示里不要出现 `require`**，避免与 `import` 混写。
 
 ---
 
@@ -61,8 +55,8 @@ Weizhi **没有 npm**。**给 AI 写脚本：一律用 `import`**（一种语法
 
 ```
 import 内置模块名（fs / path / buffer / process / zlib / zip）→ from "模块名"
-import catalog 脚本库（setScriptFolder 下的 leaf.js）→ from "叶子名.js"（不要 ./）
-否则（workspace 内用户脚本，常与同目录相对）→ from "./名字.js" 或 workspace 内绝对/相对路径（须在 setFsRoot 下）
+import 官方 Package → from "weizhi:<name>"
+否则（workspace）→ from "./名字.js" 或 workspace 内路径（须在 setFsRoot 下）
 ```
 
 ---
@@ -71,7 +65,7 @@ import catalog 脚本库（setScriptFolder 下的 leaf.js）→ from "叶子名.
 
 ```javascript
 import fs from "fs";
-import { ping } from "leaf.js";
+import { ping } from "weizhi:leaf";
 
 fs.writeFileSync("note.txt", ping());
 export default fs.readFileSync("note.txt").toString();
@@ -83,4 +77,4 @@ export default fs.readFileSync("note.txt").toString();
 
 - [DECISIONS.md](DECISIONS.md)
 - [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)
-- [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（Package 统一方案，提案）
+- [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)

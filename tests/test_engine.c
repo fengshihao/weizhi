@@ -52,6 +52,22 @@ static void write_file(const char *dir, const char *name, const void *bytes, siz
     fclose(file);
 }
 
+static void install_test_package(const char *home, const char *name, const char *version, const char *js_body) {
+    char packages[512];
+    char pkgdir[512];
+    char manifest[256];
+    char index[160];
+    snprintf(packages, sizeof(packages), "%s/packages", home);
+    EXPECT(mkdir(packages, 0755) == 0 || errno == EEXIST);
+    snprintf(pkgdir, sizeof(pkgdir), "%s/%s@%s", packages, name, version);
+    EXPECT(mkdir(pkgdir, 0755) == 0);
+    snprintf(manifest, sizeof(manifest), "{\"name\":\"%s\",\"version\":\"%s\",\"entry\":\"index.js\"}", name, version);
+    write_file(pkgdir, "manifest.json", manifest, strlen(manifest));
+    write_file(pkgdir, "index.js", js_body, strlen(js_body));
+    snprintf(index, sizeof(index), "{\"%s\":\"%s\"}", name, version);
+    write_file(home, "packages-index.json", index, strlen(index));
+}
+
 static void test_arithmetic(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
@@ -417,26 +433,23 @@ static void test_load_script_removed(void) {
 
 static void test_relative_import(void) {
     char *dir = make_temp_dir();
+    char jobs[512];
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
     const char *lib = "export function inc(x){ return x + 1; }\n";
-    write_file(dir, "util.js", lib, strlen(lib));
-    EXPECT(weizhi_set_script_folder(engine, dir) == 0);
-    result = weizhi_run_js(engine,
-                           "import { inc } from './util.js';\n"
-                           "export default inc(41);\n",
-                           2000);
+    snprintf(jobs, sizeof(jobs), "%s/jobs", dir);
+    EXPECT(mkdir(jobs, 0755) == 0);
+    write_file(jobs, "util.js", lib, strlen(lib));
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    result = weizhi_run_js_ex(engine,
+                              "import { inc } from './util.js';\n"
+                              "export default inc(41);\n",
+                              2000,
+                              "jobs/run.js");
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
     weizhi_result_free(&result);
-    result = weizhi_run_js(engine,
-                           "const m = await import('./util.js');\n"
-                           "m.inc(9);\n",
-                           2000);
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "10") == 0);
-    weizhi_result_free(&result);
-    result = weizhi_run_js(engine, "import './../util.js';\n", 1000);
+    result = weizhi_run_js_ex(engine, "import './../util.js';\n", 1000, "jobs/run.js");
     EXPECT(result.ok == 0);
     weizhi_result_free(&result);
     weizhi_close(engine);
@@ -655,25 +668,25 @@ static void test_fs_size_limit(void) {
     free(dir);
 }
 
-static void test_workspace_catalog_module_fallback(void) {
-    char *script_dir = make_temp_dir();
+static void test_workspace_weizhi_package_import(void) {
+    char *pkg_home = make_temp_dir();
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    const char *docx = "export const fromCatalog = true;\n";
+    const char *docx = "export const fromPackage = true;\n";
     const char *helper = "export const fromWorkspace = true;\n";
-    write_file(script_dir, "docx.js", docx, strlen(docx));
+    install_test_package(pkg_home, "docx", "1.0.0", docx);
     {
         char jobs[512];
         snprintf(jobs, sizeof(jobs), "%s/jobs", fs_dir);
         EXPECT(mkdir(jobs, 0755) == 0);
     }
     write_file(fs_dir, "jobs/helper.js", helper, strlen(helper));
-    EXPECT(weizhi_set_script_folder(engine, script_dir) == 0);
+    EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
-                              "import { fromCatalog } from './docx.js';\n"
-                              "export default fromCatalog;\n",
+                              "import { fromPackage } from 'weizhi:docx';\n"
+                              "export default fromPackage;\n",
                               2000,
                               "jobs/run.js");
     EXPECT(result.ok == 1);
@@ -700,34 +713,54 @@ static void test_workspace_catalog_module_fallback(void) {
         EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
         weizhi_result_free(&result);
     }
-    result = weizhi_run_js_ex(engine,
-                              "import { fromCatalog } from 'docx';\n"
-                              "export default fromCatalog;\n",
-                              2000,
-                              "jobs/run.js");
-    EXPECT(result.ok == 1);
-    EXPECT(result.output_text != NULL && strcmp(result.output_text, "true") == 0);
-    weizhi_result_free(&result);
     result = weizhi_run_js_ex(engine, "import '../../../etc/passwd';\n", 1000, "jobs/run.js");
     EXPECT(result.ok == 0);
     weizhi_result_free(&result);
     weizhi_close(engine);
-    free(script_dir);
+    free(pkg_home);
     free(fs_dir);
 }
 
+static void test_package_get_asset_path(void) {
+    char *pkg_home = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    const char *js =
+        "import fs from 'fs';\n"
+        "const p = getAssetPath('assets/note.txt');\n"
+        "export default fs.readFileSync(p).toString();\n";
+    install_test_package(pkg_home, "demo", "1.0.0", js);
+    {
+        char assets[512];
+        snprintf(assets, sizeof(assets), "%s/packages/demo@1.0.0/assets", pkg_home);
+        EXPECT(mkdir(assets, 0755) == 0);
+        write_file(assets, "note.txt", "pkg-asset", 9);
+    }
+    EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
+    result = weizhi_run_js(engine, "import x from 'weizhi:demo'; export default x;", 3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"pkg-asset\"") == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(pkg_home);
+}
+
 static void test_script_fs_roots_isolated(void) {
-    char *script_dir = make_temp_dir();
+    char *pkg_home = make_temp_dir();
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
     const char *lib = "export const secretFromScript = 'from-script';\n";
-    write_file(script_dir, "util.js", lib, strlen(lib));
-    write_file(script_dir, "secret.txt", "from-script-dir", 15);
-    EXPECT(weizhi_set_script_folder(engine, script_dir) == 0);
+    install_test_package(pkg_home, "util", "1.0.0", lib);
+    {
+        char pkgutil[512];
+        snprintf(pkgutil, sizeof(pkgutil), "%s/packages/util@1.0.0", pkg_home);
+        write_file(pkgutil, "secret.txt", "from-script-dir", 15);
+    }
+    EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js(engine,
-                           "import { secretFromScript } from './util.js';\n"
+                           "import { secretFromScript } from 'weizhi:util';\n"
                            "export default secretFromScript;\n",
                            2000);
     EXPECT(result.ok == 1);
@@ -738,7 +771,7 @@ static void test_script_fs_roots_isolated(void) {
     EXPECT(result.error != NULL && strstr(result.error, "not found") != NULL);
     weizhi_result_free(&result);
     weizhi_close(engine);
-    free(script_dir);
+    free(pkg_home);
     free(fs_dir);
 }
 
@@ -1417,7 +1450,8 @@ int main(void) {
     test_fs_sync_and_promises();
     test_fs_mkdir_and_nested_write();
     test_fs_size_limit();
-    test_workspace_catalog_module_fallback();
+    test_workspace_weizhi_package_import();
+    test_package_get_asset_path();
     test_script_fs_roots_isolated();
     test_console_logs();
     test_import_fs();

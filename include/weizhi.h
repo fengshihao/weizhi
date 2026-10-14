@@ -83,8 +83,8 @@ WeizhiEngine *weizhi_open(const WeizhiLimits *limits);
 /* Returns -1 while a script is running; engine stays usable. 0 on close; pointer is invalid after. */
 int weizhi_close(WeizhiEngine *engine);
 int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn, void *userdata);
-/* Catalog script root: bare import "leaf.js" only (single-segment leaf under this folder). */
-int weizhi_set_script_folder(WeizhiEngine *engine, const char *folder);
+/* Weizhi home: packages/ + packages-index.json (see docs/WEIZHI_PACKAGES.md). */
+int weizhi_set_package_root(WeizhiEngine *engine, const char *folder);
 /* Workspace sandbox root (fs + workspace ES modules). Paths may be relative or absolute if normalized under root. */
 int weizhi_set_fs_root(WeizhiEngine *engine, const char *folder);
 /* Pass NULL for sync_fn / async_fn to keep that callback; userdata updates with any non-NULL callback. */

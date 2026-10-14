@@ -59,16 +59,16 @@ public final class WeizhiJniInstrumentedTest {
     }
 
     @Test
-    public void scriptFolderImport() throws Exception {
+    public void workspaceRelativeImport() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File scriptDir = new File(context.getCacheDir(), "weizhi-scripts-" + System.currentTimeMillis());
-        assertTrue(scriptDir.mkdirs());
-        writeBytes(new File(scriptDir, "util.js"),
+        File ws = new File(context.getCacheDir(), "weizhi-ws-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        writeBytes(new File(ws, "util.js"),
                 "export function inc(x){ return x + 1; }\n".getBytes(StandardCharsets.UTF_8));
         try (WeizhiEngine engine = new WeizhiEngine()) {
-            engine.setScriptFolder(scriptDir.getAbsolutePath());
+            engine.setFsRoot(ws.getAbsolutePath());
             assertEquals("42", engine.runJs(
-                    "import { inc } from './util.js';\nexport default inc(41);\n", 2000));
+                    "import { inc } from './util.js';\nexport default inc(41);\n", 2000, "run.js"));
         }
     }
 

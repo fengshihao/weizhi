@@ -69,15 +69,15 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetFsRoot(JNIEnv *env,
     return rc;
 }
 
-JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetScriptFolder(JNIEnv *env, jclass clazz, jlong handle,
-                                                                         jstring folder) {
+JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetPackageRoot(JNIEnv *env, jclass clazz, jlong handle,
+                                                                        jstring folder) {
     char *path = jstring_to_utf8(env, folder);
     int rc;
     (void)clazz;
     if (path == NULL) {
         return -1;
     }
-    rc = weizhi_set_script_folder((WeizhiEngine *)(intptr_t)handle, path);
+    rc = weizhi_set_package_root((WeizhiEngine *)(intptr_t)handle, path);
     free(path);
     return rc;
 }

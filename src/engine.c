@@ -121,27 +121,6 @@ int weizhi_valid_script_leaf(const char *name) {
     return 1;
 }
 
-static int resolve_under(const char *folder, const char *filename, char *out, size_t out_len) {
-    char folder_real[PATH_MAX];
-    char joined[PATH_MAX];
-    char file_real[PATH_MAX];
-    size_t folder_len;
-    if (realpath(folder, folder_real) == NULL) {
-        return -1;
-    }
-    snprintf(joined, sizeof(joined), "%s/%s", folder_real, filename);
-    if (realpath(joined, file_real) == NULL) {
-        return -1;
-    }
-    folder_len = strlen(folder_real);
-    if (strncmp(file_real, folder_real, folder_len) != 0 ||
-        (file_real[folder_len] != '/' && file_real[folder_len] != '\0')) {
-        return -2;
-    }
-    snprintf(out, out_len, "%s", file_real);
-    return 0;
-}
-
 static uint8_t *read_file(const char *path, size_t *out_len, const char **error) {
     FILE *file = fopen(path, "rb");
     long size;
@@ -173,48 +152,6 @@ static uint8_t *read_file(const char *path, size_t *out_len, const char **error)
     buf[size] = '\0';
     *out_len = (size_t)size;
     return buf;
-}
-
-int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
-                            char *errbuf, size_t errbuf_len) {
-    char path[PATH_MAX];
-    const char *error = NULL;
-    uint8_t *bytes;
-    size_t length = 0;
-    if (out == NULL || out_len == NULL) {
-        return -1;
-    }
-    *out = NULL;
-    *out_len = 0;
-    if (engine == NULL || leaf == NULL ||
-        !weizhi_valid_script_leaf(leaf) || strlen(leaf) < 4 || strcmp(leaf + strlen(leaf) - 3, ".js") != 0) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "invalid script name");
-        }
-        return -1;
-    }
-    if (engine->script_folder == NULL) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "script folder not set");
-        }
-        return -1;
-    }
-    if (resolve_under(engine->script_folder, leaf, path, sizeof(path)) != 0) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "script not found");
-        }
-        return -1;
-    }
-    bytes = read_file(path, &length, &error);
-    if (bytes == NULL) {
-        if (errbuf != NULL && errbuf_len > 0) {
-            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "script not found");
-        }
-        return -1;
-    }
-    *out = bytes;
-    *out_len = length;
-    return 0;
 }
 
 int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **out, size_t *out_len,
@@ -394,7 +331,7 @@ int weizhi_close(WeizhiEngine *engine) {
         free(engine->hosts[i].name);
     }
     free(engine->hosts);
-    free(engine->script_folder);
+    free(engine->package_root);
     free(engine->fs_root);
     free(engine->run_id);
     pthread_mutex_destroy(&engine->wake_mu);
@@ -440,23 +377,6 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     JS_SetPropertyStr(engine->ctx, global, name, func);
     JS_FreeValue(engine->ctx, global);
     engine->host_count++;
-    return 0;
-}
-
-int weizhi_set_script_folder(WeizhiEngine *engine, const char *folder) {
-    char *copy;
-    if (engine == NULL || folder == NULL || folder[0] == '\0') {
-        return -1;
-    }
-    if (atomic_load(&engine->state) != ST_IDLE) {
-        return -1;
-    }
-    copy = strdup(folder);
-    if (copy == NULL) {
-        return -1;
-    }
-    free(engine->script_folder);
-    engine->script_folder = copy;
     return 0;
 }
 

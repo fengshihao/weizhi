@@ -149,8 +149,9 @@ public final class ApiCardsTest {
         Path root = Files.createTempDirectory("weizhi-api-card-");
         try (WeizhiEngine engine = new WeizhiEngine()) {
             DesktopCaps.install(engine, root, message -> true);
-            if (Files.isDirectory(scriptDir)) {
-                engine.setScriptFolder(scriptDir.toString());
+            Path packageHome = scriptDir.resolve("..").resolve("weizhi-packages");
+            if (Files.isDirectory(packageHome)) {
+                engine.setPackageRoot(packageHome.toString());
             }
             String source = str(card, "entry");
             if (source.contains("android.") && !"android".equals(platform)) {

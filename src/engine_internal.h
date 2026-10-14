@@ -100,7 +100,7 @@ struct WeizhiEngine {
     WeizhiLimits limits;
     HostFn *hosts;
     int host_count;
-    char *script_folder;
+    char *package_root;
     char *fs_root;
     char *run_id;
     WeizhiLogFn log_fn;
@@ -176,9 +176,17 @@ int weizhi_js_buffer_data(JSContext *ctx, JSValueConst val, uint8_t **data, size
 JSValue weizhi_buffer_adopt(JSContext *ctx, uint8_t *bytes, size_t len);
 /* Leaf script name: single path segment, [A-Za-z0-9._-], max 64 chars. */
 int weizhi_valid_script_leaf(const char *name);
-/* Read a leaf .js from script_folder into *out (caller frees). Returns 0 on success. */
-int weizhi_read_script_leaf(Engine *engine, const char *leaf, uint8_t **out, size_t *out_len,
-                            char *errbuf, size_t errbuf_len);
+int weizhi_valid_package_name(const char *name);
+int weizhi_set_package_root(WeizhiEngine *engine, const char *folder);
+int weizhi_parse_weizhi_module_spec(const char *spec, char *name, size_t name_len, char *rel, size_t rel_len);
+int weizhi_read_package_module(Engine *engine, const char *module_spec, uint8_t **out, size_t *out_len,
+                               char *errbuf, size_t errbuf_len);
+int weizhi_package_install_dir(Engine *engine, const char *package_name, char *out, size_t out_len);
+int weizhi_package_entry_rel(Engine *engine, const char *install_dir, char *entry, size_t entry_len);
+int weizhi_resolve_package_asset_path(const char *install_dir, const char *rel, char *out, size_t out_len);
+int weizhi_resolve_package_fs_path(Engine *engine, const char *path, char *out, size_t out_len,
+                                   const char **error);
+int weizhi_is_package_fs_path(const char *path);
 /* Read a .js under fs_root (relpath, no ".."). Returns 0 on success. */
 int weizhi_read_workspace_script(Engine *engine, const char *relpath, uint8_t **out, size_t *out_len,
                                  char *errbuf, size_t errbuf_len);

@@ -1,8 +1,7 @@
 # Weizhi Package（官方 JS 包）设计方案
 
-> **状态：规格已定，待实现**  
-> **当前主干仍以** [`setScriptFolder` catalog](MODULE_LOADING.md) **为准**；按本文落地后更新 DECISIONS / 引擎与宿主 API。  
-> 项目早期：**不保留 catalog 兼容**；实现 Package 时直接移除 `setScriptFolder` / `import "leaf.js"`。
+> **状态：P1 已实现（内置解析 + `getAssetPath` + 测试）**  
+> 远程目录安装（P3）、宿主 Java 安装库仍为后续工作。API：`setPackageRoot` / `weizhi_set_package_root`。
 
 **相关**：[MODULE_LOADING.md](MODULE_LOADING.md)、[HOST_ABI.md](HOST_ABI.md)、[NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)、[QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md)、[INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 
