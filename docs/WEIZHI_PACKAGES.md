@@ -1,7 +1,7 @@
 # Weizhi Package（官方 JS 包）设计方案
 
-> **状态：P1 已实现（内置解析 + `getAssetPath` + 测试）**  
-> 远程目录安装（P3）、宿主 Java 安装库仍为后续工作。API：`setPackageRoot` / `weizhi_set_package_root`。
+> **状态：P1 与 P3 已实现**（内置 `weizhi:` 解析、`PackageInstaller`、官方 Registry 客户端）。  
+> API：`setPackageRoot` / `weizhi_set_package_root`；远程安装见 §7。
 
 **相关**：[MODULE_LOADING.md](MODULE_LOADING.md)、[HOST_ABI.md](HOST_ABI.md)、[NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)、[QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md)、[INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 
@@ -195,7 +195,7 @@ flowchart LR
 | 阶段 | 负责方 | 说明 |
 |------|--------|------|
 | 内置安装 | 宿主 App 启动或首次 `WeizhiEngine` 配置 | 从 assets 安装到 `<weizhi-home>/packages/`；可不联网 |
-| 远程安装 | 宿主（工具或 `WeizhiPackageManager` 类库） | 读**官方目录**（非脚本任意 URL）→ 下载 zip → `sha256` → 解压；需 `enableFetch` |
+| 远程安装 | 宿主在 `runJs` **之前**调 `PackageRegistryClient.ensureInstalled` | 读官方 Registry → 下载 zip → `sha256` → `PackageInstaller`。**不**走脚本 `import` / `fetch` |
 | 解析 / import | 引擎 module loader | 只读 package 目录，不写 workspace |
 | 原生插件 | 宿主 + `ensureNative` | 与 package 并行；manifest `native_requires` 触发 |
 | 卸载 / 升级 | 宿主策略 | 目录删 `name@old`、更新 `packages-index.json`；引擎无全局 npm  uninstall API 也可 |
@@ -204,11 +204,94 @@ flowchart LR
 
 ---
 
-## 7. 官方目录（CDN）与内置的关系
+## 7. 官方 Registry（CDN）
 
-- **目录真相**：与 [HOST_ABI 原生插件目录](HOST_ABI.md) 类似，维护 `packages` 条目的索引（name、最新兼容 version、artifact url、哈希、依赖）。  
-- **脚本不直接读目录**：由宿主或可选 Java 库拉取；Agent 只写 `weizhi:docx`。  
-- **内置** = 目录中某 `(name, version)` 的**快照**，随 App 发版；可在无网时只用内置快照，有网时按策略升级。
+脚本**只**写 `import … from "weizhi:<name>"`。宿主在 `runJs` 之前调用 Java API 装包；**import 解析器不联网**。不要教模型先下载。
+
+内置包（assets / `syncBundled`）仍是离线保底。Registry 只提供「当前」版本（D7）；与本地 `packages-index.json` 不一致且 `upgrade` 为 true 时，安装 Registry 上的版本。
+
+### 7.1 默认 URL 与白名单
+
+| 常量 | 值 |
+|------|----|
+| `PackageRegistryClient.DEFAULT_REGISTRY_URL` | `https://cdn.weizhi.example/packages/registry/stable.json` |
+| `PackageRegistryClient.OFFICIAL_HOST` | `cdn.weizhi.example` |
+
+`cdn.weizhi.example` 是占位主机（`.example` 为保留域，不会被抢注）。正式 CDN 域名落地时**只改这两个常量**。生产环境不要改 `allowedHosts`。
+
+- Registry URL 与每条 `artifact.url` 的主机都必须在白名单内（默认仅 `OFFICIAL_HOST`）。精确匹配主机名，不做后缀匹配。
+- 非 loopback 必须是 `https`。`http` 只允许 `127.0.0.1` / `localhost`（测试）。
+- 只下载清单条目里的 URL，不接受脚本传入的地址。
+- `allowedHosts` 仅用于官方镜像和测试。**不要**把它当成企业私服（D5）。
+- 重定向每一跳重新做白名单检查。
+
+### 7.2 Registry manifest
+
+与包内 `manifest.json` 不是同一份文件。`schema_version` 必须为 `1`。
+
+```json
+{
+  "schema_version": 1,
+  "channel": "stable",
+  "packages": [
+    {
+      "name": "docx",
+      "version": "3.2.1",
+      "description": "Word OOXML helpers",
+      "min_engine": "0.1.0",
+      "artifact": {
+        "url": "https://cdn.weizhi.example/packages/docx/3.2.1/docx-3.2.1.zip",
+        "sha256": "<64 hex>",
+        "size": 524288
+      },
+      "capability": {
+        "title": "Docx",
+        "summary": "build a docx from markdown",
+        "entry": "import { buildDocx } from \"weizhi:docx\";"
+      }
+    }
+  ]
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `schema_version` | 是 | 目前只能是 `1` |
+| `channel` | 否 | 如 `stable` |
+| `packages[].name` / `version` | 是 | 与 zip 内 `manifest.json` 的 `name` / `version` 必须一致 |
+| `packages[].artifact.url` | 是 | zip 地址，主机须在白名单 |
+| `packages[].artifact.sha256` | 是 | 64 位十六进制；不匹配则**不**写 `packages-index.json` |
+| `packages[].artifact.size` | 否 | 字节数；与下载结果不符则失败 |
+| `packages[].capability` | 否 | `title` / `summary` / `entry`（示例 import，给 find_caps，引擎不执行） |
+| `min_engine` | 否 | 告知宿主；本客户端不据此拒绝安装 |
+
+条件请求：若响应带 `ETag`，客户端把 body 写到缓存（`ensure` 默认 `<weizhi-home>/registry-cache.json`）。下次发送 `If-None-Match`；`304` 时复用缓存 body。
+
+zip 内条目含 `..`、反斜杠或以 `/` 开头 → 错误含 `zip slip` 与 `path escape`，不安装。声明体积上限 64MB，清单上限 1MB。
+
+### 7.3 Java API（`:weizhi`）
+
+```java
+PackageRegistryClient.RegistryManifest manifest =
+    PackageRegistryClient.fetchManifest(url, fetchOptions);
+
+PackageRegistryClient.EnsureResult result =
+    PackageRegistryClient.ensureInstalled(weizhiHome, names, ensureOptions);
+engine.setPackageRoot(weizhiHome.toString());
+```
+
+| 项 | 行为 |
+|----|------|
+| `fetchManifest` | 拉并解析清单。默认超时 **30s**（`registry fetch timeout`） |
+| `ensureInstalled` | 对比 `packages-index.json`。已安装且版本符合：**不下载 artifact**。否则 GET zip → sha256 → `installPackageZip` |
+| `EnsureOptions.timeoutMs` | 默认 **180_000**。只约束网络和安装，与 `runJs` 超时分开。失败文案含 `package ensure timeout` |
+| `EnsureOptions.upgrade` | 默认 true：Registry 版本即当前版本（D7）。false 时只补缺失的 name |
+| 并发 | 同一 `weizhiHome` + `name` 进程内单飞，并加 `packages/.locks/<name>.lock` 文件锁 |
+| 未收录 | `package not in registry: "<name>"` |
+| sha256 失败 | `sha256 mismatch`；该 name 的 index 不变 |
+| 取消 | 调用线程已 interrupt 时，在下一次读之前失败，文案含 `package ensure cancelled` |
+
+`min_engine` 不在引擎里比较（没有单独的引擎 semver 常量）。宿主若要拒绝过旧引擎，自己看 `RegistryPackage.minEngine`。
 
 ---
 
@@ -237,7 +320,7 @@ flowchart LR
 | `weizhi:` 模块解析、读 package 内 `.js` | **引擎** `src/package.c` |
 | 安装到 `packages/<name>@<ver>/`、写 `packages-index.json` | **`com.weizhi.packages.PackageInstaller`**（`:weizhi` AAR） |
 | Android 从 assets 同步 | **`com.weizhi.caps.WeizhiPackages.syncBundled(Context)`** |
-| 远程目录 CDN | **未实现**（宿主后续可调 `PackageInstaller.installPackageZip`） |
+| 官方 Registry（清单、ETag、sha256、ensure） | **`com.weizhi.packages.PackageRegistryClient`**（`:weizhi` AAR） |
 | `ensureNative` | **已有 Host ABI** |
 | LLM 工具 `install_package` | **宿主注册**，内部调 `PackageInstaller` |
 
@@ -247,7 +330,7 @@ flowchart LR
 
 ## 10. 安全
 
-- 远程 artifact：**仅微智官方目录** + **`sha256`**（见 §0 D4、D5）。  
+- 远程 artifact：**仅白名单内的官方 Registry 主机** + 条目内 URL + **`sha256`**（见 §0 D4、D5 与 §7.1）。  
 - 安装路径：仅 `<weizhi-home>/packages/`；zip slip 防护（与 `zip` 模块同类规则）。  
 - Package 树对 workspace **`fs` 默认不可写**；脚本通过受控 API 读 assets，避免用户脚本篡改官方包。  
 - `native_requires` 只允许 manifest 声明的 plugin **name**，禁止脚本传任意 SO URL。
@@ -261,7 +344,7 @@ flowchart LR
 | **P0 文档** | 本文 + 交叉链接；DECISIONS 标记提案 | — |
 | **P1 内置** | 引擎 `weizhi:` 解析；宿主内置 1～2 个示例 package；废弃 catalog 文档 | 引擎 + 宿主安装器 |
 | **P2 资源** | package 内 `assets/` + 读路径 API | P1 |
-| **P3 远程** | 官方目录 + 下载安装 + 测试 mock HTTP | `fetch` |
+| **P3 远程** | **已实现**：`PackageRegistryClient` + mock HTTP 测试 | 宿主 HTTP，不占用脚本 `fetch` |
 | **P4 清理** | 删除 `setScriptFolder` 与 catalog 代码路径（可与 P1 合并，因无兼容期要求） | P1 |
 
 测试要求（落地时）：`tests/` 或 `androidTest` 覆盖 `weizhi:` 解析、路径逃逸、未安装错误文案；远程安装用 mock HTTP（与 `FetchRedirectTest` 同类）。
@@ -281,3 +364,4 @@ flowchart LR
 | 2026-10-14 | 初稿：统一 catalog 与内置 Bundle 为 Package 提案 |
 | 2026-10-14 | 锁定 D3（getAssetPath）、D6（Skill 分离）；缩短 catalog 兼容策略 |
 | 2026-10-14 | 锁定 D1/D2/D4/D5/D7 为最简默认；状态改为规格已定 |
+| 2026-10-14 | P3：`PackageRegistryClient`、Registry manifest、默认 URL 占位 |

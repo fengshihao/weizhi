@@ -111,6 +111,7 @@ public final class SmokeTest {
         desktopCaps();
         FetchRedirectTest.run();
         PackageInstallerTest.main(args);
+        PackageRegistryTest.run();
         PackageSmokeTest.main(args);
         ApiCardsTest.main(args);
     }

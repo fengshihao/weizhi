@@ -15,7 +15,8 @@
 ### 你可以做什么
 
 - 使用 `fs` / `fs.promises`、`path`、`Buffer`、`process`（只读子集）、`console`、`zlib`、`zip`。`fs` 同步：`readFileSync` / `writeFileSync` / `existsSync` / `unlinkSync` / `mkdirSync(path[, { recursive }])`；异步：`fs.promises.readFile` / `writeFile` / `mkdir`。写文件会自动创建缺失的父目录；建目录用 `mkdirSync('out', { recursive: true })` 或依赖写文件时的自动建父目录。
-- **没有 npm**。模块加载见 [MODULE_LOADING.md](MODULE_LOADING.md)：**AI 脚本一律用 `import`**（内置 `import fs from "fs"`，自建库 `import … from "./叶子.js"`）。**不要写 `require()`**（引擎虽保留给旧代码，但 Agent 不用）。**没有 `loadScript`**。含 `import`/`export` 时可用 `export default` 作为本轮 `runJs` 返回值。
+- **没有 npm**。模块加载见 [MODULE_LOADING.md](MODULE_LOADING.md)：**AI 脚本一律用 `import`**（内置 `import fs from "fs"`，官方包 `import { … } from "weizhi:<name>"`，自建库 `import … from "./叶子.js"`）。**不要写 `require()`**（引擎虽保留给旧代码，但 Agent 不用）。**没有 `loadScript`**。含 `import`/`export` 时可用 `export default` 作为本轮 `runJs` 返回值。
+- 官方包由宿主在跑脚本前装好。**不要** `fetch` 下载 zip，不要自己解压，不要把 `import` 改成 URL。若错误含 `package not installed`，那是宿主安装问题，不要改成下载脚本。
 - 压缩：`import zlib from "zlib"` 后使用 `gzipSync` / `gunzipSync`（gzip）和 `deflateSync` / `inflateSync`（raw deflate）；参数与返回值都是 `Buffer`。`process.weizhiCaps.compress` 为 `true`。单次输入或输出超过 fs 载荷上限会报 `too large: zlib`。
 - Zip：`import zip from "zip"` 后使用 `zip.extractSync(zipPath, destDir)`（返回 `{entries, skipped}`）、`zip.createSync(sourceDir, zipPath)`（返回 `{files}`）。含 `..` 的恶意条目会跳过；单文件/整包受 fs 载荷上限约束。`process.weizhiCaps.zip` 为 `true`。xlsx/docx 等可解压后用 `fs` 改 XML，再 `createSync` 打回。
 - 字节和文本：`Buffer` 是 `Uint8Array` 子类（`buf instanceof Uint8Array` 为真，可 `buf[i]`）。`Buffer.from(str|Uint8Array|数组, "utf8"|"hex"|"base64")`、`buf.toString(...)`、`Buffer.alloc(n)`。`new TextEncoder().encode(str)` 得到 `Uint8Array`；`new TextDecoder().decode(bytes)` 只接受 UTF-8。`btoa` / `atob` 是 Latin-1，不是 UTF-8。
@@ -72,8 +73,8 @@
 
 ## 宿主侧备注（不要贴进 Agent 提示）
 
-- C：`weizhi_set_http` + `weizhi_complete_fetch`；脚本库目录：`weizhi_set_script_folder`。
-- Java：`engine.enableFetch()` 或 `enableFetch(new String[]{"example.com"})`；`setScriptFolder`。
+- C：`weizhi_set_http` + `weizhi_complete_fetch`；官方包目录：`weizhi_set_package_root`。
+- Java：`PackageRegistryClient.ensureInstalled` 然后 `setPackageRoot`。不要在系统提示里教模型下载包。`engine.enableFetch()` 或 `enableFetch(new String[]{"example.com"})` 只给脚本自己的 `fetch`，不负责装官方包。
 - 原生插件（typed IDL）：`engine.enableNativePlugins(dir)` 后 `const p = await host.ensureNative("echo_math"); p.add(20,22)`；`bytes` 用 `Buffer`。详见 [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md)。
 - Mock（无 .so）：`enableNativeMock()`。
 - 真机冒烟：`./scripts/test.sh android`。
