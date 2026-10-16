@@ -82,6 +82,13 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeSetPackageRoot(JNIEnv 
     return rc;
 }
 
+JNIEXPORT jboolean JNICALL Java_com_weizhi_WeizhiEngine_nativePendingDone(JNIEnv *env, jclass clazz, jlong handle,
+                                                                         jlong request_id) {
+    (void)env;
+    (void)clazz;
+    return weizhi_pending_is_done((WeizhiEngine *)(intptr_t)handle, (int64_t)request_id) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL Java_com_weizhi_WeizhiEngine_nativeCancel(JNIEnv *env, jclass clazz, jlong handle) {
     (void)env;
     (void)clazz;

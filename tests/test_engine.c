@@ -973,6 +973,8 @@ static void test_agent_precise_errors(void) {
     weizhi_close(engine);
 }
 
+static int g_http_starts;
+
 static int mock_http_async(WeizhiEngine *engine, int64_t request_id, const char *method, const char *url,
                            const char *headers_json, const WeizhiBytes *body, void *userdata) {
     WeizhiBytes out;
@@ -981,6 +983,10 @@ static int mock_http_async(WeizhiEngine *engine, int64_t request_id, const char 
     (void)headers_json;
     (void)body;
     (void)userdata;
+    g_http_starts++;
+    if (url != NULL && strstr(url, "slow.example") != NULL) {
+        return 0;
+    }
     if (url != NULL && strstr(url, "blocked.example") != NULL) {
         weizhi_complete_fetch(engine, request_id, 0, NULL, NULL,
                               "fetch blocked: host \"blocked.example\" is not allowlisted");
@@ -1407,6 +1413,125 @@ static void test_zip_roundtrip(void) {
     free(dir);
 }
 
+static void test_queue_microtask_digest_fs_and_abort(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+
+    result = weizhi_run_js(engine,
+                           "const order = [];"
+                           "order.push('s');"
+                           "queueMicrotask(() => order.push('m'));"
+                           "Promise.resolve().then(() => order.push('p'));"
+                           "setTimeout(() => order.push('t'), 0);"
+                           "await new Promise(r => setTimeout(r, 20));"
+                           "order.join(',')",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "\"s,m,p,t\"") == 0);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "queueMicrotask(1)", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "bad argument: queueMicrotask") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine,
+                           "const hex = Buffer.from(await crypto.subtle.digest('SHA-256',"
+                           " new TextEncoder().encode('abc'))).toString('hex');"
+                           "const empty = Buffer.from(await crypto.subtle.digest({name:'SHA-256'},"
+                           " new Uint8Array(0))).toString('hex');"
+                           "({hex, empty, hash: process.weizhiCaps.hash})",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL &&
+           strstr(result.output_text, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") != NULL);
+    EXPECT(result.output_text != NULL &&
+           strstr(result.output_text, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"hash\":true") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "await crypto.subtle.digest('SHA-1', new Uint8Array(1))", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: crypto.subtle.digest") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "crypto.subtle.encrypt", 1000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: crypto.subtle.encrypt") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine,
+                           "fs.mkdirSync('sub');"
+                           "fs.writeFileSync('sub/b.txt','bbb');"
+                           "fs.writeFileSync('sub/a.txt','aa');"
+                           "fs.writeFileSync('gone.txt','z');"
+                           "const names = await fs.promises.readdir('sub');"
+                           "const st = await fs.promises.stat('sub/b.txt');"
+                           "const dirSt = await fs.promises.stat('sub');"
+                           "await fs.promises.unlink('gone.txt');"
+                           "({names, size: st.size, isFile: st.isFile, isDirectory: dirSt.isDirectory,"
+                           " gone: fs.existsSync('gone.txt')})",
+                           3000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"names\":[\"a.txt\",\"b.txt\"]") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"size\":3") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"isFile\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"isDirectory\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"gone\":false") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "await fs.promises.readdir('sub/a.txt')", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "not a directory") != NULL);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "await fs.promises.stat('missing.txt')", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "file not found") != NULL);
+    weizhi_result_free(&result);
+
+    weizhi_set_http(engine, mock_http_async, NULL);
+    g_http_starts = 0;
+    result = weizhi_run_js(engine,
+                           "const c = new AbortController();"
+                           "c.abort();"
+                           "let msg = '';"
+                           "try { await fetch('https://ok.example/api', { signal: c.signal }); }"
+                           "catch (e) { msg = String(e); }"
+                           "msg",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "cancelled") != NULL);
+    EXPECT(g_http_starts == 0);
+    weizhi_result_free(&result);
+
+    g_http_starts = 0;
+    result = weizhi_run_js(engine,
+                           "const c2 = new AbortController();"
+                           "const slow = fetch('https://slow.example/x', { signal: c2.signal });"
+                           "const okResp = await fetch('https://ok.example/api');"
+                           "c2.abort();"
+                           "let msg2 = '';"
+                           "try { await slow; } catch (e) { msg2 = String(e); }"
+                           "({status: okResp.status, msg: msg2})",
+                           2000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"status\":200") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "cancelled") != NULL);
+    EXPECT(g_http_starts == 2);
+    weizhi_result_free(&result);
+
+    result = weizhi_run_js(engine, "await fetch('https://ok.example/api', { signal: 1 })", 2000);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "bad argument: fetch: signal") != NULL);
+    weizhi_result_free(&result);
+
+    weizhi_close(engine);
+    free(dir);
+}
+
 int main(void) {
     test_arithmetic();
     test_engine_survives_syntax_error();
@@ -1443,6 +1568,7 @@ int main(void) {
     test_typed_plugin_loader();
     test_zlib_roundtrip();
     test_zip_roundtrip();
+    test_queue_microtask_digest_fs_and_abort();
     if (g_failed != 0) {
         fprintf(stderr, "%d assertion(s) failed\n", g_failed);
         return 1;

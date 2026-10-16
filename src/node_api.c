@@ -1,13 +1,16 @@
 #include "engine_internal.h"
+#include "sha256.h"
 #include "weizhi_plugin.h"
 
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <zlib.h>
@@ -404,6 +407,24 @@ static JSValue js_clear_timeout(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+static JSValue microtask_job(JSContext *ctx, int argc, JSValueConst *argv) {
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_UNDEFINED;
+    }
+    return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+}
+
+static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return weizhi_throw_bad_arg(ctx, "queueMicrotask", "first argument must be a function");
+    }
+    if (JS_EnqueueJob(ctx, microtask_job, 1, argv) < 0) {
+        return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
 static int resolve_fs_path(Engine *engine, const char *relpath, char *out, size_t out_len, const char **error) {
     if (weizhi_is_package_fs_path(relpath)) {
         return weizhi_resolve_package_fs_path(engine, relpath, out, out_len, error);
@@ -487,6 +508,156 @@ static int fs_mkdir_single_strict(Engine *engine, const char *relpath, char *err
         return -1;
     }
     return vfs_invoke(engine, WEIZHI_VFS_MKDIR, relpath, NULL, NULL, NULL, errbuf, errbuf_len);
+}
+
+static int json_buf_append(char **buf, size_t *len, size_t *cap, const char *s, size_t n) {
+    size_t next;
+    char *grown;
+    if (n > SIZE_MAX - *len - 1) {
+        return -1;
+    }
+    next = *len + n + 1;
+    if (next > *cap) {
+        size_t nc = *cap == 0 ? 128 : *cap;
+        while (nc < next) {
+            if (nc > SIZE_MAX / 2) {
+                return -1;
+            }
+            nc *= 2;
+        }
+        grown = realloc(*buf, nc);
+        if (grown == NULL) {
+            return -1;
+        }
+        *buf = grown;
+        *cap = nc;
+    }
+    if (n > 0) {
+        memcpy(*buf + *len, s, n);
+    }
+    *len += n;
+    (*buf)[*len] = '\0';
+    return 0;
+}
+
+static int json_buf_append_str(char **buf, size_t *len, size_t *cap, const char *s) {
+    const unsigned char *p;
+    if (json_buf_append(buf, len, cap, "\"", 1) != 0) {
+        return -1;
+    }
+    for (p = (const unsigned char *)(s != NULL ? s : ""); *p != 0; p++) {
+        char tmp[8];
+        int n;
+        if (*p == '"' || *p == '\\') {
+            tmp[0] = '\\';
+            tmp[1] = (char)*p;
+            n = 2;
+        } else if (*p == '\n') {
+            tmp[0] = '\\';
+            tmp[1] = 'n';
+            n = 2;
+        } else if (*p == '\r') {
+            tmp[0] = '\\';
+            tmp[1] = 'r';
+            n = 2;
+        } else if (*p < 0x20) {
+            n = snprintf(tmp, sizeof(tmp), "\\u%04x", *p);
+        } else {
+            tmp[0] = (char)*p;
+            n = 1;
+        }
+        if (n < 0 || json_buf_append(buf, len, cap, tmp, (size_t)n) != 0) {
+            return -1;
+        }
+    }
+    return json_buf_append(buf, len, cap, "\"", 1);
+}
+
+static int cmp_cstr(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static int vfs_readdir_json(const char *path, size_t limit, WeizhiBytes *out, char *errbuf, size_t errbuf_len) {
+    DIR *dir;
+    struct dirent *ent;
+    char **names = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+    char *json = NULL;
+    size_t json_len = 0;
+    size_t json_cap = 0;
+    size_t i;
+    int rc = -1;
+    dir = opendir(path);
+    if (dir == NULL) {
+        snprintf(errbuf, errbuf_len, errno == ENOTDIR ? "not a directory" : "file not found");
+        return -1;
+    }
+    while ((ent = readdir(dir)) != NULL) {
+        char *copy;
+        char **grown;
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        if (n >= 10000) {
+            snprintf(errbuf, errbuf_len, "too large: readdir");
+            goto done;
+        }
+        copy = strdup(ent->d_name);
+        if (copy == NULL) {
+            snprintf(errbuf, errbuf_len, "out of memory");
+            goto done;
+        }
+        if (n == cap) {
+            size_t nc = cap == 0 ? 8 : cap * 2;
+            grown = realloc(names, nc * sizeof(char *));
+            if (grown == NULL) {
+                free(copy);
+                snprintf(errbuf, errbuf_len, "out of memory");
+                goto done;
+            }
+            names = grown;
+            cap = nc;
+        }
+        names[n++] = copy;
+    }
+    if (n > 0) {
+        qsort(names, n, sizeof(char *), cmp_cstr);
+    }
+    if (json_buf_append(&json, &json_len, &json_cap, "[", 1) != 0) {
+        snprintf(errbuf, errbuf_len, "out of memory");
+        goto done;
+    }
+    for (i = 0; i < n; i++) {
+        if (i > 0 && json_buf_append(&json, &json_len, &json_cap, ",", 1) != 0) {
+            snprintf(errbuf, errbuf_len, "out of memory");
+            goto done;
+        }
+        if (json_buf_append_str(&json, &json_len, &json_cap, names[i]) != 0) {
+            snprintf(errbuf, errbuf_len, "out of memory");
+            goto done;
+        }
+    }
+    if (json_buf_append(&json, &json_len, &json_cap, "]", 1) != 0) {
+        snprintf(errbuf, errbuf_len, "out of memory");
+        goto done;
+    }
+    if (json_len > limit) {
+        snprintf(errbuf, errbuf_len, "too large: readdir");
+        goto done;
+    }
+    out->data = (unsigned char *)json;
+    out->len = json_len;
+    json = NULL;
+    rc = 0;
+done:
+    closedir(dir);
+    for (i = 0; i < n; i++) {
+        free(names[i]);
+    }
+    free(names);
+    free(json);
+    return rc;
 }
 
 static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *relpath2, const WeizhiBytes *in,
@@ -589,10 +760,27 @@ static int default_vfs_sync(WeizhiVfsOp op, const char *relpath, const char *rel
             return -1;
         }
         return 0;
-    case WEIZHI_VFS_STAT:
+    case WEIZHI_VFS_STAT: {
+        struct stat st;
+        char json[160];
+        if (stat(path, &st) != 0) {
+            snprintf(errbuf, errbuf_len, "file not found");
+            return -1;
+        }
+        snprintf(json, sizeof(json),
+                 "{\"size\":%lld,\"isFile\":%s,\"isDirectory\":%s,\"mtimeMs\":%lld}",
+                 (long long)st.st_size, S_ISREG(st.st_mode) ? "true" : "false",
+                 S_ISDIR(st.st_mode) ? "true" : "false", (long long)st.st_mtime * 1000LL);
+        out->data = (unsigned char *)strdup(json);
+        if (out->data == NULL) {
+            snprintf(errbuf, errbuf_len, "out of memory");
+            return -1;
+        }
+        out->len = strlen(json);
+        return 0;
+    }
     case WEIZHI_VFS_READDIR:
-        snprintf(errbuf, errbuf_len, "unsupported operation");
-        return -1;
+        return vfs_readdir_json(path, engine->limits.fs_io_bytes, out, errbuf, errbuf_len);
     default:
         snprintf(errbuf, errbuf_len, "unsupported operation");
         return -1;
@@ -634,6 +822,15 @@ static void async_job_run(WeizhiAsyncJob *job) {
     WeizhiBytes out;
     char errbuf[128];
     int rc;
+    if (job->job_kind == WEIZHI_JOB_SHA256) {
+        uint8_t dig[32];
+        weizhi_sha256(job->in.data, job->in.len, dig);
+        out.data = dig;
+        out.len = 32;
+        weizhi_complete(job->engine, job->request_id, 1, &out, NULL);
+        async_job_free(job);
+        return;
+    }
     memset(&out, 0, sizeof(out));
     errbuf[0] = '\0';
     if (job->op == WEIZHI_VFS_MKDIR && job->in.len >= 1 && job->in.data != NULL) {
@@ -754,6 +951,53 @@ void weizhi_async_pool_shutdown(Engine *engine) {
     engine->async_stop = 0;
 }
 
+static int async_enqueue(Engine *engine, WeizhiAsyncJob *job) {
+    if (async_pool_ensure_started(engine) != 0) {
+        async_job_free(job);
+        return -1;
+    }
+    pthread_mutex_lock(&engine->async_mu);
+    if (engine->async_stop) {
+        pthread_mutex_unlock(&engine->async_mu);
+        async_job_free(job);
+        return -1;
+    }
+    if (engine->async_queue_tail != NULL) {
+        engine->async_queue_tail->next = job;
+    } else {
+        engine->async_queue_head = job;
+    }
+    engine->async_queue_tail = job;
+    pthread_cond_signal(&engine->async_cv);
+    pthread_mutex_unlock(&engine->async_mu);
+    return 0;
+}
+
+static int enqueue_sha256(Engine *engine, int64_t request_id, const WeizhiBytes *in) {
+    WeizhiAsyncJob *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        return -1;
+    }
+    job->engine = engine;
+    job->request_id = request_id;
+    job->job_kind = WEIZHI_JOB_SHA256;
+    job->relpath = strdup("");
+    if (job->relpath == NULL) {
+        async_job_free(job);
+        return -1;
+    }
+    if (in != NULL && in->len > 0 && in->data != NULL) {
+        job->in.data = malloc(in->len);
+        if (job->in.data == NULL) {
+            async_job_free(job);
+            return -1;
+        }
+        memcpy(job->in.data, in->data, in->len);
+        job->in.len = in->len;
+    }
+    return async_enqueue(engine, job);
+}
+
 static int default_vfs_async(WeizhiEngine *engine, int64_t request_id, WeizhiVfsOp op, const char *relpath,
                              const char *relpath2, const WeizhiBytes *in, void *userdata) {
     WeizhiAsyncJob *job = calloc(1, sizeof(*job));
@@ -779,25 +1023,7 @@ static int default_vfs_async(WeizhiEngine *engine, int64_t request_id, WeizhiVfs
         async_job_free(job);
         return -1;
     }
-    if (async_pool_ensure_started(engine) != 0) {
-        async_job_free(job);
-        return -1;
-    }
-    pthread_mutex_lock(&engine->async_mu);
-    if (engine->async_stop) {
-        pthread_mutex_unlock(&engine->async_mu);
-        async_job_free(job);
-        return -1;
-    }
-    if (engine->async_queue_tail != NULL) {
-        engine->async_queue_tail->next = job;
-    } else {
-        engine->async_queue_head = job;
-    }
-    engine->async_queue_tail = job;
-    pthread_cond_signal(&engine->async_cv);
-    pthread_mutex_unlock(&engine->async_mu);
-    return 0;
+    return async_enqueue(engine, job);
 }
 
 static JSValue buffer_from_bytes(JSContext *ctx, const WeizhiBytes *bytes) {
@@ -1044,6 +1270,9 @@ static JSValue fs_async_op(JSContext *ctx, WeizhiVfsOp op, JSValueConst path_val
         JS_FreeValue(ctx, promise);
         return JS_ThrowRangeError(ctx, "too many async requests");
     }
+    if (op == WEIZHI_VFS_READDIR || op == WEIZHI_VFS_STAT) {
+        weizhi_pending_set_kind(engine, id, WEIZHI_PENDING_JSON);
+    }
     if (engine->vfs_async != NULL) {
         void *ud = engine->vfs_async_ud != NULL ? engine->vfs_async_ud : engine->vfs_ud;
         rc = engine->vfs_async(engine, id, op, relpath, NULL, &in, ud);
@@ -1123,6 +1352,30 @@ static JSValue js_promises_write_file(JSContext *ctx, JSValueConst this_val, int
     return fs_async_op(ctx, WEIZHI_VFS_WRITE, argv[0], argv[1], 1);
 }
 
+static JSValue js_promises_unlink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "fs.promises.unlink", "path required");
+    }
+    return fs_async_op(ctx, WEIZHI_VFS_UNLINK, argv[0], JS_UNDEFINED, 0);
+}
+
+static JSValue js_promises_readdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "fs.promises.readdir", "path required");
+    }
+    return fs_async_op(ctx, WEIZHI_VFS_READDIR, argv[0], JS_UNDEFINED, 0);
+}
+
+static JSValue js_promises_stat(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 1) {
+        return weizhi_throw_bad_arg(ctx, "fs.promises.stat", "path required");
+    }
+    return fs_async_op(ctx, WEIZHI_VFS_STAT, argv[0], JS_UNDEFINED, 0);
+}
+
 static JSValue js_promises_mkdir(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     int recursive;
     (void)this_val;
@@ -1145,6 +1398,9 @@ static JSValue make_fs_module(JSContext *ctx) {
     JS_SetPropertyStr(ctx, mod, "mkdirSync", JS_NewCFunction(ctx, js_mkdir_sync, "mkdirSync", 2));
     JS_SetPropertyStr(ctx, promises, "readFile", JS_NewCFunction(ctx, js_promises_read_file, "readFile", 1));
     JS_SetPropertyStr(ctx, promises, "writeFile", JS_NewCFunction(ctx, js_promises_write_file, "writeFile", 2));
+    JS_SetPropertyStr(ctx, promises, "unlink", JS_NewCFunction(ctx, js_promises_unlink, "unlink", 1));
+    JS_SetPropertyStr(ctx, promises, "readdir", JS_NewCFunction(ctx, js_promises_readdir, "readdir", 1));
+    JS_SetPropertyStr(ctx, promises, "stat", JS_NewCFunction(ctx, js_promises_stat, "stat", 1));
     JS_SetPropertyStr(ctx, promises, "mkdir", JS_NewCFunction(ctx, js_promises_mkdir, "mkdir", 2));
     guarded_promises = weizhi_guard_module(ctx, promises, "fs.promises");
     if (JS_IsException(guarded_promises)) {
@@ -1169,6 +1425,7 @@ static JSValue make_caps_object(JSContext *ctx, Engine *engine) {
     JS_SetPropertyStr(ctx, caps, "compress", JS_TRUE);
     JS_SetPropertyStr(ctx, caps, "zip", JS_TRUE);
     JS_SetPropertyStr(ctx, caps, "random", JS_TRUE);
+    JS_SetPropertyStr(ctx, caps, "hash", JS_TRUE);
     return caps;
 }
 
@@ -1927,6 +2184,91 @@ static char *headers_object_to_json(JSContext *ctx, JSValueConst headers_val) {
     return copy;
 }
 
+static JSValue js_on_fetch_abort(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
+                                 JSValue *func_data) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    int64_t id = 0;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    (void)magic;
+    if (func_data != NULL) {
+        JS_ToInt64(ctx, &id, func_data[0]);
+    }
+    weizhi_abort_pending(engine, id);
+    return JS_UNDEFINED;
+}
+
+/* 0 = no signal or listener attached; 1 = already aborted; -1 = not an AbortSignal. */
+static int fetch_bind_signal(JSContext *ctx, JSValueConst init, int64_t id) {
+    JSValue signal;
+    JSValue aborted;
+    JSValue add;
+    JSValue fn;
+    JSValue idv;
+    JSValue args[2];
+    JSValue ret;
+    int aborted_flag;
+    if (!JS_IsObject(init)) {
+        return 0;
+    }
+    signal = JS_GetPropertyStr(ctx, init, "signal");
+    if (JS_IsException(signal)) {
+        return -1;
+    }
+    if (JS_IsUndefined(signal) || JS_IsNull(signal)) {
+        JS_FreeValue(ctx, signal);
+        return 0;
+    }
+    if (!JS_IsObject(signal)) {
+        JS_FreeValue(ctx, signal);
+        return -1;
+    }
+    aborted = JS_GetPropertyStr(ctx, signal, "aborted");
+    if (JS_IsException(aborted)) {
+        JS_FreeValue(ctx, signal);
+        return -1;
+    }
+    aborted_flag = JS_ToBool(ctx, aborted);
+    JS_FreeValue(ctx, aborted);
+    if (aborted_flag < 0) {
+        JS_FreeValue(ctx, signal);
+        return -1;
+    }
+    if (aborted_flag) {
+        JS_FreeValue(ctx, signal);
+        return 1;
+    }
+    add = JS_GetPropertyStr(ctx, signal, "addEventListener");
+    if (JS_IsException(add) || !JS_IsFunction(ctx, add)) {
+        if (!JS_IsException(add)) {
+            JS_FreeValue(ctx, add);
+        }
+        JS_FreeValue(ctx, signal);
+        return -1;
+    }
+    idv = JS_NewInt64(ctx, id);
+    fn = JS_NewCFunctionData(ctx, js_on_fetch_abort, 0, 0, 1, &idv);
+    JS_FreeValue(ctx, idv);
+    if (JS_IsException(fn)) {
+        JS_FreeValue(ctx, add);
+        JS_FreeValue(ctx, signal);
+        return -1;
+    }
+    args[0] = JS_NewString(ctx, "abort");
+    args[1] = fn;
+    ret = JS_Call(ctx, add, signal, 2, args);
+    JS_FreeValue(ctx, args[0]);
+    JS_FreeValue(ctx, args[1]);
+    JS_FreeValue(ctx, add);
+    JS_FreeValue(ctx, signal);
+    if (JS_IsException(ret)) {
+        return -1;
+    }
+    JS_FreeValue(ctx, ret);
+    return 0;
+}
+
 static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     Engine *engine = weizhi_from_ctx(ctx);
     JSValue funcs[2];
@@ -2047,14 +2389,30 @@ static JSValue js_fetch(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         weizhi_bytes_free(&body);
         return JS_ThrowRangeError(ctx, "too many async requests");
     }
-    rc = engine->http_async(engine, id, method, url, headers_json, &body, engine->http_ud);
-    JS_FreeCString(ctx, url);
-    free(method_owned);
-    free(headers_json);
-    weizhi_bytes_free(&body);
-    if (rc != 0) {
-        weizhi_complete_fetch(engine, id, 0, NULL, NULL,
-                             "fetch failed to start (host HTTP callback returned an error; check network permissions)");
+    {
+        int sig = 0;
+        if (argc >= 2 && JS_IsObject(argv[1])) {
+            sig = fetch_bind_signal(ctx, argv[1], id);
+        }
+        if (sig == 0) {
+            rc = engine->http_async(engine, id, method, url, headers_json, &body, engine->http_ud);
+        } else {
+            rc = 0;
+        }
+        JS_FreeCString(ctx, url);
+        free(method_owned);
+        free(headers_json);
+        weizhi_bytes_free(&body);
+        if (sig < 0) {
+            JSValue ex = JS_GetException(ctx);
+            JS_FreeValue(ctx, ex);
+            weizhi_complete_fetch(engine, id, 0, NULL, NULL, "bad argument: fetch: signal must be an AbortSignal");
+        } else if (sig > 0) {
+            weizhi_complete_fetch(engine, id, 0, NULL, NULL, "cancelled");
+        } else if (rc != 0) {
+            weizhi_complete_fetch(engine, id, 0, NULL, NULL,
+                                 "fetch failed to start (host HTTP callback returned an error; check network permissions)");
+        }
     }
     return promise;
 }
@@ -2635,11 +2993,113 @@ static JSValue js_crypto_random_uuid(JSContext *ctx, JSValueConst this_val, int 
     return JS_NewString(ctx, out);
 }
 
+static int copy_buffer_source(JSContext *ctx, JSValueConst val, WeizhiBytes *out, size_t limit) {
+    const uint8_t *data = NULL;
+    size_t len = 0;
+    size_t ab_len = 0;
+    uint8_t *p;
+    memset(out, 0, sizeof(*out));
+    if (read_byte_source(ctx, val, &data, &len) != 0) {
+        JSValue ex = JS_GetException(ctx);
+        JS_FreeValue(ctx, ex);
+        p = JS_GetArrayBuffer(ctx, &ab_len, val);
+        if (p == NULL) {
+            JSValue ex2 = JS_GetException(ctx);
+            JS_FreeValue(ctx, ex2);
+            return -1;
+        }
+        data = p;
+        len = ab_len;
+    }
+    if (len > limit) {
+        return -2;
+    }
+    out->data = malloc(len ? len : 1);
+    if (out->data == NULL) {
+        return -1;
+    }
+    if (len > 0) {
+        memcpy(out->data, data, len);
+    }
+    out->len = len;
+    return 0;
+}
+
+static int digest_algo_is_sha256(JSContext *ctx, JSValueConst algo) {
+    const char *name = NULL;
+    int ok = 0;
+    JSValue owned = JS_UNDEFINED;
+    if (JS_IsString(algo)) {
+        name = JS_ToCString(ctx, algo);
+    } else if (JS_IsObject(algo)) {
+        owned = JS_GetPropertyStr(ctx, algo, "name");
+        if (JS_IsString(owned)) {
+            name = JS_ToCString(ctx, owned);
+        }
+    }
+    if (name != NULL) {
+        ok = strcasecmp(name, "SHA-256") == 0 || strcasecmp(name, "SHA256") == 0;
+        JS_FreeCString(ctx, name);
+    }
+    JS_FreeValue(ctx, owned);
+    return ok;
+}
+
+static JSValue js_subtle_digest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    Engine *engine = weizhi_from_ctx(ctx);
+    JSValue funcs[2];
+    JSValue promise;
+    WeizhiBytes in;
+    int64_t id;
+    int rc;
+    (void)this_val;
+    memset(&in, 0, sizeof(in));
+    if (argc < 2) {
+        return weizhi_throw_bad_arg(ctx, "crypto.subtle.digest", "algorithm and data required");
+    }
+    if (!digest_algo_is_sha256(ctx, argv[0])) {
+        return weizhi_throw_unsupported(ctx, "crypto.subtle.digest algorithm (SHA-256 only)");
+    }
+    rc = copy_buffer_source(ctx, argv[1], &in, engine->limits.fs_io_bytes);
+    if (rc == -2) {
+        return JS_ThrowRangeError(ctx, "too large: crypto.subtle.digest");
+    }
+    if (rc != 0) {
+        return weizhi_throw_bad_arg(ctx, "crypto.subtle.digest", "BufferSource required");
+    }
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    if (JS_IsException(promise)) {
+        weizhi_bytes_free(&in);
+        return promise;
+    }
+    id = weizhi_pending_add(engine, funcs[0], funcs[1]);
+    if (id < 0) {
+        weizhi_bytes_free(&in);
+        JS_FreeValue(ctx, promise);
+        return JS_ThrowRangeError(ctx, "too many async requests");
+    }
+    weizhi_pending_set_kind(engine, id, WEIZHI_PENDING_DIGEST);
+    if (enqueue_sha256(engine, id, &in) != 0) {
+        weizhi_complete(engine, id, 0, NULL, "crypto.subtle.digest failed to start");
+    }
+    weizhi_bytes_free(&in);
+    return promise;
+}
+
 static JSValue make_crypto_object(JSContext *ctx) {
     JSValue crypto = JS_NewObject(ctx);
+    JSValue subtle = JS_NewObject(ctx);
+    JSValue guarded;
     JS_SetPropertyStr(ctx, crypto, "getRandomValues",
                       JS_NewCFunction(ctx, js_crypto_get_random_values, "getRandomValues", 1));
     JS_SetPropertyStr(ctx, crypto, "randomUUID", JS_NewCFunction(ctx, js_crypto_random_uuid, "randomUUID", 0));
+    JS_SetPropertyStr(ctx, subtle, "digest", JS_NewCFunction(ctx, js_subtle_digest, "digest", 2));
+    guarded = weizhi_guard_module(ctx, subtle, "crypto.subtle");
+    if (JS_IsException(guarded)) {
+        JS_FreeValue(ctx, crypto);
+        return guarded;
+    }
+    JS_SetPropertyStr(ctx, crypto, "subtle", guarded);
     return crypto;
 }
 
@@ -2899,6 +3359,28 @@ static const char WEIZHI_AGENT_PRELUDE[] =
     "  for (var j = 0; j < body.length; j++) a[j] = body.charCodeAt(j);\n"
     "  return { body: Buffer.from(a), contentType: 'multipart/form-data; boundary=' + boundary };\n"
     "};\n"
+    "globalThis.AbortSignal = function () {\n"
+    "  this.aborted = false;\n"
+    "  this.reason = undefined;\n"
+    "  this.__ls = [];\n"
+    "};\n"
+    "AbortSignal.prototype.addEventListener = function (type, fn) {\n"
+    "  if (type === 'abort' && typeof fn === 'function') this.__ls.push(fn);\n"
+    "};\n"
+    "globalThis.AbortController = function () {\n"
+    "  if (!(this instanceof AbortController)) return new AbortController();\n"
+    "  this.signal = new AbortSignal();\n"
+    "};\n"
+    "AbortController.prototype.abort = function (reason) {\n"
+    "  var s = this.signal;\n"
+    "  if (!s || s.aborted) return;\n"
+    "  s.aborted = true;\n"
+    "  s.reason = reason === undefined ? new Error('cancelled') : reason;\n"
+    "  var ls = s.__ls.slice();\n"
+    "  for (var i = 0; i < ls.length; i++) {\n"
+    "    try { ls[i](); } catch (e) {}\n"
+    "  }\n"
+    "};\n"
     "(function () {\n"
     "  var nativeFetch = globalThis.fetch;\n"
     "  globalThis.fetch = function (input, init) {\n"
@@ -2932,7 +3414,7 @@ static const char WEIZHI_AGENT_PRELUDE[] =
     "        if (!hasCt) hdrs['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';\n"
     "      }\n"
     "    }\n"
-    "    return nativeFetch(url, { method: init.method, headers: hdrs, body: body });\n"
+    "    return nativeFetch(url, { method: init.method, headers: hdrs, body: body, signal: init.signal });\n"
     "  };\n"
     "})();\n"
     "if (!Promise.withResolvers) {\n"
@@ -3008,6 +3490,8 @@ int weizhi_install_node_api(Engine *engine) {
                       JS_NewCFunction(engine->ctx, js_set_timeout, "setTimeout", 2));
     JS_SetPropertyStr(engine->ctx, global, "clearTimeout",
                       JS_NewCFunction(engine->ctx, js_clear_timeout, "clearTimeout", 1));
+    JS_SetPropertyStr(engine->ctx, global, "queueMicrotask",
+                      JS_NewCFunction(engine->ctx, js_queue_microtask, "queueMicrotask", 1));
     JS_SetPropertyStr(engine->ctx, global, "fs", make_fs_module(engine->ctx));
     JS_SetPropertyStr(engine->ctx, global, "path", make_path_module(engine->ctx));
     console = JS_NewObject(engine->ctx);

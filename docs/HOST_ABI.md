@@ -34,7 +34,7 @@ flowchart TB
 | LOG | 结构化日志 | host log | 已有 `weizhi_set_log` |
 | RANDOM | 熵 | `crypto.getRandomValues` / `crypto.randomUUID` | 已有（`/dev/urandom`） |
 | COMPRESS | gzip/deflate | `require("zlib")` 的 `gzipSync` / `gunzipSync` / `deflateSync` / `inflateSync` | 已有 |
-| HASH | sha256 等 | digest / `host.hash` | 建议新增（验签插件） |
+| HASH | sha256 | `crypto.subtle.digest('SHA-256')` | 已有。只做 SHA-256，在异步池计算后回投 |
 | NATIVE | 签名原生插件 | `host.ensureNative(name)` | 已有 C API + Android `enableNativeMock`（目录/验签模拟） |
 | UI / IMAGE | 位图/相册等 | 后置 | 本阶段 out of scope |
 

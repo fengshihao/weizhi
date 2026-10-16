@@ -45,7 +45,7 @@ set(WEIZHI_MCP_JS "\"${WEIZHI_MCP_JS}\"")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/mcp_client.js")
 configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONLY)
 
-add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c)
+add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c src/sha256.c)
 target_include_directories(weizhi PUBLIC include)
 target_include_directories(weizhi PRIVATE include src "${CMAKE_BINARY_DIR}")
 target_link_libraries(weizhi PUBLIC quickjs Threads::Threads z)

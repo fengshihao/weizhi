@@ -67,6 +67,32 @@ public final class SmokeTest {
                     3000);
             expectEq("\"hello zlib\"", out);
 
+            out = engine.runJs(
+                    "const order = [];"
+                            + "order.push('s');"
+                            + "queueMicrotask(() => order.push('m'));"
+                            + "Promise.resolve().then(() => order.push('p'));"
+                            + "await 0;"
+                            + "order.join(',')",
+                    2000);
+            expectEq("\"s,m,p\"", out);
+
+            out = engine.runJs(
+                    "Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc'))).toString('hex')",
+                    3000);
+            expectEq("\"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\"", out);
+
+            out = engine.runJs(
+                    "await fs.promises.mkdir('list-me');"
+                            + "await fs.promises.writeFile('list-me/b.txt','bbb');"
+                            + "await fs.promises.writeFile('list-me/a.txt','aa');"
+                            + "const names = await fs.promises.readdir('list-me');"
+                            + "const st = await fs.promises.stat('list-me/b.txt');"
+                            + "await fs.promises.unlink('list-me/a.txt');"
+                            + "({names, size: st.size, isFile: st.isFile, gone: fs.existsSync('list-me/a.txt')})",
+                    8000);
+            expectEq("{\"names\":[\"a.txt\",\"b.txt\"],\"size\":3,\"isFile\":true,\"gone\":false}", out);
+
             // 回归：workspace 内的 symlink 不得逃逸（对齐 agent1 WorkspaceSandbox 行为）
             // 同步 fs 走 C 的 default_vfs_sync（realpath 包含检查，报 "path escape"）；
             // 异步 promises fs 走 Java onVfsAsync（containsSymlinkUnder，报 "symlink"）。

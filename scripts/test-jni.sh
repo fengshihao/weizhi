@@ -24,6 +24,7 @@ javac -encoding UTF-8 -d "$outdir" \
     "$root/java/com/weizhi/WeizhiEngine.java" \
     "$root/java/com/weizhi/packages/PackageInstaller.java" \
     "$root/java/com/weizhi/packages/PackageRegistryClient.java" \
+    "$root/java/com/weizhi/packages/Utf8Files.java" \
     "$root/java/com/weizhi/platform/MiniJson.java" \
     "$root/java/com/weizhi/platform/LocalWorkspace.java" \
     "$root/java/com/weizhi/platform/ZipTools.java" \

@@ -353,8 +353,8 @@ int weizhi_add_function(WeizhiEngine *engine, const char *name, WeizhiHostFn fn,
     if (atomic_load(&engine->state) != ST_IDLE) {
         return -1;
     }
-    if (strcmp(name, "require") == 0 ||
-        strcmp(name, "Buffer") == 0 || strcmp(name, "setTimeout") == 0 || strcmp(name, "clearTimeout") == 0) {
+    if (strcmp(name, "require") == 0 || strcmp(name, "Buffer") == 0 || strcmp(name, "setTimeout") == 0 ||
+        strcmp(name, "clearTimeout") == 0 || strcmp(name, "queueMicrotask") == 0) {
         return -1;
     }
     if (engine->host_count >= engine->limits.max_host_functions) {
@@ -646,6 +646,21 @@ int weizhi_fire_due_timers(Engine *engine) {
     return fired;
 }
 
+static void digest_ab_free(JSRuntime *rt, void *opaque, void *ptr) {
+    (void)rt;
+    (void)opaque;
+    free(ptr);
+}
+
+static void pending_release(Engine *engine, WeizhiPending *p) {
+    JS_FreeValue(engine->ctx, p->resolve);
+    JS_FreeValue(engine->ctx, p->reject);
+    weizhi_bytes_free(&p->out);
+    free(p->error);
+    free(p->headers_json);
+    memset(p, 0, sizeof(*p));
+}
+
 int weizhi_apply_completions(Engine *engine) {
     int i;
     int applied = 0;
@@ -663,10 +678,31 @@ int weizhi_apply_completions(Engine *engine) {
                 arg = weizhi_make_fetch_response(engine->ctx, p->http_status, p->headers_json, &p->out);
             } else if (p->kind == WEIZHI_PENDING_NATIVE) {
                 arg = weizhi_make_native_plugin(engine->ctx, p->headers_json);
+            } else if (p->kind == WEIZHI_PENDING_DIGEST) {
+                size_t n = p->out.len;
+                uint8_t *copy = malloc(n ? n : 1);
+                if (copy == NULL) {
+                    arg = JS_ThrowOutOfMemory(engine->ctx);
+                } else {
+                    if (n > 0) {
+                        memcpy(copy, p->out.data, n);
+                    }
+                    arg = JS_NewArrayBuffer(engine->ctx, copy, n, digest_ab_free, NULL, 0);
+                }
+            } else if (p->kind == WEIZHI_PENDING_JSON) {
+                if (p->out.data == NULL || p->out.len == 0) {
+                    arg = JS_NULL;
+                } else {
+                    arg = JS_ParseJSON(engine->ctx, (const char *)p->out.data, p->out.len, "<vfs>");
+                }
             } else if (p->out.data != NULL) {
                 arg = weizhi_bytes_to_buffer(engine->ctx, p->out.data, p->out.len);
             } else {
                 arg = JS_UNDEFINED;
+            }
+            if (JS_IsException(arg)) {
+                pending_release(engine, p);
+                return -1;
             }
             ret = JS_Call(engine->ctx, p->resolve, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(engine->ctx, arg);
@@ -675,12 +711,7 @@ int weizhi_apply_completions(Engine *engine) {
             ret = JS_Call(engine->ctx, p->reject, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(engine->ctx, arg);
         }
-        JS_FreeValue(engine->ctx, p->resolve);
-        JS_FreeValue(engine->ctx, p->reject);
-        weizhi_bytes_free(&p->out);
-        free(p->error);
-        free(p->headers_json);
-        memset(p, 0, sizeof(*p));
+        pending_release(engine, p);
         applied++;
         if (JS_IsException(ret)) {
             return -1;
@@ -709,14 +740,92 @@ int64_t weizhi_pending_add(Engine *engine, JSValue resolve, JSValue reject) {
     return -1;
 }
 
+void weizhi_pending_set_kind(Engine *engine, int64_t request_id, int kind) {
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (p->in_use && p->id == request_id && !p->completed) {
+            p->kind = kind;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_abort_pending(Engine *engine, int64_t request_id) {
+    int i;
+    if (engine == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (!p->in_use || p->id != request_id || p->completed) {
+            continue;
+        }
+        p->completed = 1;
+        p->ok = 0;
+        if (p->kind == 0) {
+            p->kind = WEIZHI_PENDING_FETCH;
+        }
+        p->error = strdup("cancelled");
+        break;
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+int weizhi_pending_is_done(WeizhiEngine *engine, int64_t request_id) {
+    int i;
+    int done = 1;
+    if (engine == NULL) {
+        return 1;
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    for (i = 0; i < WEIZHI_MAX_PENDING; i++) {
+        WeizhiPending *p = &engine->pending[i];
+        if (p->in_use && p->id == request_id) {
+            done = p->completed;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&engine->wake_mu);
+    return done;
+}
+
 JSValue weizhi_await_value(Engine *engine, JSValue value) {
     for (;;) {
-        JSPromiseStateEnum state = JS_PromiseState(engine->ctx, value);
+        JSPromiseStateEnum state;
         int err;
         int fired;
         int applied;
         struct timespec ts;
         int64_t wait_ms;
+        if (atomic_load(&engine->cancel_requested)) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_ThrowInternalError(engine->ctx, "cancelled");
+        }
+        if (engine->deadline_ms != 0 && now_ms() >= engine->deadline_ms) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_ThrowInternalError(engine->ctx, "interrupted");
+        }
+        /* Drain microtasks before observing the promise so queueMicrotask runs
+           in the same turn, including when the script promise is already settled. */
+        for (;;) {
+            err = JS_ExecutePendingJob(engine->rt, NULL);
+            if (err < 0) {
+                JS_FreeValue(engine->ctx, value);
+                return JS_EXCEPTION;
+            }
+            if (err == 0) {
+                break;
+            }
+        }
+        state = JS_PromiseState(engine->ctx, value);
         if ((int)state < 0) {
             return value;
         }
@@ -729,24 +838,6 @@ JSValue weizhi_await_value(Engine *engine, JSValue value) {
             JSValue result = JS_PromiseResult(engine->ctx, value);
             JS_FreeValue(engine->ctx, value);
             return JS_Throw(engine->ctx, result);
-        }
-        if (atomic_load(&engine->cancel_requested)) {
-            JS_FreeValue(engine->ctx, value);
-            return JS_ThrowInternalError(engine->ctx, "cancelled");
-        }
-        if (engine->deadline_ms != 0 && now_ms() >= engine->deadline_ms) {
-            JS_FreeValue(engine->ctx, value);
-            return JS_ThrowInternalError(engine->ctx, "interrupted");
-        }
-        for (;;) {
-            err = JS_ExecutePendingJob(engine->rt, NULL);
-            if (err < 0) {
-                JS_FreeValue(engine->ctx, value);
-                return JS_EXCEPTION;
-            }
-            if (err == 0) {
-                break;
-            }
         }
         fired = weizhi_fire_due_timers(engine);
         if (fired < 0) {
@@ -830,7 +921,9 @@ void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const Wei
         }
         p->completed = 1;
         p->ok = ok;
-        p->kind = WEIZHI_PENDING_BUFFER;
+        if (p->kind == 0) {
+            p->kind = WEIZHI_PENDING_BUFFER;
+        }
         if (ok && out != NULL && out->data != NULL && out->len > 0) {
             p->out.data = malloc(out->len);
             if (p->out.data != NULL) {

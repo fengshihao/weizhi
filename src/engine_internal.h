@@ -17,6 +17,10 @@
 #define WEIZHI_PENDING_BUFFER 0
 #define WEIZHI_PENDING_FETCH 1
 #define WEIZHI_PENDING_NATIVE 2
+#define WEIZHI_PENDING_DIGEST 3
+#define WEIZHI_PENDING_JSON 4
+#define WEIZHI_JOB_VFS 0
+#define WEIZHI_JOB_SHA256 1
 #define WEIZHI_MAX_PLUGIN_ARGS 8
 #define WEIZHI_MAX_PLUGIN_EXPORTS 32
 #define WEIZHI_MAX_CBS 64
@@ -87,6 +91,7 @@ typedef struct WeizhiPending {
 typedef struct WeizhiAsyncJob {
     struct WeizhiEngine *engine;
     int64_t request_id;
+    int job_kind;
     WeizhiVfsOp op;
     char *relpath;
     char *relpath2;
@@ -156,6 +161,8 @@ int weizhi_apply_completions(Engine *engine);
 void weizhi_wake(Engine *engine);
 JSValue weizhi_await_value(Engine *engine, JSValue value);
 int64_t weizhi_pending_add(Engine *engine, JSValue resolve, JSValue reject);
+void weizhi_pending_set_kind(Engine *engine, int64_t request_id, int kind);
+void weizhi_abort_pending(Engine *engine, int64_t request_id);
 int weizhi_path_ok(const char *relpath);
 /* fs / zip VFS: workspace-relative or absolute; resolved under fs_root by weizhi_resolve_workspace_path. */
 int weizhi_fs_path_ok(const char *path);

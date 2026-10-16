@@ -7,11 +7,16 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import com.weizhi.platform.MiniJson;
 import java.lang.ref.Cleaner;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -396,6 +401,23 @@ public final class WeizhiEngine implements AutoCloseable {
                             nativeComplete(engine, requestId, true, null, null);
                             break;
                         }
+                        case 4: { // UNLINK
+                            if (!Files.exists(target)) {
+                                nativeComplete(engine, requestId, false, null, "delete failed");
+                            } else {
+                                Files.delete(target);
+                                nativeComplete(engine, requestId, true, null, null);
+                            }
+                            break;
+                        }
+                        case 6: { // READDIR
+                            completeReaddir(engine, requestId, target);
+                            break;
+                        }
+                        case 7: { // STAT
+                            completeStat(engine, requestId, target);
+                            break;
+                        }
                         case 5: { // MKDIR
                             boolean recursive = data != null && data.length > 0 && data[0] == 1;
                             if (recursive) {
@@ -425,6 +447,78 @@ public final class WeizhiEngine implements AutoCloseable {
             nativeComplete(engine, requestId, false, null,
                     "queue full: too many pending async I/O requests (script is flooding async operations)");
         }
+    }
+
+    private void completeReaddir(long engine, long requestId, Path target) throws IOException {
+        if (!Files.exists(target)) {
+            nativeComplete(engine, requestId, false, null, "file not found");
+            return;
+        }
+        if (!Files.isDirectory(target)) {
+            nativeComplete(engine, requestId, false, null, "not a directory");
+            return;
+        }
+        List<String> names = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(target)) {
+            for (Path child : stream) {
+                names.add(child.getFileName().toString());
+                if (names.size() > 10000) {
+                    nativeComplete(engine, requestId, false, null, "too large: readdir");
+                    return;
+                }
+            }
+        }
+        Collections.sort(names);
+        StringBuilder sb = new StringBuilder();
+        sb.append('[');
+        for (int i = 0; i < names.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(jsonString(names.get(i)));
+        }
+        sb.append(']');
+        byte[] bytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > maxIoBytes) {
+            nativeComplete(engine, requestId, false, null, "too large: readdir");
+            return;
+        }
+        nativeComplete(engine, requestId, true, bytes, null);
+    }
+
+    private void completeStat(long engine, long requestId, Path target) throws IOException {
+        if (!Files.exists(target)) {
+            nativeComplete(engine, requestId, false, null, "file not found");
+            return;
+        }
+        boolean isDir = Files.isDirectory(target);
+        boolean isFile = Files.isRegularFile(target);
+        long size = Files.size(target);
+        long mtime = Files.getLastModifiedTime(target).toMillis();
+        String json = "{\"size\":" + size + ",\"isFile\":" + (isFile ? "true" : "false") + ",\"isDirectory\":"
+                + (isDir ? "true" : "false") + ",\"mtimeMs\":" + mtime + "}";
+        nativeComplete(engine, requestId, true, json.getBytes(StandardCharsets.UTF_8), null);
+    }
+
+    private static String jsonString(String s) {
+        StringBuilder b = new StringBuilder();
+        b.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' || c == '\\') {
+                b.append('\\').append(c);
+            } else if (c == '\n') {
+                b.append("\\n");
+            } else if (c == '\r') {
+                b.append("\\r");
+            } else if (c < 0x20) {
+                b.append(String.format("\\u%04x", (int) c));
+            } else {
+                b.append(c);
+            }
+        }
+        b.append('"');
+        return b.toString();
     }
 
     /** 相对或绝对路径：normalize 后必须在 fsRoot 下（与 C 层 weizhi_resolve_workspace_path 对齐）。 */
@@ -500,6 +594,9 @@ public final class WeizhiEngine implements AutoCloseable {
         int redirects = 0;
 
         while (true) {
+            if (nativePendingDone(engine, requestId)) {
+                return;
+            }
             URL parsed = new URL(currentUrl);
             String host = parsed.getHost() == null ? "" : parsed.getHost().toLowerCase(Locale.US);
             if (!isFetchHostAllowed(host)) {
@@ -574,6 +671,10 @@ public final class WeizhiEngine implements AutoCloseable {
                 int n;
                 long total = 0;
                 while ((n = stream.read(buf)) >= 0) {
+                    if (nativePendingDone(engine, requestId)) {
+                        conn.disconnect();
+                        return;
+                    }
                     total += n;
                     if (total > maxIoBytes) {
                         conn.disconnect();
@@ -700,6 +801,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private static native int nativeEnablePluginLoader(long handle, String pluginDir);
 
     private native int nativeInstallHostCall(long handle);
+
+    private static native boolean nativePendingDone(long handle, long requestId);
 
     private static native void nativeComplete(long handle, long requestId, boolean ok, byte[] data, String error);
 

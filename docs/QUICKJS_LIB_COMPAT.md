@@ -23,12 +23,12 @@ Weizhi 暴露给脚本的表面更窄：
 | 已有 | 范围 |
 | --- | --- |
 | 模块 | 内置 `buffer` / `fs` / `path` / `process` / `zlib` / `zip`。相对 `import './file.js'` 从脚本目录加载叶子文件。`require` / `import` 不解析 npm |
-| `fs` | 读、写、存在、删除，以及 `promises` 的读和写 |
+| `fs` | 同步读、写、存在、删除、建目录。`promises` 另有 `readFile` / `writeFile` / `mkdir` / `unlink` / `readdir` / `stat` |
 | `path` | `join`、`basename`、`dirname`、`extname`、`sep` |
 | `Buffer` | `Uint8Array` 子类。`from` 收字符串 / 类型数组 / 类数组；`toString` 有 utf8、hex、base64；可 `buf[i]` |
-| `fetch` | body 为字符串、`Buffer`/`Uint8Array`、`Blob`、`FormData`、`URLSearchParams`。Response 有 `headers.get` / `text` / `json` / `arrayBuffer` |
+| `fetch` | body 为字符串、`Buffer`/`Uint8Array`、`Blob`、`FormData`、`URLSearchParams`。Response 有 `headers.get` / `text` / `json` / `arrayBuffer`。`signal` 可取消单次请求 |
 | `mcp` | `mcp.connect({ url, headers })` 后 `listTools` / `callTool` / `close`。走 `fetch`，宿主须先开网络。不缓存、不写工作区目录 |
-| 定时器 | 仅本轮 `runJs` 内的 `setTimeout` / `clearTimeout` |
+| 定时器 | 仅本轮 `runJs` 内的 `setTimeout` / `clearTimeout`，以及 `queueMicrotask` |
 | 限额 | 堆 32MB，栈 256KB，单次 `runJs` 默认 10 分钟（可 `cancel`），单次读写 / `fetch` 载荷 32MB |
 
 没有流、DOM、Worker、Canvas。Wasm 已从主干移除，历史实现在分支 `archive/wamr-packs`。
@@ -87,7 +87,7 @@ Weizhi 暴露给脚本的表面更窄：
 | `TextEncoder` / `TextDecoder` | JS 字符串和 UTF-8 字节互转。docx、XML、带二进制字段的小工具用它生成或读回 `Uint8Array` | 已有。只做 UTF-8 |
 | base64（`btoa` / `atob`，或 `Buffer` 的 base64） | 字节和可放进 JSON、data URL 的 ASCII 互转 | 已有。`btoa`/`atob` 是 Latin-1；`Buffer` 另有 `utf8` / `hex` / `base64` |
 | `URL` / `URLSearchParams` | 解析和拼装地址。很多库使用 `new URL(...)`，而不是手写字符串。现有 `fetch` 只收一整段 URL | 已有。精简解析，不发起网络请求 |
-| `crypto.getRandomValues` | 向类型数组填入密码学安全随机字节。`uuid`、Web 版 `nanoid`、令牌生成会调用 | 已有。熵来自 `/dev/urandom`。另有 `crypto.randomUUID()`。不能用 `Math.random` 代替 |
+| `crypto.getRandomValues` | 向类型数组填入密码学安全随机字节。`uuid`、Web 版 `nanoid`、令牌生成会调用 | 已有。熵来自 `/dev/urandom`。另有 `crypto.randomUUID()` 与 `crypto.subtle.digest('SHA-256')`。不能用 `Math.random` 代替 |
 
 `fetch` 要各平台接自己的网络栈，所以由宿主安装。编码、base64 和 URL 没有平台差异，写进引擎一次即可。
 
