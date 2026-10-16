@@ -7,7 +7,6 @@ import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -71,7 +70,7 @@ public final class PackageInstaller {
             if (!Files.isRegularFile(manifest)) {
                 throw new IOException("package zip missing manifest.json");
             }
-            String json = Files.readString(manifest, StandardCharsets.UTF_8);
+            String json = Utf8Files.read(manifest);
             Map<String, Object> root = MiniJson.object(json);
             String name = MiniJson.str(root, "name");
             String version = MiniJson.str(root, "version");
@@ -96,7 +95,7 @@ public final class PackageInstaller {
         if (!Files.isRegularFile(index)) {
             return new LinkedHashMap<>();
         }
-        String json = Files.readString(index, StandardCharsets.UTF_8);
+        String json = Utf8Files.read(index);
         Map<String, Object> raw = MiniJson.object(json);
         Map<String, String> out = new LinkedHashMap<>();
         for (Map.Entry<String, Object> e : raw.entrySet()) {
@@ -142,7 +141,7 @@ public final class PackageInstaller {
                     .append('"');
         }
         sb.append("}\n");
-        Files.writeString(weizhiHome.resolve(INDEX_FILE), sb.toString(), StandardCharsets.UTF_8);
+        Utf8Files.write(weizhiHome.resolve(INDEX_FILE), sb.toString());
     }
 
     private static String escapeJson(String s) {

@@ -36,15 +36,14 @@ import java.util.zip.ZipFile;
  */
 public final class PackageRegistryClient {
     /**
-     * Stable-channel manifest. The host is a reserved {@code .example} name until the
-     * official CDN hostname is published; change this constant (and {@link #OFFICIAL_HOST})
-     * together. Production callers should leave {@code allowedHosts} null.
+     * Stable-channel manifest on the official static host. Change this constant together
+     * with {@link #OFFICIAL_HOST}. Production callers should leave {@code allowedHosts} null.
      */
     public static final String DEFAULT_REGISTRY_URL =
-            "https://cdn.weizhi.example/packages/registry/stable.json";
+            "https://agentone.guoyoutech.cn/packages/registry/stable.json";
 
     /** Default allowlisted registry and artifact host. Not an enterprise registry (D5). */
-    public static final String OFFICIAL_HOST = "cdn.weizhi.example";
+    public static final String OFFICIAL_HOST = "agentone.guoyoutech.cn";
 
     /** Agent1 ensure budget: network + install, separate from {@code runJs}. */
     public static final long DEFAULT_ENSURE_TIMEOUT_MS = 180_000L;
@@ -648,7 +647,7 @@ public final class PackageRegistryClient {
             return null;
         }
         try {
-            Map<String, Object> obj = MiniJson.object(Files.readString(file, StandardCharsets.UTF_8));
+            Map<String, Object> obj = MiniJson.object(Utf8Files.read(file));
             if (!url.equals(MiniJson.str(obj, "url"))) {
                 return null;
             }
@@ -674,7 +673,7 @@ public final class PackageRegistryClient {
                 + MiniJson.quote(body) + "}";
         Path tmp = Files.createTempFile(parent, ".registry-cache-", ".tmp");
         try {
-            Files.writeString(tmp, json, StandardCharsets.UTF_8);
+            Utf8Files.write(tmp, json);
             try {
                 Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } catch (IOException e) {

@@ -214,10 +214,10 @@ flowchart LR
 
 | 常量 | 值 |
 |------|----|
-| `PackageRegistryClient.DEFAULT_REGISTRY_URL` | `https://cdn.weizhi.example/packages/registry/stable.json` |
-| `PackageRegistryClient.OFFICIAL_HOST` | `cdn.weizhi.example` |
+| `PackageRegistryClient.DEFAULT_REGISTRY_URL` | `https://agentone.guoyoutech.cn/packages/registry/stable.json` |
+| `PackageRegistryClient.OFFICIAL_HOST` | `agentone.guoyoutech.cn` |
 
-`cdn.weizhi.example` 是占位主机（`.example` 为保留域，不会被抢注）。正式 CDN 域名落地时**只改这两个常量**。生产环境不要改 `allowedHosts`。
+正式主机是 `agentone.guoyoutech.cn`。换域名时**只改这两个常量**。生产环境不要改 `allowedHosts`。
 
 - Registry URL 与每条 `artifact.url` 的主机都必须在白名单内（默认仅 `OFFICIAL_HOST`）。精确匹配主机名，不做后缀匹配。
 - 非 loopback 必须是 `https`。`http` 只允许 `127.0.0.1` / `localhost`（测试）。
@@ -240,7 +240,7 @@ flowchart LR
       "description": "Word OOXML helpers",
       "min_engine": "0.1.0",
       "artifact": {
-        "url": "https://cdn.weizhi.example/packages/docx/3.2.1/docx-3.2.1.zip",
+        "url": "https://agentone.guoyoutech.cn/packages/docx/3.2.1/docx-3.2.1.zip",
         "sha256": "<64 hex>",
         "size": 524288
       },
@@ -365,3 +365,4 @@ engine.setPackageRoot(weizhiHome.toString());
 | 2026-10-14 | 锁定 D3（getAssetPath）、D6（Skill 分离）；缩短 catalog 兼容策略 |
 | 2026-10-14 | 锁定 D1/D2/D4/D5/D7 为最简默认；状态改为规格已定 |
 | 2026-10-14 | P3：`PackageRegistryClient`、Registry manifest、默认 URL 占位 |
+| 2026-10-16 | 默认 Registry 主机改为 `agentone.guoyoutech.cn` |
