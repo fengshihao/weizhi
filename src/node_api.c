@@ -2485,6 +2485,13 @@ static JSValue js_native_export_call(JSContext *ctx, JSValueConst this_val, int 
 typedef int32_t (*weizhi_fn_ii_i)(int32_t, int32_t);
 typedef WeizhiBuf (*weizhi_fn_b_b)(WeizhiBuf);
 typedef int32_t (*weizhi_fn_i_cb_i)(int32_t, uint32_t);
+/* IDL v2 stubs: str args/returns (UTF-8; plugin returns malloc'd, engine frees),
+   i64 session handles, cb(s: str) progress callbacks (same-call scoped). */
+typedef char *(*weizhi_fn_s_s)(const char *);
+typedef int64_t (*weizhi_fn_is_l)(int32_t, const char *);
+typedef char *(*weizhi_fn_l_cbs_s)(int64_t, uint32_t);
+typedef void (*weizhi_fn_l_v)(int64_t);
+typedef char *(*weizhi_fn_l_s)(int64_t);
 
 static WeizhiPluginExport *find_export(WeizhiLoadedPlugin *plugin, const char *name) {
     int i;
@@ -2627,6 +2634,101 @@ static JSValue js_typed_export_call(JSContext *ctx, JSValueConst this_val, int a
             return JS_EXCEPTION;
         }
         result = JS_NewInt32(ctx, r);
+    } else if (ex->nargs == 1 && ex->args[0] == WEIZHI_TY_STR && ex->ret == WEIZHI_TY_STR) {
+        const char *in = NULL;
+        char *out;
+        if (argc < 1 || !JS_IsString(argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (string)");
+        }
+        in = JS_ToCString(ctx, argv[0]);
+        if (in == NULL) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        out = ((weizhi_fn_s_s)ex->fn)(in);
+        JS_FreeCString(ctx, in);
+        result = JS_NewString(ctx, out != NULL ? out : "");
+        free(out);
+    } else if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I32 && ex->args[1] == WEIZHI_TY_STR &&
+               ex->ret == WEIZHI_TY_I64) {
+        int32_t count = 0;
+        const char *opts = NULL;
+        int64_t handle;
+        if (argc < 2 || !JS_IsString(argv[1])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i32, string)");
+        }
+        if (JS_ToInt32(ctx, &count, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        opts = JS_ToCString(ctx, argv[1]);
+        if (opts == NULL) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        handle = ((weizhi_fn_is_l)ex->fn)(count, opts);
+        JS_FreeCString(ctx, opts);
+        result = JS_NewInt64(ctx, handle);
+    } else if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I64 && ex->args[1] == WEIZHI_TY_CB_STR &&
+               ex->ret == WEIZHI_TY_STR) {
+        int64_t handle = 0;
+        uint32_t cb_id;
+        char *out;
+        if (argc < 2 || !JS_IsFunction(ctx, argv[1])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i64 handle, function)");
+        }
+        if (JS_ToInt64(ctx, &handle, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        cb_id = weizhi_cb_register(engine, argv[1]);
+        if (cb_id == 0) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_ThrowRangeError(ctx, "too many native callbacks");
+        }
+        out = ((weizhi_fn_l_cbs_s)ex->fn)(handle, cb_id);
+        /* Same-turn flush (D3); the callback is same-call scoped, so release its slot. */
+        cbd = weizhi_drain_cb_queue(engine);
+        weizhi_cb_release(engine, cb_id);
+        if (cbd < 0) {
+            free(out);
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        result = JS_NewString(ctx, out != NULL ? out : "");
+        free(out);
+    } else if (ex->nargs == 1 && ex->args[0] == WEIZHI_TY_I64 && ex->ret == WEIZHI_TY_VOID) {
+        int64_t handle = 0;
+        if (argc < 1 || JS_ToInt64(ctx, &handle, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i64 handle)");
+        }
+        ((weizhi_fn_l_v)ex->fn)(handle);
+        result = JS_UNDEFINED;
+    } else if (ex->nargs == 1 && ex->args[0] == WEIZHI_TY_I64 && ex->ret == WEIZHI_TY_STR) {
+        int64_t handle = 0;
+        char *out;
+        if (argc < 1 || JS_ToInt64(ctx, &handle, argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (i64 handle)");
+        }
+        out = ((weizhi_fn_l_s)ex->fn)(handle);
+        result = JS_NewString(ctx, out != NULL ? out : "");
+        free(out);
     } else {
         JS_FreeCString(ctx, plugin_name);
         JS_FreeCString(ctx, export_name);

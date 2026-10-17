@@ -35,6 +35,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private static final int DEFAULT_MAX_ASYNC_IO = 16;
     /** Matches WEIZHI_DEFAULT_FS_IO_BYTES in weizhi.h. */
     private static final long DEFAULT_FS_IO = 32L * 1024L * 1024L;
+    /** Matches WEIZHI_HOST_ABI_VERSION in weizhi.h (mock error text only). */
+    private static final int WEIZHI_HOST_ABI = 2;
 
     static {
         System.loadLibrary("weizhijni");
@@ -278,7 +280,7 @@ public final class WeizhiEngine implements AutoCloseable {
             }
             if ("too_new".equals(name)) {
                 nativeCompleteNative(engine, requestId, false, null,
-                        "native incompatible: min_host_abi 99 > host " + 1);
+                        "native incompatible: min_host_abi 99 > host " + WEIZHI_HOST_ABI);
                 return;
             }
             if ("echo_math".equals(name)) {

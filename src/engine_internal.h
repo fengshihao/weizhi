@@ -30,6 +30,8 @@
 #define WEIZHI_TY_BYTES 4
 #define WEIZHI_TY_CB 5
 #define WEIZHI_TY_VOID 6
+#define WEIZHI_TY_STR 7
+#define WEIZHI_TY_CB_STR 8
 
 typedef struct WeizhiPluginExport {
     char *name;
@@ -57,6 +59,7 @@ typedef struct WeizhiCbSlot {
 typedef struct WeizhiCbEvent {
     uint32_t cb_id;
     int32_t v0;
+    char *json; /* non-NULL -> str callback payload (owned; freed after drain) */
     int ready;
 } WeizhiCbEvent;
 
@@ -205,6 +208,11 @@ int weizhi_zip_create(Engine *engine, const char *src_rel, const char *zip_rel, 
 WeizhiLoadedPlugin *weizhi_find_plugin(Engine *engine, const char *name);
 uint32_t weizhi_cb_register(Engine *engine, JSValue fn);
 void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0);
+void weizhi_cb_invoke_str(void *engine_ptr, uint32_t cb_id, const char *json);
+/* Free a callback slot on the JS thread after a same-call scoped callback is done. */
+void weizhi_cb_release(Engine *engine, uint32_t cb_id);
+/* Host service: 1 when cancel was requested (weizhi_cancel); callable from any thread. */
+int weizhi_cancel_poll(void *engine_ptr);
 int weizhi_drain_cb_queue(Engine *engine);
 void weizhi_plugins_clear(Engine *engine);
 

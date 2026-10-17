@@ -1344,6 +1344,112 @@ static void test_typed_plugin_loader(void) {
     weizhi_close(engine);
 }
 
+/* IDL v2 channel PoC: i64 session handles, str args/returns, cb(s: str) progress. */
+static void test_echo_video_plugin(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char plugin_dir[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_video');"
+                           "const meta = JSON.parse(p.probe_media('clip.mp4'));"
+                           "const bad = p.open_session(0, '{}');"
+                           "const id = p.open_session(10, '{\"delayMs\":0}');"
+                           "const events = [];"
+                           "const r = JSON.parse(p.run_session(id, (e) => { events.push(e); }));"
+                           "p.close_session(id);"
+                           "({tracks: meta.tracks.length, synthetic: meta.synthetic,"
+                           "  badHandle: bad, idOk: id > 0,"
+                           "  cancelled: r.cancelled, frames: r.frameCount, hashLen: r.hash.length,"
+                           "  events: events.length, firstFrame: events[0].frame,"
+                           "  firstPercent: events[0].percent, lastPercent: events[events.length - 1].percent})",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"tracks\":1") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"synthetic\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"badHandle\":0") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"idOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"cancelled\":false") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"frames\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"events\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstFrame\":0") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstPercent\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"lastPercent\":100") != NULL);
+    weizhi_result_free(&result);
+    /* Bad session handle path returns plugin JSON, and repeat calls must not
+       exhaust the 64 callback slots (same-call scoped release). */
+    result = weizhi_run_js(engine,
+                           "const v = await host.ensureNative('echo_video');"
+                           "const bh = JSON.parse(v.run_session(0, () => {})).error;"
+                           "let ok = true;"
+                           "for (let i = 0; i < 80; i++) {"
+                           "  const id2 = v.open_session(1, '{}');"
+                           "  if (JSON.parse(v.run_session(id2, () => {})).cancelled !== false) ok = false;"
+                           "  v.close_session(id2);"
+                           "}"
+                           "({bh, ok})",
+                           10000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"bh\":\"bad session handle\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"ok\":true") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+typedef struct {
+    WeizhiEngine *engine;
+    int delay_ms;
+} CancelAfter;
+
+static void *cancel_thread(void *arg) {
+    CancelAfter *ca = arg;
+    struct timespec ts;
+    ts.tv_sec = ca->delay_ms / 1000;
+    ts.tv_nsec = (ca->delay_ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+    weizhi_cancel(ca->engine);
+    return NULL;
+}
+
+/* cancel_poll: a cancelled runJs must exit the plugin's long loop promptly. */
+static void test_echo_video_cancel(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char plugin_dir[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    pthread_t thread;
+    CancelAfter ca;
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
+    /* 100000 frames x 5ms = 500s without cancel; the cancel thread fires at 150ms. */
+    ca.engine = engine;
+    ca.delay_ms = 150;
+    EXPECT(pthread_create(&thread, NULL, cancel_thread, &ca) == 0);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_video');"
+                           "const id = p.open_session(100000, '{\"delayMs\":5}');"
+                           "p.run_session(id, () => {});",
+                           30000);
+    pthread_join(thread, NULL);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "cancelled") != NULL);
+    EXPECT(result.duration_ms >= 0 && result.duration_ms < 5000);
+    weizhi_result_free(&result);
+    /* The engine stays usable after cancel. */
+    result = weizhi_run_js(engine, "1 + 1", 2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
 static void test_zlib_roundtrip(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result = weizhi_run_js(engine,
@@ -1566,6 +1672,8 @@ int main(void) {
     test_mcp_client();
     test_native_ensure_mock();
     test_typed_plugin_loader();
+    test_echo_video_plugin();
+    test_echo_video_cancel();
     test_zlib_roundtrip();
     test_zip_roundtrip();
     test_queue_microtask_digest_fs_and_abort();

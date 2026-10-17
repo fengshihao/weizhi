@@ -14,8 +14,9 @@
 /* Max in-flight default async VFS jobs (extra work queues; does not fail). */
 #define WEIZHI_DEFAULT_MAX_ASYNC_IO 16
 
-/* Host ABI version for native plugins (see docs/HOST_ABI.md). */
-#define WEIZHI_HOST_ABI_VERSION 1
+/* Host ABI version for native plugins (see docs/HOST_ABI.md).
+   v2 adds WeizhiPluginHost.cb_invoke_str / cancel_poll and IDL str / cb(s: str) / i64-handle stubs. */
+#define WEIZHI_HOST_ABI_VERSION 2
 
 typedef struct WeizhiEngine WeizhiEngine;
 

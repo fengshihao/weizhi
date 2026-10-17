@@ -1,0 +1,42 @@
+{
+  "name": "echo_video",
+  "version": "0.1.0",
+  "min_host_abi": 2,
+  "abi": "weizhi_plugin_v1",
+  "exports": [
+    {
+      "name": "probe_media",
+      "symbol": "weizhi_echo_video_probe_media",
+      "args": [
+        "str"
+      ],
+      "ret": "str"
+    },
+    {
+      "name": "open_session",
+      "symbol": "weizhi_echo_video_open_session",
+      "args": [
+        "i32",
+        "str"
+      ],
+      "ret": "i64"
+    },
+    {
+      "name": "run_session",
+      "symbol": "weizhi_echo_video_run_session",
+      "args": [
+        "i64",
+        "cb(s: str)"
+      ],
+      "ret": "str"
+    },
+    {
+      "name": "close_session",
+      "symbol": "weizhi_echo_video_close_session",
+      "args": [
+        "i64"
+      ],
+      "ret": "void"
+    }
+  ]
+}

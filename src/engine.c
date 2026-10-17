@@ -825,6 +825,12 @@ JSValue weizhi_await_value(Engine *engine, JSValue value) {
                 break;
             }
         }
+        /* A sync host/plugin call may run inside the job we just drained; re-check
+           cancel so a cancellation during that call cannot settle the run as ok. */
+        if (atomic_load(&engine->cancel_requested)) {
+            JS_FreeValue(engine->ctx, value);
+            return JS_ThrowInternalError(engine->ctx, "cancelled");
+        }
         state = JS_PromiseState(engine->ctx, value);
         if ((int)state < 0) {
             return value;

@@ -76,6 +76,22 @@ add_custom_command(TARGET echo_math POST_BUILD
         "$<TARGET_FILE_DIR:echo_math>/manifest.json"
 )
 
+# IDL v2 channel PoC for the video pipeline (docs/video-architecture.md P0).
+add_library(echo_video SHARED plugins/echo_video/echo_video.c)
+target_include_directories(echo_video PRIVATE include plugins/echo_video/generated)
+target_compile_options(echo_video PRIVATE -fvisibility=hidden)
+set_target_properties(echo_video PROPERTIES
+    OUTPUT_NAME "echo_video"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_video"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_video"
+    PREFIX "lib"
+)
+add_custom_command(TARGET echo_video POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/plugins/echo_video/generated/manifest.json"
+        "$<TARGET_FILE_DIR:echo_video>/manifest.json"
+)
+
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)

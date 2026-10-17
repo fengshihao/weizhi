@@ -64,11 +64,20 @@ def c_type(t: str) -> str:
         return "double"
     if t == "bytes":
         return "WeizhiBuf"
+    if t == "str":
+        return "const char *"
     if t == "void":
         return "void"
     if t.startswith("cb("):
         return "uint32_t"  # callback id
     raise SystemExit(f"unsupported type: {t}")
+
+
+def c_ret_type(t: str) -> str:
+    if t == "str":
+        # Plugin returns malloc'd UTF-8; the engine copies and frees it.
+        return "char *"
+    return c_type(t)
 
 
 def symbol(plugin: str, fn: str) -> str:
@@ -90,14 +99,15 @@ def write_header(meta: dict, out: Path) -> None:
         "",
     ]
     for ex in meta["exports"]:
-        ret = c_type(ex["ret"])
+        ret = c_ret_type(ex["ret"])
         params = []
         for a in ex["args"]:
             params.append(f"{c_type(a['type'])} {a['name']}")
         if not params:
             params = ["void"]
         sym = symbol(plugin, ex["name"])
-        lines.append(f"WEIZHI_PLUGIN_EXPORT {ret} {sym}({', '.join(params)});")
+        sep = "" if ret.endswith("*") else " "
+        lines.append(f"WEIZHI_PLUGIN_EXPORT {ret}{sep}{sym}({', '.join(params)});")
     lines += [
         "",
         "/* Optional */",
@@ -150,8 +160,12 @@ def write_snippet(meta: dict, out: Path) -> None:
         lines.append(f"- `p.{ex['name']}({args})` → `{ex['ret']}`")
         if any(a["type"] == "bytes" for a in ex["args"]) or ex["ret"] == "bytes":
             lines.append("  - `bytes` 在 JS 里是 `Buffer`")
+        if any(a["type"] == "str" for a in ex["args"]) or ex["ret"] == "str":
+            lines.append("  - `str` 在 JS 里是 string；返回值是 JSON 字符串，需自行 `JSON.parse`")
         if any(a["type"].startswith("cb(") for a in ex["args"]):
             lines.append("  - 回调参数传 JS `function`，在 C 侧触发时于 JS 线程执行")
+        if any(a["type"] == "cb(s: str)" for a in ex["args"]):
+            lines.append("  - `cb(s: str)` 的回调收到解析后的 JSON 对象，且仅在该调用返回前有效")
     lines.append("")
     out.write_text("\n".join(lines), encoding="utf-8")
 

@@ -45,8 +45,14 @@ static int ty_from_str(const char *s) {
     if (strcmp(s, "bytes") == 0) {
         return WEIZHI_TY_BYTES;
     }
+    if (strcmp(s, "str") == 0) {
+        return WEIZHI_TY_STR;
+    }
     if (strcmp(s, "void") == 0) {
         return WEIZHI_TY_VOID;
+    }
+    if (strcmp(s, "cb(s: str)") == 0) {
+        return WEIZHI_TY_CB_STR;
     }
     if (strncmp(s, "cb(", 3) == 0) {
         return WEIZHI_TY_CB;
@@ -203,10 +209,54 @@ void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0) {
         WeizhiCbEvent *ev = &engine->cb_queue[engine->cb_queue_len++];
         ev->cb_id = cb_id;
         ev->v0 = v0;
+        ev->json = NULL;
         ev->ready = 1;
     }
     pthread_cond_signal(&engine->wake_cv);
     pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_cb_invoke_str(void *engine_ptr, uint32_t cb_id, const char *json) {
+    Engine *engine = (Engine *)engine_ptr;
+    char *copy;
+    if (engine == NULL || cb_id == 0 || cb_id >= WEIZHI_MAX_CBS) {
+        return;
+    }
+    copy = strdup(json != NULL ? json : "{}");
+    if (copy == NULL) {
+        return; /* out of memory: drop the event rather than queue a NULL payload */
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    if (engine->cb_queue_len < WEIZHI_MAX_PENDING) {
+        WeizhiCbEvent *ev = &engine->cb_queue[engine->cb_queue_len++];
+        ev->cb_id = cb_id;
+        ev->v0 = 0;
+        ev->json = copy;
+        ev->ready = 1;
+    } else {
+        free(copy); /* queue full: coalesce by dropping intermediate progress events */
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_cb_release(Engine *engine, uint32_t cb_id) {
+    if (engine == NULL || cb_id == 0 || cb_id >= WEIZHI_MAX_CBS) {
+        return;
+    }
+    if (engine->cbs[cb_id].in_use) {
+        JS_FreeValue(engine->ctx, engine->cbs[cb_id].fn);
+        engine->cbs[cb_id].fn = JS_UNDEFINED;
+        engine->cbs[cb_id].in_use = 0;
+    }
+}
+
+int weizhi_cancel_poll(void *engine_ptr) {
+    Engine *engine = (Engine *)engine_ptr;
+    if (engine == NULL) {
+        return 0;
+    }
+    return atomic_load(&engine->cancel_requested) ? 1 : 0;
 }
 
 int weizhi_drain_cb_queue(Engine *engine) {
@@ -214,6 +264,7 @@ int weizhi_drain_cb_queue(Engine *engine) {
     int n = 0;
     int i;
     int applied = 0;
+    int failed = 0;
     if (engine == NULL) {
         return 0;
     }
@@ -229,18 +280,28 @@ int weizhi_drain_cb_queue(Engine *engine) {
         JSValue arg;
         JSValue ret;
         if (id == 0 || id >= WEIZHI_MAX_CBS || !engine->cbs[id].in_use) {
+            free(local[i].json);
             continue;
         }
-        arg = JS_NewInt32(engine->ctx, local[i].v0);
+        if (local[i].json != NULL) {
+            arg = JS_ParseJSON(engine->ctx, local[i].json, strlen(local[i].json), "<native-cb>");
+            if (JS_IsException(arg)) {
+                JS_FreeValue(engine->ctx, JS_GetException(engine->ctx));
+                arg = JS_NewString(engine->ctx, local[i].json);
+            }
+        } else {
+            arg = JS_NewInt32(engine->ctx, local[i].v0);
+        }
+        free(local[i].json);
         ret = JS_Call(engine->ctx, engine->cbs[id].fn, JS_UNDEFINED, 1, &arg);
         JS_FreeValue(engine->ctx, arg);
         applied++;
         if (JS_IsException(ret)) {
-            return -1;
+            failed = 1;
         }
         JS_FreeValue(engine->ctx, ret);
     }
-    return applied;
+    return failed ? -1 : applied;
 }
 
 static int parse_exports(WeizhiLoadedPlugin *plugin, const char *json, void *handle, char *err, size_t errlen) {
@@ -430,6 +491,8 @@ static int load_one(Engine *engine, const char *name, char *err, size_t errlen) 
     host.buf_alloc = host_buf_alloc;
     host.buf_free = host_buf_free;
     host.cb_invoke_i32 = weizhi_cb_invoke_i32;
+    host.cb_invoke_str = weizhi_cb_invoke_str;
+    host.cancel_poll = weizhi_cancel_poll;
     init_fn = (WeizhiPluginInitFn)dlsym(handle, "weizhi_plugin_init");
     if (init_fn != NULL && init_fn(&host) != 0) {
         snprintf(err, errlen, "native load failed: weizhi_plugin_init");
@@ -463,12 +526,16 @@ static char *build_typed_json(WeizhiLoadedPlugin *plugin) {
             const char *ts = "i32";
             if (ex->args[j] == WEIZHI_TY_BYTES) {
                 ts = "bytes";
+            } else if (ex->args[j] == WEIZHI_TY_CB_STR) {
+                ts = "cb(s: str)";
             } else if (ex->args[j] == WEIZHI_TY_CB) {
                 ts = "cb(i: i32)";
             } else if (ex->args[j] == WEIZHI_TY_F64) {
                 ts = "f64";
             } else if (ex->args[j] == WEIZHI_TY_I64) {
                 ts = "i64";
+            } else if (ex->args[j] == WEIZHI_TY_STR) {
+                ts = "str";
             }
             n += snprintf(piece + n, sizeof(piece) - (size_t)n, "%s\"%s\"", j ? "," : "", ts);
         }
@@ -482,6 +549,8 @@ static char *build_typed_json(WeizhiLoadedPlugin *plugin) {
                 rts = "f64";
             } else if (ex->ret == WEIZHI_TY_I64) {
                 rts = "i64";
+            } else if (ex->ret == WEIZHI_TY_STR) {
+                rts = "str";
             }
             n += snprintf(piece + n, sizeof(piece) - (size_t)n, "],\"ret\":\"%s\"}", rts);
         }

@@ -191,6 +191,37 @@ public final class WeizhiJniInstrumentedTest {
         }
     }
 
+    /** IDL v2 channel PoC for the video pipeline: i64 handles, str args/returns, cb(s: str). */
+    @Test
+    public void echoVideoPlugin() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File pluginRoot = new File(context.getCacheDir(), "weizhi-video-" + System.currentTimeMillis());
+        File videoDir = new File(pluginRoot, "echo_video");
+        assertTrue(videoDir.mkdirs());
+        copyAssetTo("plugins/echo_video/manifest.json", new File(videoDir, "manifest.json"));
+        copyAssetTo("plugins/echo_video/libecho_video.so", new File(videoDir, "libecho_video.so"));
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.enableNativePlugins(pluginRoot.getAbsolutePath());
+            String out = engine.runJs(
+                    "const p = await host.ensureNative('echo_video');"
+                            + "const meta = JSON.parse(p.probe_media('clip.mp4'));"
+                            + "const id = p.open_session(10, '{}');"
+                            + "const events = [];"
+                            + "const r = JSON.parse(p.run_session(id, (e) => { events.push(e); }));"
+                            + "p.close_session(id);"
+                            + "({tracks: meta.tracks.length, cancelled: r.cancelled,"
+                            + "  frames: r.frameCount, events: events.length,"
+                            + "  lastPercent: events[events.length - 1].percent})",
+                    10000);
+            assertTrue(out.contains("\"tracks\":1"));
+            assertTrue(out.contains("\"cancelled\":false"));
+            assertTrue(out.contains("\"frames\":10"));
+            assertTrue(out.contains("\"events\":10"));
+            assertTrue(out.contains("\"lastPercent\":100"));
+        }
+    }
+
     private static void copyAssetTo(String assetPath, File dest) throws IOException {
         Context ctx = InstrumentationRegistry.getInstrumentation().getContext();
         try (InputStream in = ctx.getAssets().open(assetPath);
