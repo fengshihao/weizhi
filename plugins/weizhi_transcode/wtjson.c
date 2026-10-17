@@ -248,6 +248,12 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                             p = skip_ws(p);
                         }
                         p = skip_ws(p + 1);
+                    } else if (strcmp(key, "lut") == 0) {
+                        p = parse_str(p, filter->lut_path, sizeof(filter->lut_path));
+                        if (p != NULL && filter->lut_path[0] == '\0') {
+                            snprintf(err, err_len, "bad argument: job json (empty lut path)");
+                            return -1;
+                        }
                     } else {
                         p = skip_value(p);
                     }
@@ -337,7 +343,8 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                     p = skip_ws(p + 1);
                     if (strcmp(key, "path") == 0) {
                         p = parse_str(p, clip->path, sizeof(clip->path));
-                    } else if (strcmp(key, "startMs") == 0 || strcmp(key, "endMs") == 0) {
+                    } else if (strcmp(key, "startMs") == 0 || strcmp(key, "endMs") == 0 ||
+                               strcmp(key, "fadeInMs") == 0 || strcmp(key, "fadeOutMs") == 0) {
                         int64_t v = 0;
                         p = parse_num_member(p, key, &v, err, err_len);
                         if (p == NULL) {
@@ -345,8 +352,12 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                         }
                         if (strcmp(key, "startMs") == 0) {
                             clip->start_ms = v;
-                        } else {
+                        } else if (strcmp(key, "endMs") == 0) {
                             clip->end_ms = v;
+                        } else if (strcmp(key, "fadeInMs") == 0) {
+                            clip->fade_in_ms = v;
+                        } else {
+                            clip->fade_out_ms = v;
                         }
                     } else {
                         p = skip_value(p);

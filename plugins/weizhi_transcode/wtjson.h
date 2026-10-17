@@ -5,9 +5,11 @@
  * Minimal JSON scanner for the weizhi_transcode plugin (same style as
  * plugins/weizhi_video/wjson.h; plugins stay self-contained per the IDL rules).
  * Schema:
- *  {"clips":[{"path":"a.mp4","startMs":0,"endMs":0}],
+ *  {"clips":[{"path":"a.mp4","startMs":0,"endMs":0,
+ *             "fadeInMs":0,"fadeOutMs":0}],   // fades from transitions (P3c)
  *   "output":"out.mp4",
- *   "video":{"width":0,"height":0,"bitrate":0,"fps":0}}   // 0 = keep source
+ *   "video":{"width":0,"height":0,"bitrate":0,"fps":0},   // 0 = keep source
+ *   "filters":[{"shader":"...","uniforms":{"k":0.0},"lut":"x.cube"}]}
  */
 
 #include <stddef.h>
@@ -24,6 +26,8 @@ typedef struct WtClip {
     char path[WT_MAX_PATH];
     int64_t start_ms;
     int64_t end_ms; /* 0 = to end of source */
+    int64_t fade_in_ms;  /* transition from the previous clip (0 = none) */
+    int64_t fade_out_ms; /* transition into the next clip (0 = none) */
 } WtClip;
 
 typedef struct WtVideoOpts {
@@ -35,7 +39,9 @@ typedef struct WtVideoOpts {
 
 /* One GPU filter: a complete GLES2 fragment shader (engine prepends the
    OES extension + precision lines) plus float uniforms. The weizhi:video
-   package compiles presets and custom bodies into this shape. */
+   package compiles presets and custom bodies into this shape. lut_path is
+   optional: an Adobe/IRIDAS .cube 3D LUT uploaded to texture unit 1 with
+   uLut/uLutSize uniforms bound by the plugin. */
 typedef struct WtUniform {
     char name[WT_MAX_UNIFORM_NAME];
     double value;
@@ -43,6 +49,7 @@ typedef struct WtUniform {
 
 typedef struct WtFilter {
     char shader[WT_MAX_SHADER];
+    char lut_path[WT_MAX_PATH];
     WtUniform uniforms[WT_MAX_UNIFORMS];
     int nuniforms;
 } WtFilter;

@@ -177,8 +177,117 @@ public final class WeizhiTranscodeInstrumentedTest {
         }
     }
 
+    /**
+     * GPU path LUT assertion: a constant-white .cube must map every pixel to
+     * limited-range white (Y ~235), and a size-2 identity LUT must leave the
+     * luma mean unchanged (trilinear between corners is exactly linear).
+     */
+    @Test
+    public void lutPixelMap() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-txl-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "a.mp4", AvcFixtures.DEFAULT_MS, 50);
+        writeText(ws, "white.cube",
+                "LUT_3D_SIZE 2\n"
+                        + "1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n");
+        writeText(ws, "identity.cube",
+                "LUT_3D_SIZE 2\n"
+                        + "0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            try {
+                engine.runJs(
+                        "import { exportVideo } from 'weizhi:video';\n"
+                                + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'plain.mp4',"
+                                + " bitrate: 2000000});\n"
+                                + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'lutw.mp4',\n"
+                                + "  bitrate: 2000000,"
+                                + " filters: [{type: 'lut', params: {path: 'white.cube'}}]});\n"
+                                + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'luti.mp4',\n"
+                                + "  bitrate: 2000000,"
+                                + " filters: [{type: 'lut', params: {path: 'identity.cube'}}]});\n"
+                                + "export default 'done';\n",
+                        60_000, "lut.js");
+            } catch (RuntimeException e) {
+                throw new RuntimeException(e.getMessage() + "\n== job log ==\n"
+                        + readJobLog(ws, "lutw.mp4.log") + readJobLog(ws, "luti.mp4.log"), e);
+            }
+            int plain = firstFrameYMean(new File(ws, "plain.mp4"));
+            int white = firstFrameYMean(new File(ws, "lutw.mp4"));
+            int identity = firstFrameYMean(new File(ws, "luti.mp4"));
+            assertTrue("plain=" + plain + " white=" + white + " identity=" + identity,
+                    white > 200 && Math.abs(identity - plain) <= 6);
+        }
+    }
+
+    /**
+     * Fade transition (P3c): boundary frames fade through black while mid-clip
+     * frames keep the fixture luma. Fades live on clip boundaries only — the
+     * tail of the last clip (timeline end) does NOT fade. Fade 200ms between
+     * two 1s clips; the audio track is untouched (video-only semantic).
+     */
+    @Test
+    public void fadeTransitionBoundary() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-txf-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "a.mp4", 1000, 60);
+        AvcFixtures.encode(ws, "b.mp4", 1000, 60);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            String out;
+            try {
+                out = engine.runJs(
+                        "import { exportVideo } from 'weizhi:video';\n"
+                                + "import fs from 'fs';\n"
+                                + "const r = await exportVideo({clips: [{path: 'a.mp4'},"
+                                + " {path: 'b.mp4'}],\n"
+                                + "  output: 'fade.mp4', bitrate: 2000000,\n"
+                                + "  transitions: [{type: 'fade', durationMs: 200}]});\n"
+                                + "const log = fs.existsSync('fade.mp4.log')"
+                                + " ? fs.readFileSync('fade.mp4.log').toString() : '';\n"
+                                + "export default {ok: r.ok, dur: r.durationMs, log};\n",
+                        60_000, "fade.js");
+            } catch (RuntimeException e) {
+                throw new RuntimeException(e.getMessage() + "\n== job log ==\n"
+                        + readJobLog(ws, "fade.mp4.log"), e);
+            }
+            assertTrue(out, out.contains("\"ok\":true"));
+            int dur = WeizhiVideoInstrumentedTest.jsonInt(out, "dur");
+            assertTrue("dur=" + dur, dur > 1800 && dur < 2200);
+            File fade = new File(ws, "fade.mp4");
+            int mid = yMeanAtPts(fade, 400_000);
+            int edge1 = yMeanAtPts(fade, 950_000);
+            int edge2 = yMeanAtPts(fade, 1_050_000);
+            int tail = yMeanAtPts(fade, 1_950_000);
+            assertTrue("mid=" + mid + " edge1=" + edge1 + " edge2=" + edge2 + " tail=" + tail,
+                    mid >= 45 && mid <= 75 && edge1 < 40 && edge2 < 40
+                            && tail >= 45 && tail <= 75);
+        }
+    }
+
+    private static void writeText(File ws, String name, String text) throws Exception {
+        java.io.FileOutputStream stream = new java.io.FileOutputStream(new File(ws, name));
+        stream.write(text.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        stream.close();
+    }
+
     /** Decode the first frame and average the Y plane (pixel-level assertion helper). */
     private static int firstFrameYMean(File mp4) throws Exception {
+        return yMeanAtPts(mp4, 0);
+    }
+
+    /** Average the Y plane of the first decoded frame at or after targetUs. */
+    private static int yMeanAtPts(File mp4, long targetUs) throws Exception {
         android.media.MediaExtractor ex = new android.media.MediaExtractor();
         ex.setDataSource(mp4.getAbsolutePath());
         int track = -1;
@@ -215,7 +324,7 @@ public final class WeizhiTranscodeInstrumentedTest {
                 int outIdx = codec.dequeueOutputBuffer(info, 10_000);
                 if (outIdx >= 0) {
                     android.media.Image image = codec.getOutputImage(outIdx);
-                    if (image != null) {
+                    if (image != null && info.presentationTimeUs >= targetUs) {
                         java.nio.ByteBuffer y = image.getPlanes()[0].getBuffer();
                         long sum = 0;
                         int n = y.remaining();
@@ -227,10 +336,13 @@ public final class WeizhiTranscodeInstrumentedTest {
                         codec.releaseOutputBuffer(outIdx, false);
                         return mean;
                     }
+                    if (image != null) {
+                        image.close();
+                    }
                     codec.releaseOutputBuffer(outIdx, false);
                 }
             }
-            throw new IllegalStateException("no decoded frame");
+            throw new IllegalStateException("no decoded frame at " + targetUs + "us");
         } finally {
             codec.stop();
             codec.release();

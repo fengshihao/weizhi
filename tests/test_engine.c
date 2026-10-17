@@ -1545,7 +1545,7 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.2.0", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.3.0", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
@@ -1555,17 +1555,35 @@ static void test_weizhi_video_package(void) {
                               "const flt = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['brightness']});\n"
                               "const flt2 = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'contrast', params: {amount: 0.5}}]});\n"
                               "const custom = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{shader: 'uniform float uK;\\nvoid main() { gl_FragColor = texture2D(uVideo, vUV) * uK; }', uniforms: {uK: 0.5}}]});\n"
+                              "const lut = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'lut', params: {path: 'w.cube'}}]});\n"
+                              "const fade = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 200}]});\n"
+                              "const cast = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}, {path: 'c.mp4'}], output: 'o.mp4', transitions: {type: 'fade', durationMs: 100}});\n"
                               "let e1 = '';\n"
                               "try { buildJob({clips: [], output: 'o.mp4'}); } catch (e) { e1 = e.message; }\n"
                               "let e2 = '';\n"
                               "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', reencode: false, bitrate: 5}); } catch (e) { e2 = e.message; }\n"
                               "let e3 = '';\n"
                               "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['nope']}); } catch (e) { e3 = e.message; }\n"
+                              "let e4 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', transitions: [{type: 'wipe', durationMs: 100}]}); } catch (e) { e4 = e.message; }\n"
+                              "let e5 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}, {path: 'c.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e5 = e.message; }\n"
+                              "let e6 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', reencode: false, transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e6 = e.message; }\n"
+                              "let e7 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'lut'}]}); } catch (e) { e7 = e.message; }\n"
+                              "let e8 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e8 = e.message; }\n"
+                              "let e9 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4', fadeInMs: 100}], output: 'o.mp4'}); } catch (e) { e9 = e.message; }\n"
                               "const encOpts = JSON.parse(enc.optionsJson);\n"
                               "const fltOpts = JSON.parse(flt.optionsJson);\n"
                               "const flt2Opts = JSON.parse(flt2.optionsJson);\n"
                               "const customOpts = JSON.parse(custom.optionsJson);\n"
                               "const customShader = customOpts.filters[0].shader;\n"
+                              "const lutOpts = JSON.parse(lut.optionsJson);\n"
+                              "const fadeOpts = JSON.parse(fade.optionsJson);\n"
+                              "const castOpts = JSON.parse(cast.optionsJson);\n"
                               "export default [remux.plugin, enc.plugin, flt.plugin,\n"
                               "  encOpts.video.bitrate, fltOpts.filters[0].uniforms.uAmount,\n"
                               "  flt2Opts.filters[0].uniforms.uAmount,\n"
@@ -1573,14 +1591,24 @@ static void test_weizhi_video_package(void) {
                               "  customShader.indexOf('void main()') >= 0 && customShader.indexOf('samplerExternalOES') >= 0,\n"
                               "  customOpts.filters[0].uniforms.uK,\n"
                               "  JSON.stringify(remux.options.clips[0]),\n"
-                              "  e1.includes('bad argument'), e2.includes('remux cannot'), e3.indexOf('nope') >= 0];\n",
+                              "  e1.includes('bad argument'), e2.includes('remux cannot'), e3.indexOf('nope') >= 0,\n"
+                              "  lut.plugin, lutOpts.filters[0].lut, lutOpts.filters[0].uniforms.uAmount,\n"
+                              "  lutOpts.filters[0].shader.indexOf('uLutSize') >= 0,\n"
+                              "  fade.plugin, fadeOpts.clips[0].fadeOutMs, fadeOpts.clips[1].fadeInMs,\n"
+                              "  castOpts.clips[0].fadeOutMs, castOpts.clips[1].fadeInMs,\n"
+                              "  castOpts.clips[1].fadeOutMs, castOpts.clips[2].fadeInMs,\n"
+                              "  e4.includes('unsupported: transition type'), e5.includes('clips.length - 1'),\n"
+                              "  e6.includes('remux cannot'), e7.includes('params.path'),\n"
+                              "  e8.includes('at least two clips'), e9.includes('compiled from transitions')];\n",
                               3000,
                               "run.js");
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL &&
            strcmp(result.output_text,
                   "[\"video\",\"transcode\",\"transcode\",500000,0.2,0.5,true,true,0.5,"
-                  "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true]") == 0);
+                  "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true,"
+                  "\"transcode\",\"w.cube\",1,true,\"transcode\",200,200,100,100,100,100,"
+                  "true,true,true,true,true,true]") == 0);
     weizhi_result_free(&result);
     /* exportVideo without native plugins fails with the agent-facing hint. */
     result = weizhi_run_js_ex(engine,

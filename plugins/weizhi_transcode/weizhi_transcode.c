@@ -85,6 +85,7 @@ typedef struct WtSource {
     int32_t width;
     int32_t height;
     int32_t fps;
+    int64_t duration_us; /* 0 when the container does not report one */
 } WtSource;
 
 /* Audio sample buffered until the muxer has the video track and can start. */
@@ -124,7 +125,9 @@ typedef struct WtGL {
     ANativeWindow *target; /* encoder input window (for buffer timestamps) */
     GLuint prog;
     GLuint vbo;
-    GLuint tex;
+    GLuint tex;    /* unit 0: decoder OES texture */
+    GLuint lut_tex; /* unit 1: 3D LUT baked into an N x N^2 2D texture */
+    int lut_size;
     EGLImageKHR image;
     GLint a_pos;
     GLint a_uv;
@@ -134,6 +137,84 @@ typedef struct WtGL {
     } uniforms[WT_MAX_UNIFORMS];
     int nuniforms;
 } WtGL;
+
+/* Parse an Adobe/IRIDAS .cube 3D LUT (LUT_3D_SIZE n + n^3 rgb triples, red
+   fastest). Returns a row-major n x (n*n) RGB byte image whose texel order
+   equals the file order, ready for glTexImage2D; NULL with err set. */
+static uint8_t *wt_load_cube(const char *abs, int *size_out, char *err, size_t err_len) {
+    FILE *f = fopen(abs, "r");
+    char line[512];
+    uint8_t *rgb = NULL;
+    long want = 0;
+    long got = 0;
+    int n = 0;
+    int header_lines = 0;
+    if (f == NULL) {
+        snprintf(err, err_len, "lut file not found");
+        return NULL;
+    }
+    while (n == 0) {
+        char *s;
+        if (fgets(line, sizeof(line), f) == NULL || ++header_lines > 4096) {
+            snprintf(err, err_len, "unsupported: lut (malformed .cube: no LUT_3D_SIZE)");
+            goto bail;
+        }
+        s = line;
+        while (*s == ' ' || *s == '\t') {
+            s++;
+        }
+        if (*s == '\0' || *s == '\n' || *s == '\r' || *s == '#') {
+            continue;
+        }
+        if (strncmp(s, "LUT_1D_SIZE", 11) == 0) {
+            snprintf(err, err_len, "unsupported: lut (only 3D .cube, not 1D)");
+            goto bail;
+        }
+        if (strncmp(s, "TITLE", 5) == 0 || strncmp(s, "DOMAIN_MIN", 10) == 0 ||
+            strncmp(s, "DOMAIN_MAX", 10) == 0) {
+            continue; /* domain remapping is not applied (files are 0..1) */
+        }
+        if (strncmp(s, "LUT_3D_SIZE", 11) == 0) {
+            n = atoi(s + 11);
+            if (n < 2 || n > 64) {
+                snprintf(err, err_len, "unsupported: lut (LUT_3D_SIZE %d out of range 2..64)", n);
+                goto bail;
+            }
+            want = (long)n * n * n;
+            rgb = (uint8_t *)malloc((size_t)want * 3);
+            if (rgb == NULL) {
+                snprintf(err, err_len, "out of memory");
+                goto bail;
+            }
+        }
+        /* any other header keyword before the size is rejected below by the
+           missing LUT_3D_SIZE path once data parsing starts */
+    }
+    while (got < want) {
+        double v[3];
+        int k;
+        for (k = 0; k < 3; k++) {
+            if (fscanf(f, "%lf", &v[k]) != 1) {
+                snprintf(err, err_len,
+                         "unsupported: lut (malformed .cube: expected %ld triples, got %ld)", want,
+                         got);
+                goto bail;
+            }
+        }
+        for (k = 0; k < 3; k++) {
+            double c = v[k] < 0.0 ? 0.0 : (v[k] > 1.0 ? 1.0 : v[k]);
+            rgb[got * 3 + k] = (uint8_t)(c * 255.0 + 0.5);
+        }
+        got++;
+    }
+    fclose(f);
+    *size_out = n;
+    return rgb;
+bail:
+    fclose(f);
+    free(rgb);
+    return NULL;
+}
 
 static GLuint wt_gl_shader(GLenum kind, const char *src, char *err, size_t err_len) {
     GLuint sh = glCreateShader(kind);
@@ -168,9 +249,12 @@ static GLuint wt_gl_shader(GLenum kind, const char *src, char *err, size_t err_l
 }
 
 /* Set up EGL on the encoder input window and build the filter program.
-   frag_src is the user body; the OES extension + precision lines are prepended. */
+   frag_src is the user body; the OES extension + precision lines are prepended.
+   lut_abs (optional) is a resolved .cube path uploaded to texture unit 1 with
+   the uLut sampler / uLutSize uniforms bound, so shader bodies can sample the
+   table without knowing how it was loaded. */
 static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
-                      const WtFilter *filter, char *err, size_t err_len) {
+                      const WtFilter *filter, const char *lut_abs, char *err, size_t err_len) {
     const char *exts;
     EGLConfig config;
     EGLint num = 0;
@@ -281,6 +365,53 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
     glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    if (lut_abs != NULL && lut_abs[0] != '\0') {
+        int n = 0;
+        GLint max_tex = 0;
+        uint8_t *rgb = wt_load_cube(lut_abs, &n, err, err_len);
+        if (rgb == NULL) {
+            return -1;
+        }
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_tex);
+        if (max_tex > 0 && n * n > max_tex) {
+            free(rgb);
+            snprintf(err, err_len, "unsupported: lut (size %d exceeds device texture limit)", n);
+            return -1;
+        }
+        glActiveTexture(GL_TEXTURE1);
+        glGenTextures(1, &gl->lut_tex);
+        glBindTexture(GL_TEXTURE_2D, gl->lut_tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        /* rows are n*3 bytes; the default 4-byte unpack alignment would skip
+           padding on sizes that are not multiples of 4 */
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, n, n * n, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        free(rgb);
+        if (glGetError() != GL_NO_ERROR) {
+            snprintf(err, err_len, "unsupported: lut (texture upload failed)");
+            return -1;
+        }
+        gl->lut_size = n;
+        {
+            GLint loc = glGetUniformLocation(gl->prog, "uLut");
+            if (loc >= 0) {
+                glUniform1i(loc, 1);
+            }
+        }
+        {
+            GLint loc = glGetUniformLocation(gl->prog, "uLutSize");
+            if (loc >= 0) {
+                glUniform1f(loc, (float)n);
+            }
+        }
+        glActiveTexture(GL_TEXTURE0);
+        wt_logf("lut loaded: size=%d (%dx%d texture)", n, n, n * n);
+    }
+
     if (filter != NULL) {
         int i;
         for (i = 0; i < filter->nuniforms && gl->nuniforms < WT_MAX_UNIFORMS; i++) {
@@ -293,8 +424,33 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
     return 0;
 }
 
-/* Draw one hardware buffer into the encoder surface at pts_ns (nanoseconds). */
-static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t out_w, int32_t out_h) {
+/* Transition fade factor for a frame at rel_us inside a clip of dur_us:
+   ramps 0->1 over fade_in and 1->0 over fade_out (linear). */
+static float wt_fade_factor(int64_t rel_us, int64_t dur_us, int64_t fade_in_us,
+                            int64_t fade_out_us) {
+    double f = 1.0;
+    if (dur_us <= 0) {
+        return 1.0f;
+    }
+    if (fade_in_us > 0 && rel_us < fade_in_us) {
+        f = (double)rel_us / (double)fade_in_us;
+    } else if (fade_out_us > 0 && rel_us > dur_us - fade_out_us) {
+        f = (double)(dur_us - rel_us) / (double)fade_out_us;
+    }
+    if (f < 0.0) {
+        f = 0.0;
+    }
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    return (float)f;
+}
+
+/* Draw one hardware buffer into the encoder surface at pts_ns (nanoseconds).
+   fade < 1 scales every fragment through constant-color blending, which keeps
+   transitions independent of whatever the filter shader does. */
+static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t out_w,
+                       int32_t out_h, float fade) {
     EGLImageKHR image;
     int i;
     if (gl->image != EGL_NO_IMAGE_KHR) {
@@ -332,6 +488,15 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
             glUniform1f(loc, gl->uniforms[i].value);
         }
     }
+    if (fade < 1.0f) {
+        /* out = src * fade (+ dst * 0): a fade to black that composes with
+           any shader output, set per frame */
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_CONSTANT_COLOR, GL_ZERO);
+        glBlendColor(fade, fade, fade, 1.0f);
+    } else {
+        glDisable(GL_BLEND);
+    }
     glViewport(0, 0, out_w, out_h);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     if (g_tx_draws < 3) {
@@ -367,6 +532,9 @@ static void wt_gl_destroy(WtGL *gl) {
     }
     if (gl->tex != 0) {
         glDeleteTextures(1, &gl->tex);
+    }
+    if (gl->lut_tex != 0) {
+        glDeleteTextures(1, &gl->lut_tex);
     }
     if (gl->surf != EGL_NO_SURFACE) {
         eglDestroySurface(gl->dpy, gl->surf);
@@ -507,6 +675,7 @@ static int open_source(const char *abs_path, const char *kind, WtSource *src, ch
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, &src->width);
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, &src->height);
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, &src->fps);
+            AMediaFormat_getInt64(fmt, AMEDIAFORMAT_KEY_DURATION, &src->duration_us);
             AMediaFormat_delete(fmt);
             AMediaExtractor_selectTrack(src->ex, i);
             return 0;
@@ -709,6 +878,8 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
     int32_t src_w = 0;
     int32_t src_h = 0;
     int use_gl = 0;
+    int has_fades = 0;
+    char *lut_abs = NULL;
     WtGL gl;
     memset(&gl, 0, sizeof(gl));
 
@@ -790,8 +961,14 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
     }
     pipe.enc_w = enc_w;
     pipe.enc_h = enc_h;
-    /* GPU path when a filter is set or the target size differs from the source. */
-    use_gl = job->spec.nfilters == 1 || enc_w != src_w || enc_h != src_h;
+    for (c = 0; c < job->spec.nclips; c++) {
+        if (job->spec.clips[c].fade_in_ms > 0 || job->spec.clips[c].fade_out_ms > 0) {
+            has_fades = 1;
+        }
+    }
+    /* GPU path when a filter or transition is set, or the target size differs
+       from the source (fades need per-frame constant-color blending). */
+    use_gl = job->spec.nfilters == 1 || has_fades || enc_w != src_w || enc_h != src_h;
 
     enc_fmt = AMediaFormat_new();
     AMediaFormat_setString(enc_fmt, AMEDIAFORMAT_KEY_MIME, "video/avc");
@@ -822,11 +999,24 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
             job->spec.nfilters == 1 ? job->spec.filters[0].shader : WT_FRAG_IDENTITY;
         const WtFilter *filt = job->spec.nfilters == 1 ? &job->spec.filters[0] : NULL;
         gl_err[0] = '\0';
-        if (wt_gl_init(&gl, pipe.enc_surface, frag, filt, gl_err, sizeof(gl_err)) != 0) {
+        if (filt != NULL && filt->lut_path[0] != '\0') {
+            lut_abs = resolved_or_error(filt->lut_path);
+            if (lut_abs == NULL) {
+                pipe.fail = json_err("out of memory", NULL);
+                goto done;
+            }
+            if (lut_abs[0] != '/') {
+                pipe.fail = lut_abs; /* resolve error json, transferred to fail */
+                lut_abs = NULL;
+                goto done;
+            }
+        }
+        if (wt_gl_init(&gl, pipe.enc_surface, frag, filt, lut_abs, gl_err, sizeof(gl_err)) != 0) {
             pipe.fail = json_err(gl_err[0] != '\0' ? gl_err : "GPU setup failed", NULL);
             goto done;
         }
-        wt_logf("gl init ok (target %dx%d, filter=%d)", enc_w, enc_h, job->spec.nfilters);
+        wt_logf("gl init ok (target %dx%d, filter=%d fades=%d lut=%d)", enc_w, enc_h,
+                job->spec.nfilters, has_fades, lut_abs != NULL);
     }
 
     for (c = 0; c < job->spec.nclips && pipe.fail == NULL && !pipe.cancelled; c++) {
@@ -838,6 +1028,7 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         ANativeWindow *dec_window = NULL;
         int64_t start_us = clip->start_ms * 1000;
         int64_t end_us = clip->end_ms > 0 ? clip->end_ms * 1000 : (int64_t)1 << 62;
+        int64_t clip_dur_us = 0;
         int64_t last_rel = 0;
         int wrote_any = 0;
         int input_eos = 0;
@@ -856,6 +1047,17 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         open_err[0] = '\0';
         if (open_source(abs, "video/", &vsrc, open_err, sizeof(open_err)) != 0) {
             pipe.fail = json_err(open_err, clip->path);
+            goto clip_done;
+        }
+        if (vsrc.duration_us > 0 && end_us > vsrc.duration_us) {
+            end_us = vsrc.duration_us; /* "to end of source" clamps to the real duration */
+        }
+        clip_dur_us = end_us - start_us;
+        if ((clip->fade_in_ms > 0 || clip->fade_out_ms > 0) &&
+            (clip->fade_in_ms + clip->fade_out_ms) * 1000 >= clip_dur_us) {
+            /* no un-faded frame would remain; reject instead of clamping */
+            pipe.fail = json_err("unsupported: transition longer than clip", clip->path);
+            close_source(&vsrc);
             goto clip_done;
         }
         if (!use_gl && (vsrc.width != enc_w || vsrc.height != enc_h)) {
@@ -960,7 +1162,10 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                                     if (AImage_getHardwareBuffer(img, &ahb) == AMEDIA_OK &&
                                         ahb != NULL) {
                                         wt_gl_draw(&gl, ahb, (pipe.timeline_us + rel) * 1000, enc_w,
-                                                   enc_h);
+                                                   enc_h,
+                                                   wt_fade_factor(rel, clip_dur_us,
+                                                                  clip->fade_in_ms * 1000,
+                                                                  clip->fade_out_ms * 1000));
                                     } else {
                                         wt_logf("no hardware buffer on image");
                                     }
@@ -1096,6 +1301,7 @@ done:
         }
     }
     free(pipe.out_abs);
+    free(lut_abs);
     return result;
 }
 

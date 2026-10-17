@@ -3,13 +3,18 @@
 //   remux      -> plugin "video"     (trim / concat, no re-encode; P1)
 //   re-encode  -> plugin "transcode" (bitrate / fps; P2; filters + scaling run on
 //                 the GPU path: decoder -> AImageReader -> OES texture ->
-//                 shader -> encoder; P3b)
+//                 shader -> encoder; P3b; LUT + fade transitions: P3c)
 // Filter shaders are GLES2 fragment bodies WITHOUT the #extension/precision
 // lines (the plugin prepends them). Required declarations are added here, so a
 // custom body only needs uniforms and main(). One filter per job (native rule).
+// The lut preset points at an Adobe/IRIDAS .cube file that the plugin resolves
+// against the engine fs root and uploads to texture unit 1 (the uLut sampler
+// and uLutSize uniforms are bound natively). Transitions compile to per-clip
+// fadeInMs/fadeOutMs and fade through black on the GPU; they compose with any
+// filter and are video-only (audio passes through untouched).
 // NOTE: tests/test_engine.c embeds this file via CMake; keep that in sync.
 
-const PRESETS = ['brightness', 'contrast', 'saturation', 'grayscale'];
+const PRESETS = ['brightness', 'contrast', 'saturation', 'grayscale', 'lut'];
 
 const HEADER = 'varying vec2 vUV;\nuniform samplerExternalOES uVideo;\n';
 
@@ -31,6 +36,23 @@ const PRESET_GLSL = {
       'void main() { vec4 c = texture2D(uVideo, vUV);' +
       ' float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));' +
       ' gl_FragColor = vec4(vec3(l), c.a); }',
+  /* Trilinear 3D LUT sampled from the plugin's N x (N*N) 2D texture: blue
+     picks the slice, red/green address inside it, with one interpolation
+     across the two neighbouring slices. */
+  lut:
+      'uniform sampler2D uLut;\n' +
+      'uniform float uLutSize;\n' +
+      'uniform float uAmount;\n' +
+      'void main() { vec3 c = texture2D(uVideo, vUV).rgb;' +
+      ' float n = uLutSize;' +
+      ' float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);' +
+      ' float b0 = floor(b);' +
+      ' float b1 = min(b0 + 1.0, n - 1.0);' +
+      ' vec2 rg = clamp(vec2(c.r, c.g), 0.0, 1.0) * (n - 1.0) + 0.5;' +
+      ' vec2 uv0 = vec2(rg.x, b0 * n + rg.y) / vec2(n, n * n);' +
+      ' vec2 uv1 = vec2(rg.x, b1 * n + rg.y) / vec2(n, n * n);' +
+      ' vec3 m = mix(texture2D(uLut, uv0).rgb, texture2D(uLut, uv1).rgb, b - b0);' +
+      ' gl_FragColor = vec4(mix(c, m, uAmount), 1.0); }',
 };
 
 function num(value, name) {
@@ -49,7 +71,11 @@ function normalizeClip(clip, index) {
   if (typeof clip.path !== 'string' || clip.path === '') {
     throw new Error('bad argument: buildJob: clips[' + index + '].path (string) is required');
   }
-  const out = { path: clip.path };
+  if (clip.fadeInMs !== undefined || clip.fadeOutMs !== undefined) {
+    throw new Error('bad argument: buildJob: clips[' + index +
+        '] fadeInMs/fadeOutMs are compiled from transitions, not settable');
+  }
+  const out = {path: clip.path};
   const start = num(clip.startMs, 'clips[' + index + '].startMs');
   const end = num(clip.endMs, 'clips[' + index + '].endMs');
   if (start !== undefined) out.startMs = start;
@@ -57,11 +83,11 @@ function normalizeClip(clip, index) {
   return out;
 }
 
-/** Compile one filter entry to {shader, uniforms}. */
+/** Compile one filter entry to {shader, uniforms, lut?}. */
 function compileFilter(entry, index) {
   const where = 'filters[' + index + ']';
   let type = null;
-  let amount = 0.2;
+  let amount;
   if (typeof entry === 'string') {
     type = entry;
   } else if (entry && typeof entry === 'object') {
@@ -76,7 +102,7 @@ function compileFilter(entry, index) {
         const v = num(src[k], where + '.uniforms.' + k);
         uniforms[k] = v === undefined ? 0 : v;
       }
-      return { shader: HEADER + entry.shader, uniforms };
+      return {shader: HEADER + entry.shader, uniforms};
     }
   }
   if (type === null) {
@@ -87,15 +113,65 @@ function compileFilter(entry, index) {
   if (PRESETS.indexOf(type) < 0) {
     throw new Error('bad argument: buildJob: ' + where + ' unknown preset "' + type + '"');
   }
+  if (amount === undefined) amount = type === 'lut' ? 1 : 0.2;
+  if (type === 'lut') {
+    const path = entry.params && entry.params.path;
+    if (typeof path !== 'string' || path === '') {
+      throw new Error(
+          'bad argument: buildJob: ' + where + ' lut requires params.path (string)');
+    }
+    return {shader: HEADER + PRESET_GLSL.lut, uniforms: {uAmount: amount}, lut: path};
+  }
   const uniforms = {};
   if (PRESET_GLSL[type].indexOf('uAmount') >= 0) uniforms.uAmount = amount;
-  return { shader: HEADER + PRESET_GLSL[type], uniforms };
+  return {shader: HEADER + PRESET_GLSL[type], uniforms};
+}
+
+/**
+ * Compile spec.transitions into per-clip fadeInMs/fadeOutMs fields; returns
+ * true when any fade is active. A single object broadcasts to every boundary;
+ * an array must have exactly clips.length - 1 entries (one per boundary).
+ */
+function compileTransitions(spec, clips) {
+  if (spec.transitions === undefined || spec.transitions === null) return false;
+  if (clips.length < 2) {
+    throw new Error('bad argument: buildJob: transitions need at least two clips');
+  }
+  const list = Array.isArray(spec.transitions)
+      ? spec.transitions
+      : new Array(clips.length - 1).fill(spec.transitions);
+  if (list.length === 0) return false;
+  if (list.length !== clips.length - 1) {
+    throw new Error(
+        'bad argument: buildJob: transitions must have clips.length - 1 entries (got ' +
+        list.length + ')');
+  }
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i];
+    if (!t || typeof t !== 'object' || typeof t.type !== 'string') {
+      throw new Error(
+          'bad argument: buildJob: transitions[' + i + '] must be {type, durationMs}');
+    }
+    if (t.type !== 'fade') {
+      throw new Error('unsupported: transition type "' + t.type + '" (only fade)');
+    }
+    const d = num(t.durationMs, 'transitions[' + i + '].durationMs');
+    if (d === undefined || d <= 0) {
+      throw new Error(
+          'bad argument: buildJob: transitions[' + i +
+          '].durationMs must be a positive number');
+    }
+    clips[i].fadeOutMs = d;
+    clips[i + 1].fadeInMs = d;
+  }
+  return true;
 }
 
 /**
  * Compile a spec into a plugin job. Spec:
  *   { clips: [{path, startMs?, endMs?}], output,
- *     bitrate?, width?, height?, fps?, reencode?, filters? }
+ *     bitrate?, width?, height?, fps?, reencode?, filters?,
+ *     transitions?: {type:'fade', durationMs} | [{type:'fade', durationMs}] }
  * Returns { plugin: "video"|"transcode", options, optionsJson }.
  */
 export function buildJob(spec) {
@@ -109,6 +185,7 @@ export function buildJob(spec) {
     throw new Error('bad argument: buildJob: output (string) is required');
   }
   const clips = spec.clips.map(normalizeClip);
+  const hasTransitions = compileTransitions(spec, clips);
   let filters = [];
   if (Array.isArray(spec.filters)) {
     filters = spec.filters.map(compileFilter);
@@ -118,15 +195,16 @@ export function buildJob(spec) {
   const height = num(spec.height, 'height');
   const fps = num(spec.fps, 'fps');
   const wantsEncode =
-      spec.reencode === true || filters.length > 0 || bitrate !== undefined ||
-      width !== undefined || height !== undefined || fps !== undefined;
-  const optsCount = filters.length + (bitrate !== undefined) + (width !== undefined) +
-      (height !== undefined) + (fps !== undefined);
+      spec.reencode === true || filters.length > 0 || hasTransitions ||
+      bitrate !== undefined || width !== undefined || height !== undefined || fps !== undefined;
+  const optsCount = filters.length + (hasTransitions ? 1 : 0) + (bitrate !== undefined) +
+      (width !== undefined) + (height !== undefined) + (fps !== undefined);
   if (spec.reencode === false && optsCount > 0) {
     throw new Error(
-        'bad argument: buildJob: remux cannot apply filters or video options (set reencode: true)');
+        'bad argument: buildJob: remux cannot apply filters, transitions or video options' +
+        ' (set reencode: true)');
   }
-  const options = { clips, output: spec.output };
+  const options = {clips, output: spec.output};
   if (wantsEncode) {
     const video = {};
     if (bitrate !== undefined) video.bitrate = bitrate;
@@ -135,9 +213,9 @@ export function buildJob(spec) {
     if (fps !== undefined) video.fps = fps;
     options.video = video;
     if (filters.length > 0) options.filters = filters;
-    return { plugin: 'transcode', options, optionsJson: JSON.stringify(options) };
+    return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
   }
-  return { plugin: 'video', options, optionsJson: JSON.stringify(options) };
+  return {plugin: 'video', options, optionsJson: JSON.stringify(options)};
 }
 
 /**

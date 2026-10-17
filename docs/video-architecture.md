@@ -1,6 +1,6 @@
 # 视频剪辑能力：调研与架构提案（feat/video-editing）
 
-日期：2026-10-17。状态：**P0–P3b 已落地**（长期分支推进，合入主干前需 ROADMAP 立项，见 §6-Q5）。
+日期：2026-10-17。状态：**P0–P3c 已落地**（长期分支推进，合入主干前需 ROADMAP 立项，见 §6-Q5）。
 本文是 `feat/video-editing` 长期分支的第一份产出，后续设计/实现以本文为基线演进。
 
 结论先行：**视频剪辑可以进 Weizhi 生态，但 heavy 代码必须以签名插件 SO 形态存在，JS 只做编排；
@@ -207,7 +207,7 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 | P1 ✅（2026-10-17） | 内置插件注册（`weizhi_register_bundled_plugin` + SO 内嵌 `weizhi_plugin_manifest`，§2.2 落地）；`:weizhi-video` 模块（独立 AAR，`libweizhivideo.so` **61KB**，远低于 512KB 预算）；`weizhi_video` 插件：NDK `AMediaExtractor`/`AMediaMuxer` 无重编码 remux——`probe`（轨道/时长元数据）+ `open_job/run_job/close_job`（掐头去尾 + 拼接，mime 映射跨 clip 复用 muxer 轨道，进度 cb + 取消自清理） | 桌面全量（含 ASan）绿；真机 `WeizhiVideoInstrumentedTest`：MediaCodec 生成确定性 all-intra 夹具 → JS 端到端 probe/trim(200–800ms)/concat → 输出时长/轨道断言通过 |
 | P2 ✅（2026-10-17） | `weizhi_transcode` 重编码导出插件（Q4 拆分的第二个逻辑插件，`libweizhitranscode.so` 82KB）：`AMediaCodec` 解码 → **encoder 输入 Surface 隧道**（帧零拷贝、不经 CPU/YUV 布局）→ `AMediaCodec` 编码 → `AMediaMuxer`；掐头去尾经 `releaseOutputBufferAtTime` 改写 PTS（纳秒），音频独立 extractor 直通不重编码；码率/帧率可配；缩放守卫报 `unsupported: scaling (P3)`；取消自清理删输出。`WeizhiVideo.install` 注册双插件（remux+transcode，共 144KB） | 真机 `WeizhiTranscodeInstrumentedTest` 3/3：剪辑+拼接重编码时长断言、缩放守卫、长任务取消（<15s 退出且无残留文件）；全量 22/22；桌面含 ASan 绿。顺手修复：`weizhi_video` 的 `AMediaFormat` 所有权泄漏（NDK `getTrackFormat`/`getOutputFormat` 需调用方 delete）；`build-android.sh` 平台级别对齐 minSdk 26 |
 | P3a ✅（2026-10-17） | `weizhi:video` JS 编排包（`video@0.1.0`，随 `:app` assets 内置、`syncBundled` 安装）：`buildJob(spec)` 把时间线 DSL（clips 剪辑点 / output / bitrate·width·height·fps / filters 预设或自定义 `{shader, uniforms}` / reencode 开关）编译成插件作业并做英文错误校验；`exportVideo(spec)` 端到端驱动 `video`/`transcode` 插件（进度回调透传）。无 video 参数默认走 remux；native 侧对 filters 明确报 `unsupported: filter (GPU path lands in P3b)`（不做静默丢弃）。包源码经 CMake 嵌入生成测试头，单一真源 | 桌面 `test_weizhi_video_package`（编译器输出精确断言 + 校验错误 + 无 native 提示）；真机 `WeizhiVideoPackageInstrumentedTest`：包导入→重编码导出（时长/进度）→ remux 路径→ filters 守卫全过；全量 23/23 |
-| P3b ✅（2026-10-17） | GL 滤镜与缩放路径打通：EGL 离屏（ES2 + `EGL_RECORDABLE_ANDROID`）+ `AImageReader`(PRIVATE, `GPU_SAMPLED_IMAGE`) → OES 纹理 → 用户 shader → 编码器输入表面（`eglPresentationTimeANDROID` 送 PTS）；预设/自定义滤镜与缩放执行 P3a 预留的 filters 契约。两项根因修复见下方「P3b 根因记录」 | 真机 **27/27 全绿**（含 `scaleViaPackage` 320x240→176x144 分辨率断言、`brightnessPixelShift` Y 均值 +17 像素断言）；桌面含 ASan 绿；`GlEncoderProbeInstrumentedTest` 常驻记录设备 GL 编码能力。**遗留**：LUT/转场未做；多滤镜链仍守卫报错（一 job 一滤镜） |
+| P3b ✅（2026-10-17） | GL 滤镜与缩放路径打通：EGL 离屏（ES2 + `EGL_RECORDABLE_ANDROID`）+ `AImageReader`(PRIVATE, `GPU_SAMPLED_IMAGE`) → OES 纹理 → 用户 shader → 编码器输入表面（`eglPresentationTimeANDROID` 送 PTS）；预设/自定义滤镜与缩放执行 P3a 预留的 filters 契约。两项根因修复见下方「P3b 根因记录」 | 真机 **27/27 全绿**（含 `scaleViaPackage` 320x240→176x144 分辨率断言、`brightnessPixelShift` Y 均值 +17 像素断言）；桌面含 ASan 绿；`GlEncoderProbeInstrumentedTest` 常驻记录设备 GL 编码能力。**遗留**：LUT/转场已随 P3c 落地；多滤镜链仍守卫报错（一 job 一滤镜） |
 
 ### P3b 根因记录（2026-10-17，编码器报错已解）
 
@@ -233,9 +233,15 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 测试语义注记：YUV 亮度断言受 limited-range 往返衰减（`(Y-16)*(1+amount)+16`），默认 amount 0.2 在
 luma-50 夹具上只有 +6.8，`brightnessPixelShift` 现用 amount 0.5（期望 +17，阈值 >10）。
 
+**glFinish 与 fence 的决策（2026-10-17）**：swap 后的每帧 `glFinish()` 保留。它正是 AImage 归还竞态
+的修复本身，且真机行为已验证；换成 EGL 同步 fence 只省每帧一次 CPU↔GPU 全量同步的开销，导出 30fps
+场景下每帧成本在亚毫秒级、总开销可忽略，不值得为这点收益重新触碰刚修稳的归还路径。等真出现
+高帧率/4K 导出的性能诉求再做 fence 化。
+
 P3b 改动文件：`plugins/weizhi_transcode/weizhi_transcode.c`、
 `android/app/src/androidTest/java/com/weizhi/{WeizhiTranscodeInstrumentedTest,GlEncoderProbeInstrumentedTest}.java`。
 构建：`./scripts/build-android.sh arm64-v8a`；单测：`cd android && ./gradlew :app:connectedDebugAndroidTest`。
+| P3c ✅（2026-10-17） | LUT 与 fade 转场（补 P3b 遗留）：`filters:[{type:'lut',params:{path,amount}}]`——插件按 fs 沙箱解析 Adobe/IRIDAS `.cube` 3D LUT（2..64 格）并上传为 N×N² 2D 纹理（unit 1；native 绑定 `uLut`/`uLutSize`，JS 预设 GLSL 做跨 slice 三线性插值）；`transitions:{type:'fade',durationMs}`（单对象广播到全部边界；数组须恰为 clips.length-1 项）编译为每 clip `fadeInMs/fadeOutMs`，native 用 GL 常量色混合（`GL_CONSTANT_COLOR`）逐帧衰减——与滤镜 shader 完全正交、可任意组合。语义：fade 只发生在 clip 边界（时间线首尾不淡出）、只影响视频（音频直通不变）；时长越界报 `unsupported: transition longer than clip`。包升至 `video@0.3.0` | 桌面 `test_weizhi_video_package`（lut/转场编译精确断言 + 6 类校验错误）与含 ASan 全量绿；真机 `lutPixelMap`（常量白 LUT→Y≈235、恒等 LUT 不变色）、`fadeTransitionBoundary`（两侧边界帧 Y<40、clip 中段与时间线尾 Y∈[45,75]）通过，全量 **29/29** |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
 
 P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 MediaExtractor/MediaMuxer，
