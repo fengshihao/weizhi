@@ -23,6 +23,7 @@
 #define WEIZHI_JOB_SHA256 1
 #define WEIZHI_MAX_PLUGIN_ARGS 8
 #define WEIZHI_MAX_PLUGIN_EXPORTS 32
+#define WEIZHI_MAX_BUNDLED_PLUGINS 8
 #define WEIZHI_MAX_CBS 64
 #define WEIZHI_TY_I32 1
 #define WEIZHI_TY_I64 2
@@ -124,6 +125,10 @@ struct WeizhiEngine {
     void *native_ud;
     char *plugin_dir;
     WeizhiLoadedPlugin *plugins;
+    /* Bundled plugins (Android nativeLibraryDir): name -> dlopen filename (soname or path). */
+    char *bundled_names[WEIZHI_MAX_BUNDLED_PLUGINS];
+    char *bundled_sonames[WEIZHI_MAX_BUNDLED_PLUGINS];
+    int bundled_count;
     WeizhiCbSlot cbs[WEIZHI_MAX_CBS];
     WeizhiCbEvent cb_queue[WEIZHI_MAX_PENDING];
     int cb_queue_len;

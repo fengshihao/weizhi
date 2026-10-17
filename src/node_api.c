@@ -2488,6 +2488,7 @@ typedef int32_t (*weizhi_fn_i_cb_i)(int32_t, uint32_t);
 /* IDL v2 stubs: str args/returns (UTF-8; plugin returns malloc'd, engine frees),
    i64 session handles, cb(s: str) progress callbacks (same-call scoped). */
 typedef char *(*weizhi_fn_s_s)(const char *);
+typedef int64_t (*weizhi_fn_s_l)(const char *);
 typedef int64_t (*weizhi_fn_is_l)(int32_t, const char *);
 typedef char *(*weizhi_fn_l_cbs_s)(int64_t, uint32_t);
 typedef void (*weizhi_fn_l_v)(int64_t);
@@ -2652,6 +2653,23 @@ static JSValue js_typed_export_call(JSContext *ctx, JSValueConst this_val, int a
         JS_FreeCString(ctx, in);
         result = JS_NewString(ctx, out != NULL ? out : "");
         free(out);
+    } else if (ex->nargs == 1 && ex->args[0] == WEIZHI_TY_STR && ex->ret == WEIZHI_TY_I64) {
+        const char *in = NULL;
+        int64_t handle;
+        if (argc < 1 || !JS_IsString(argv[0])) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return weizhi_throw_bad_arg(ctx, export_name, "expected (string)");
+        }
+        in = JS_ToCString(ctx, argv[0]);
+        if (in == NULL) {
+            JS_FreeCString(ctx, plugin_name);
+            JS_FreeCString(ctx, export_name);
+            return JS_EXCEPTION;
+        }
+        handle = ((weizhi_fn_s_l)ex->fn)(in);
+        JS_FreeCString(ctx, in);
+        result = JS_NewInt64(ctx, handle);
     } else if (ex->nargs == 2 && ex->args[0] == WEIZHI_TY_I32 && ex->args[1] == WEIZHI_TY_STR &&
                ex->ret == WEIZHI_TY_I64) {
         int32_t count = 0;

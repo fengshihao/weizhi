@@ -97,6 +97,14 @@ void weizhi_set_native(WeizhiEngine *engine, WeizhiNativeEnsureFn ensure_fn, Wei
                        void *userdata);
 /* Built-in typed loader (dlopen + IDL manifest). See docs/NATIVE_PLUGIN_IDL.md. */
 int weizhi_enable_plugin_loader(WeizhiEngine *engine, const char *plugin_dir);
+/*
+ * Register a bundled plugin (Android nativeLibraryDir; desktop absolute path also works).
+ * soname is the exact dlopen filename, e.g. "libweizhivideo.so". The SO must export
+ * const char *weizhi_plugin_manifest(void) returning its manifest JSON
+ * (scripts/weizhi-bindgen.py generates weizhi_<name>_manifest.h for this).
+ * ensureNative resolves bundled registrations before the plugin dir.
+ */
+int weizhi_register_bundled_plugin(WeizhiEngine *engine, const char *name, const char *soname);
 void weizhi_complete(WeizhiEngine *engine, int64_t request_id, int ok, const WeizhiBytes *out, const char *error);
 /* 1 when that async request is missing or already completed (including abort). */
 int weizhi_pending_is_done(WeizhiEngine *engine, int64_t request_id);

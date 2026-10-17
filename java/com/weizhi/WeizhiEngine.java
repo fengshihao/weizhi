@@ -198,6 +198,20 @@ public final class WeizhiEngine implements AutoCloseable {
     }
 
     /**
+     * Register a bundled plugin that ships inside an AAR's {@code nativeLibraryDir}
+     * (Android 10+ forbids dlopen from app-writable dirs, so bundled SOs are the
+     * supported delivery there). {@code soname} is the exact dlopen filename,
+     * e.g. {@code "libweizhivideo.so"}; the SO must export
+     * {@code weizhi_plugin_manifest()}. Afterwards {@code host.ensureNative(name)}
+     * resolves it without any plugin dir. Call while idle.
+     */
+    public void registerBundledPlugin(String name, String soname) {
+        if (nativeRegisterBundledPlugin(nativeHandle, name, soname) != 0) {
+            throw new IllegalArgumentException("registerBundledPlugin failed");
+        }
+    }
+
+    /**
      * Install the single sync host entry {@code __caps(args)} used by a platform object.
      * Call while idle (before or between {@code runJs}). The Java callback may be replaced later;
      * the native binding is installed once per engine.
@@ -801,6 +815,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private native void nativeInstallJavaNative(long handle);
 
     private static native int nativeEnablePluginLoader(long handle, String pluginDir);
+
+    private static native int nativeRegisterBundledPlugin(long handle, String name, String soname);
 
     private native int nativeInstallHostCall(long handle);
 

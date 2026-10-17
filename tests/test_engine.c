@@ -1439,6 +1439,42 @@ static void *cancel_thread(void *arg) {
     return NULL;
 }
 
+/* Bundled (soname) registration: loads without any plugin dir, manifest from the SO. */
+static void test_bundled_plugin_loader(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char soname[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(soname, sizeof(soname), "%s/plugins/echo_video/libecho_video%s", root,
+#ifdef __APPLE__
+             ".dylib"
+#else
+             ".so"
+#endif
+    );
+    EXPECT(weizhi_register_bundled_plugin(engine, "echo_video", soname) == 0);
+    /* Bundled wins even with no plugin dir configured at all. */
+    result = weizhi_run_js(engine,
+                           "const b = await host.ensureNative('echo_video');"
+                           "const meta = JSON.parse(b.probe_media('x'));" /* no fs root: resolve error */
+                           "const id = b.open_session(4, '{}');"
+                           "const r = JSON.parse(b.run_session(id, () => {}));"
+                           "b.close_session(id);"
+                           "({name: b.name, resolveErr: meta.error, cancelled: r.cancelled,"
+                           "  frames: r.frameCount})",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"name\":\"echo_video\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "workspace not set") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"cancelled\":false") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"frames\":4") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
 /* cancel_poll: a cancelled runJs must exit the plugin's long loop promptly. */
 static void test_echo_video_cancel(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
@@ -1696,6 +1732,7 @@ int main(void) {
     test_native_ensure_mock();
     test_typed_plugin_loader();
     test_echo_video_plugin();
+    test_bundled_plugin_loader();
     test_echo_video_cancel();
     test_zlib_roundtrip();
     test_zip_roundtrip();

@@ -8,6 +8,7 @@
  * Frames are synthetic and deterministic (FNV-1a over frame indices); no media stack.
  */
 #include "weizhi_echo_video_api.h"
+#include "weizhi_echo_video_manifest.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,11 @@ typedef struct EchoVideoSession {
 
 static WeizhiPluginHost g_host;
 static EchoVideoSession g_sessions[ECHO_VIDEO_MAX_SESSIONS];
+
+/* Bundled (soname) loading: no manifest.json next to the .so, so self-describe. */
+WEIZHI_PLUGIN_EXPORT const char *weizhi_plugin_manifest(void) {
+    return WEIZHI_PLUGIN_MANIFEST_JSON;
+}
 
 WEIZHI_PLUGIN_EXPORT int weizhi_plugin_init(WeizhiPluginHost *host) {
     if (host == NULL) {
