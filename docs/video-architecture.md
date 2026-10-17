@@ -203,7 +203,7 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| P0 | IDL v2（str、句柄规范、cb 扩展、cancel_poll）+ `echo_video` 概念验证插件（纯 C 合成流，仅桌面 CI 测试替身，见 §2.1） | 桌面 test.sh 绿；真机加载成功 |
+| P0 ✅（2026-10-17） | IDL v2（str、i64 句柄约定、`cb(s: str)`、cancel_poll，`WEIZHI_HOST_ABI_VERSION`→2）+ `echo_video` 概念验证插件（纯 C 合成流，桌面 CI 测试替身，见 §2.1）。落地含两项顺手修复：引擎 drain 后取消复检（§P0 记录）、`zip_api` read_u32 UB + ASan 门禁环境变量 | 桌面 `./scripts/test.sh` 全绿（含 ASan）；真机 18/18 用例通过（仅主干既有的 `workspaceRelativeImport` 在 Android 16 真机失败，与本特性无关） |
 | P1 | loader 支持内置插件（soname dlopen + 内嵌 manifest，§2.2）；`libweizhivideo.so` 进 AAR；NDK `libmediandk` 硬件管线：`AMediaExtractor`→`AMediaMuxer` 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
 | P2 | 重编码导出：`AMediaCodec` 解码→（CPU/EGL 变换）→`AMediaCodec` 编码→`AMediaMuxer`；进度 cb + cancel | 真机黄金样本 hash 断言 |
 | P3 | `weizhi:video` JS 包：Timeline/Filter DSL；GPU 滤镜（AGSL/EGL 离屏）；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
@@ -229,15 +229,18 @@ P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 Me
 - **D-交付**（2026-10-17）：安卓内置独立 SO，ensureNative 保留、内置表优先（§2.2）；
   下载目录仅桌面 CLI。
 - **D-数据面**（2026-10-17）：安卓 NDK 系统媒体栈（`libmediandk`），不自研 FFmpeg（§2.1）。
+- **Q1 已定**：句柄用 **i64 约定**（`0` 恒为非法句柄，插件在返回 JSON 中报 `error`），
+  已随 IDL v2 落地（`docs/NATIVE_PLUGIN_IDL.md` §2.1）。
+- **Q2 已定**：长任务取消用 **`cancel_poll` 轮询**（真机/桌面验证体验足够；
+  异步 fn + complete 通道暂不引入）。落地时发现并修复引擎一处取消漏检：
+  `weizhi_await_value` 在 microtask drain 期间发生的取消会被同一 job 的 settle 掩盖
+  （`src/engine.c`，现于 drain 后复检；`test_echo_video_cancel` 覆盖）。
 
 待拍板：
 
-- **Q1** IDL v2 是否引入显式 `handle` 类型（还是 i64 约定 + 文档规范）？
-  倾向：i64 约定，零引擎改动的一部分。
-- **Q2** 长导出的取消语义：插件轮询 `cancel_poll`（简单）vs 异步 fn + complete（完整但动引擎）？
-  倾向：P0 先轮询，真机验证体验后再定。
 - **Q3** 媒体文件路径授权：插件直接吃沙箱绝对路径，还是复用 fs_root 相对路径语义？
-  涉及安全边界（插件不受引擎沙箱约束），需要在 P0 定。
+  涉及安全边界（插件不受引擎沙箱约束）。P0 的 `echo_video.probe_media` 刻意不碰文件系统，
+  该问题必须在 P1 定。
 - **Q4** 插件拆分粒度：`weizhi_video` 单插件（需提高导出上限）vs 按功能拆多插件？
   倾向按功能拆，不动 32 上限。
 - **Q5** 与 ROADMAP 的关系：视频不在当前路线图（近期焦点是 Agent 集成）；
