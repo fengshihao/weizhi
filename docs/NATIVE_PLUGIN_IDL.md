@@ -79,8 +79,8 @@ Android 10+/targetSdk 29+ 禁止 dlopen app 可写目录（HOST_ABI §4 的目�
 - SO 必须导出 `const char *weizhi_plugin_manifest(void)` 返回 manifest JSON——
   `scripts/weizhi-bindgen.py` 生成 `weizhi_<name>_manifest.h`（`WEIZHI_PLUGIN_MANIFEST_JSON`）
   供插件 `#include` 后直接返回。
-- 模块形态参考 `:weizhi-video`（独立 AAR，`jniLibs/arm64-v8a/libweizhivideo.so`，
-  `WeizhiVideo.install(engine)` 一行接线）。
+- 模块形态参考 `:weizhi-video`（独立 AAR，含 `libweizhivideo.so`（remux）与
+  `libweizhitranscode.so`（重编码）两个逻辑插件的 SO，`WeizhiVideo.install(engine)` 一行接线）。
 
 ### 2.3 工具
 

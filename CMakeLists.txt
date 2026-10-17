@@ -106,6 +106,19 @@ if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
         OUTPUT_NAME "weizhivideo"
         PREFIX "lib"
     )
+
+    # P2: re-encoding export (decoder -> encoder surface tunnel -> muxer).
+    add_library(weizhi_transcode SHARED
+        plugins/weizhi_transcode/weizhi_transcode.c
+        plugins/weizhi_transcode/wtjson.c
+    )
+    target_include_directories(weizhi_transcode PRIVATE include plugins/weizhi_transcode/generated)
+    target_compile_options(weizhi_transcode PRIVATE -fvisibility=hidden)
+    target_link_libraries(weizhi_transcode mediandk android)
+    set_target_properties(weizhi_transcode PROPERTIES
+        OUTPUT_NAME "weizhitranscode"
+        PREFIX "lib"
+    )
 endif()
 
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.

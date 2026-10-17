@@ -205,8 +205,8 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 | --- | --- | --- |
 | P0 ✅（2026-10-17） | IDL v2（str、i64 句柄约定、`cb(s: str)`、cancel_poll，`WEIZHI_HOST_ABI_VERSION`→2）+ `echo_video` 概念验证插件（纯 C 合成流，桌面 CI 测试替身，见 §2.1）。落地含两项顺手修复：引擎 drain 后取消复检（§P0 记录）、`zip_api` read_u32 UB + ASan 门禁环境变量 | 桌面 `./scripts/test.sh` 全绿（含 ASan）；真机 18/18 用例通过（仅主干既有的 `workspaceRelativeImport` 在 Android 16 真机失败，与本特性无关） |
 | P1 ✅（2026-10-17） | 内置插件注册（`weizhi_register_bundled_plugin` + SO 内嵌 `weizhi_plugin_manifest`，§2.2 落地）；`:weizhi-video` 模块（独立 AAR，`libweizhivideo.so` **61KB**，远低于 512KB 预算）；`weizhi_video` 插件：NDK `AMediaExtractor`/`AMediaMuxer` 无重编码 remux——`probe`（轨道/时长元数据）+ `open_job/run_job/close_job`（掐头去尾 + 拼接，mime 映射跨 clip 复用 muxer 轨道，进度 cb + 取消自清理） | 桌面全量（含 ASan）绿；真机 `WeizhiVideoInstrumentedTest`：MediaCodec 生成确定性 all-intra 夹具 → JS 端到端 probe/trim(200–800ms)/concat → 输出时长/轨道断言通过 |
-| P2 | 重编码导出：`AMediaCodec` 解码→（CPU/EGL 变换）→`AMediaCodec` 编码→`AMediaMuxer`；进度 cb + cancel | 真机黄金样本 hash 断言 |
-| P3 | `weizhi:video` JS 包：Timeline/Filter DSL；GPU 滤镜（AGSL/EGL 离屏）；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
+| P2 ✅（2026-10-17） | `weizhi_transcode` 重编码导出插件（Q4 拆分的第二个逻辑插件，`libweizhitranscode.so` 82KB）：`AMediaCodec` 解码 → **encoder 输入 Surface 隧道**（帧零拷贝、不经 CPU/YUV 布局）→ `AMediaCodec` 编码 → `AMediaMuxer`；掐头去尾经 `releaseOutputBufferAtTime` 改写 PTS（纳秒），音频独立 extractor 直通不重编码；码率/帧率可配；缩放守卫报 `unsupported: scaling (P3)`；取消自清理删输出。`WeizhiVideo.install` 注册双插件（remux+transcode，共 144KB） | 真机 `WeizhiTranscodeInstrumentedTest` 3/3：剪辑+拼接重编码时长断言、缩放守卫、长任务取消（<15s 退出且无残留文件）；全量 22/22；桌面含 ASan 绿。顺手修复：`weizhi_video` 的 `AMediaFormat` 所有权泄漏（NDK `getTrackFormat`/`getOutputFormat` 需调用方 delete）；`build-android.sh` 平台级别对齐 minSdk 26 |
+| P3 | `weizhi:video` JS 包（Timeline/Filter DSL）；EGL 离屏 + GLSL 滤镜与缩放；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
 
 P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 MediaExtractor/MediaMuxer，
