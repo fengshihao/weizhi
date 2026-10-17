@@ -132,8 +132,8 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
    IDL、typed stub、refcount、L3 JS 包全部复用；将来侧载渠道或政策变化可恢复下发。
 3. **「新能力 JS 下发」愿景的边界**：新滤镜/新编排 = JS 下发 Shader 字符串与参数
    （插件接口通用），**仍可热更**；只有新容器格式/新编码器这类 native 变化才需发版。
-4. 内置插件的 manifest 来源：SO 导出 `weizhi_plugin_init` 时自述（loader 已有该钩子，
-   `src/plugin_loader.c:433`），或随 AAR assets 附 manifest.json——P1 实现时定。
+4. 内置插件的 manifest 来源（P1 已定）：SO 导出 `weizhi_plugin_manifest()` 返回
+   manifest JSON（bindgen 生成 `weizhi_<name>_manifest.h`，见 NATIVE_PLUGIN_IDL §2.2）。
 
 ---
 
@@ -204,7 +204,7 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | P0 ✅（2026-10-17） | IDL v2（str、i64 句柄约定、`cb(s: str)`、cancel_poll，`WEIZHI_HOST_ABI_VERSION`→2）+ `echo_video` 概念验证插件（纯 C 合成流，桌面 CI 测试替身，见 §2.1）。落地含两项顺手修复：引擎 drain 后取消复检（§P0 记录）、`zip_api` read_u32 UB + ASan 门禁环境变量 | 桌面 `./scripts/test.sh` 全绿（含 ASan）；真机 18/18 用例通过（仅主干既有的 `workspaceRelativeImport` 在 Android 16 真机失败，与本特性无关） |
-| P1 | loader 支持内置插件（soname dlopen + 内嵌 manifest，§2.2）；`libweizhivideo.so` 进 AAR；NDK `libmediandk` 硬件管线：`AMediaExtractor`→`AMediaMuxer` 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
+| P1 ✅（2026-10-17） | 内置插件注册（`weizhi_register_bundled_plugin` + SO 内嵌 `weizhi_plugin_manifest`，§2.2 落地）；`:weizhi-video` 模块（独立 AAR，`libweizhivideo.so` **61KB**，远低于 512KB 预算）；`weizhi_video` 插件：NDK `AMediaExtractor`/`AMediaMuxer` 无重编码 remux——`probe`（轨道/时长元数据）+ `open_job/run_job/close_job`（掐头去尾 + 拼接，mime 映射跨 clip 复用 muxer 轨道，进度 cb + 取消自清理） | 桌面全量（含 ASan）绿；真机 `WeizhiVideoInstrumentedTest`：MediaCodec 生成确定性 all-intra 夹具 → JS 端到端 probe/trim(200–800ms)/concat → 输出时长/轨道断言通过 |
 | P2 | 重编码导出：`AMediaCodec` 解码→（CPU/EGL 变换）→`AMediaCodec` 编码→`AMediaMuxer`；进度 cb + cancel | 真机黄金样本 hash 断言 |
 | P3 | `weizhi:video` JS 包：Timeline/Filter DSL；GPU 滤镜（AGSL/EGL 离屏）；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |

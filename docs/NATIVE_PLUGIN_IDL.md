@@ -68,7 +68,21 @@ v2 增补（HOST_ABI 2，2026-10-17，随 `echo_video` 落地）：
 - 旧引擎（HOST_ABI 1）加载 `min_host_abi 2` 的插件会按既有规则拒绝
   （`native incompatible: min_host_abi 2 > host 1`）。
 
-### 2.2 工具
+### 2.2 内置（bundled）交付
+
+Android 10+/targetSdk 29+ 禁止 dlopen app 可写目录（HOST_ABI §4 的目录下发在安卓不可行），
+插件可改为**随 AAR 内置**、按 soname 合法加载：
+
+- 引擎：`weizhi_register_bundled_plugin(engine, name, soname)` / Java
+  `WeizhiEngine.registerBundledPlugin(name, soname)`。`soname` 是 dlopen 文件名
+  （如 `libweizhivideo.so`；桌面测试也可传绝对路径）；`ensureNative` 先查内置表再回落插件目录。
+- SO 必须导出 `const char *weizhi_plugin_manifest(void)` 返回 manifest JSON——
+  `scripts/weizhi-bindgen.py` 生成 `weizhi_<name>_manifest.h`（`WEIZHI_PLUGIN_MANIFEST_JSON`）
+  供插件 `#include` 后直接返回。
+- 模块形态参考 `:weizhi-video`（独立 AAR，`jniLibs/arm64-v8a/libweizhivideo.so`，
+  `WeizhiVideo.install(engine)` 一行接线）。
+
+### 2.3 工具
 
 `scripts/weizhi-bindgen.py`：
 
