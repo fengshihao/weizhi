@@ -10,12 +10,12 @@
 | [AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) | **整段复制进 Agent 系统提示**（脚本作者契约） |
 | [MODULE_LOADING.md](MODULE_LOADING.md) | **模块加载两条规则**（给 AI：`require` 内置 + `import` 自建库） |
 | [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) | 官方 Package：`weizhi:` 导入、本地安装、Registry ensure |
-| [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | 工具环模块划分与路线图 |
+| [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md) | **已废弃（历史方案）**：模型工具已移出本仓库 |
 | [DECISIONS.md](DECISIONS.md) | 限额、错误关键词、分层边界 |
 | [ROADMAP.md](ROADMAP.md) | 产品方向；近期重点是 Agent 集成 |
 | [HOST_ABI.md](HOST_ABI.md) / [NATIVE_PLUGIN_IDL.md](NATIVE_PLUGIN_IDL.md) | 签名原生插件 |
 | [QUICKJS_LIB_COMPAT.md](QUICKJS_LIB_COMPAT.md) | 第三方 JS 库能不能塞进脚本 |
-| **[office.md](office.md)** | **docx/pptx 不在本仓库**；引擎只保证 `zip` / `fs` / `setScriptFolder` |
+| **[office.md](office.md)** | **docx/pptx 不在本仓库**；引擎只保证 `zip` / `fs` / `weizhi:` Package（`setPackageRoot`） |
 
 ---
 
@@ -40,7 +40,7 @@
 | `import "weizhi:<name>"` | `setPackageRoot` + `packages-index.json` 当前版本 |
 | `runJs(..., filename)` | `filename` 为 workspace 逻辑路径（建议相对，如 `jobs/run.js`），供 `./` 解析 |
 | Caps `android.files.*` / `intent.start({ path })` | **仍**用 workspace 相对路径（与引擎 `fs` 策略独立） |
-| Agent 工具环 `read_file` 等 | `WorkspaceSandbox` 规则，见 [AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md) |
+| Agent 工具 `read_file` / grep / bash | **宿主实现**，不在本仓库（见 [AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)） |
 
 实现要点：C 层 `weizhi_resolve_workspace_path`；JNI 异步 `fs` 在 Java `resolveFsTarget` 对齐。未 `setFsRoot` 时 workspace 访问报 `workspace not set`。
 
@@ -105,8 +105,8 @@ workspace.mkdirs();
 
 try (WeizhiEngine engine = new WeizhiEngine()) {
     engine.setFsRoot(workspace.getAbsolutePath());
-    // 可选：脚本库目录（仅叶子 .js）
-    // engine.setScriptFolder(new File(context.getFilesDir(), "weizhi-lib").getAbsolutePath());
+    // 可选：官方 Package（runJs 前 PackageRegistryClient.ensureInstalled，见 WEIZHI_PACKAGES.md §7）
+    // engine.setPackageRoot(new File(context.getFilesDir(), "weizhi-home").getAbsolutePath());
 
     String json = engine.runJs("fs.writeFileSync('a.txt','hi'); fs.readFileSync('a.txt').toString()", 10_000);
     // json == "\"hi\""
@@ -154,7 +154,7 @@ try (WeizhiEngine engine = new WeizhiEngine()) {
 | `runJs(source)` / `runJs(source, timeoutMs)` | 跑脚本 | `timeoutMs==0` → 默认 10 分钟；**负** → 不按墙钟截断；成功返回 JSON 文本；失败 **抛** `RuntimeException` |
 | `cancel()` | 另一线程中止 | 错误含 `cancelled` |
 | `enableFetch()` / `enableFetch(suffixes)` | 开 `fetch` 与 `mcp` | 未开则错误提示 `enableFetch`；Android 需 `INTERNET` |
-| `setHostCall(HostCall)` / `getHostCall()` | Caps 用的 `__caps`；可链式包装 | `AndroidCaps.install` 内部会调；`run_js` 的 `$tools` 桥在 install 之后 chain |
+| `setHostCall(HostCall)` / `getHostCall()` | Caps 用的 `__caps`；可链式包装 | `AndroidCaps.install` 内部会调；宿主再包装时须在 install 之后链式接上 |
 | `enableNativePlugins(dir)` | 真 SO 插件目录 | 见 NATIVE_PLUGIN_IDL |
 | `enableNativeMock()` | 无 SO 联调 | 仅 mock 目录 |
 
@@ -200,23 +200,11 @@ open → setFsRoot → [ensureInstalled → setPackageRoot] → [AndroidCaps.ins
 → close
 ```
 
-### 4.1 Agent 工具环（第三方必读）
+### 4.1 模型工具（宿主职责）
 
-**完整步骤、工具表、Skill/WebView、LLM 对接与排错** → **[AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)**（本文只保留摘要）。
+**`run_js` / 行号读写 / grep / bash / WebView / Skill 全部由宿主实现**，本仓库不再发布 `:agent-tools` 或 `:agent-tools-webview`。历史方案见 [AGENT_TOOLS_PLAN.md](AGENT_TOOLS_PLAN.md)（已废弃），边界声明见 [AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)。
 
-| Gradle | 作用 |
-|--------|------|
-| 模型工具 | 不在本仓库。宿主自行实现 |
-
-检查清单补充：
-
-- [ ] `AgentToolsBundle` 的 `workspace` 与 `setFsRoot` / `AndroidCaps.Session.workspace` **同一路径**
-- [ ] `engineConfigure` 内 `AndroidCaps.install`（若脚本要 `android.*` 或 `$tools` 与 caps 共存）
-- [ ] Skill：`.compositeSkills(ctx, "agent_skills")` 或 `.defaultSkillsDir()`（`workspace/skills` 可写）
-- [ ] 把 `tk.exportSchemas()` 接到 LLM；tool 结果用 `tk.call(name, args)`，**勿吞 Error 文本**
-- [ ] 工具环调用在 **后台线程**（`bash` / `run_js` / `webview_exec`）
-
-模型侧工具名使用 **`run_js`**（不是 `execute_script`）。脚本内：`await $tools.grep({ pattern: "..." })`（白名单默认 = 已注册工具 − `run_js`）。
+宿主最小接线：注册一个把模型产出交给 `WeizhiEngine.runJs` 的工具（Agent1 现名 `execute_script`），工具名由宿主自定；超时与会话取消接到 `cancel()`。脚本失败时把完整英文 error 回传模型。
 
 ---
 
@@ -270,11 +258,10 @@ android.audit.recent()
 | `busy` / `again` | 并发/重入 `runJs` |
 | `cancelled` | 用户取消或 `cancel()`；**不要**用字符串误伤其它含 cancelled 的文案（引擎已按 flag 区分） |
 | `const` 重复声明 | 同引擎多次 `runJs` 共享全局；换名或新引擎 |
-| Agent 工具 `Error: unknown tool` | 未装可选 AAR 或扩展未 `.extension(...)` |
-| `$tools.xxx` 不可用 | 未装配 `AgentToolsBundle` / `xxx` 不在 `jsExposed` |
+| Agent 工具 `Error: unknown tool` | 工具在宿主实现；检查宿主自己的注册表 |
 | `mcp` 调用失败且含 `unsupported: fetch` | 先 `enableFetch()`；`mcp` 走与 `fetch` 相同的 HTTP |
 
-更多工具环问题见 [AGENT_TOOLS_INTEGRATION.md §12](AGENT_TOOLS_INTEGRATION.md#12-常见集成问题)。
+模型工具（grep / bash 等）由宿主实现与排错，边界见 [AGENT_TOOLS_INTEGRATION.md](AGENT_TOOLS_INTEGRATION.md)。
 
 ---
 

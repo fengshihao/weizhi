@@ -11,7 +11,7 @@
 
 <p align="center">
   Embedded <a href="https://bellard.org/quickjs/">QuickJS</a> (C + JNI): Release <code>libweizhijni.so</code> 经 strip 后约 <strong>1.1&nbsp;MB</strong>，只保留沙箱与 <code>runJs</code> 核心；<br />
-  需要时再叠 <code>:caps</code>、IDL 原生插件或脚本库。模型可见的工具由宿主实现，本仓库不提供。
+  需要时再叠 <code>:caps</code>、IDL 原生插件或官方 <code>weizhi:</code> Package（内置 + Registry 安装）。模型可见的工具由宿主实现，本仓库不提供。
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@
 | **沙箱与分层** | 引擎管 `fs` / 限额 / 内置模块。给模型的 grep、bash、行号编辑属于**宿主**（Agent1 在 `java-agent-core`），不进 C 核心 | Engine = sandbox + limits. Model-facing grep/bash/edit stay in the host, not in C |
 | **端上生产力** | `caps` 暴露 `android.files.*`、zip、分享、提醒等；脚本与 Agent 工具可薄包同一工作区 | `caps` bridge OS surfaces; workspace paths must align |
 | **小巧核心** | Release 引擎 SO 约 **1.1&nbsp;MB**（strip 后）；限额内跑沙箱脚本，不把 Node 级运行时塞进 APK | Stripped core ~1.1&nbsp;MB; bounded sandbox, not a full Node runtime |
-| **随心扩展** | 可选 AAR：<code>caps</code>；脚本内 <code>mcp</code>；IDL 签名 SO；<code>setScriptFolder</code> 脚本库。模型工具不在本仓库 | Optional caps, in-script mcp, IDL plugins. Model tools stay in the host |
+| **随心扩展** | 可选 AAR：<code>caps</code>；脚本内 <code>mcp</code>；IDL 签名 SO；官方 <code>weizhi:</code> Package（内置 + Registry 安装）。模型工具不在本仓库 | Optional caps, in-script mcp, IDL plugins, official <code>weizhi:</code> packages. Model tools stay in the host |
 | **面向 AI 集成** | 集成教程、沙盒系统提示；README 可复制**一句话**让其他智能体自行克隆与跑门禁 | Copy-paste prompts in [`docs/ai/START.md`](docs/ai/START.md) for any coding agent |
 
 ### 与 [Agent 1](https://github.com/fengshihao/agent1) 的关系
@@ -56,9 +56,9 @@
 | --- | --- | --- |
 | 定位 | 可复用的 QuickJS 引擎 + 可选 caps / 工具环 AAR | 产品级 Agent App：对话、授权、UI、编排 LLM |
 | 编程入口 | `WeizhiEngine.runJs`（唯一脚本 API） | `execute_script` 把脚本交给微智执行 |
-| 文件 / grep / bash | 引擎只提供沙箱 `fs` 和脚本内 `zip` | 模型工具全部在 Agent1，不从本仓库引入 |
+| 文件 / grep / bash | 引擎只提供沙箱 `fs`、脚本内 `zip` 与 `weizhi:` 官方包加载 | 模型工具全部在 Agent1，不从本仓库引入 |
 | 交付 | Maven / AAR（CI 产出 `weizhi-android-maven`） | `import-weizhi-prebuilt.sh` 拉预编译包联编，见 [INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md) |
-| Word / 幻灯片 | 提供 `zip`、`fs`、`setScriptFolder`，让宿主脚本能打 OOXML | 自带 `docx.js` / `pptx.js`、调用卡、Skill 与回归。见 [office.md](docs/office.md) |
+| Word / 幻灯片 | 提供 `zip`、`fs` 与官方 `weizhi:` Package，让宿主脚本能打 OOXML | 自带 `docx.js` / `pptx.js`、调用卡、Skill 与回归。见 [office.md](docs/office.md) |
 
 集成 Agent 1 时：**workspace 路径**必须与 `setFsRoot` / `AndroidCaps` 对齐；Java 与 `libweizhijni.so` **必须同一次发布**，勿只替换 SO。其他 Agent 产品也可只依赖微智引擎，不必 fork Agent 1。
 
@@ -138,6 +138,8 @@ cd android && ./gradlew :weizhi:assembleRelease :caps:assembleRelease
 | **[docs/INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md)** | **集成方 / AI 接入（引擎 + caps，从这里开始）** |
 | **[docs/AGENT_TOOLS_INTEGRATION.md](docs/AGENT_TOOLS_INTEGRATION.md)** | 说明模型工具不在本仓库 |
 | [docs/AGENT_SANDBOX_PROMPT.md](docs/AGENT_SANDBOX_PROMPT.md) | 复制进 Agent 系统提示的脚本契约 |
+| [docs/MODULE_LOADING.md](docs/MODULE_LOADING.md) | 模块加载两条规则（`import` 自建库 / `weizhi:<name>` 官方包） |
+| [docs/WEIZHI_PACKAGES.md](docs/WEIZHI_PACKAGES.md) | 官方 Package：`weizhi:` 导入、本地安装、Registry ensure |
 | [docs/ai/START.md](docs/ai/START.md) | **一句话让 AI 准备贡献环境** |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 已锁定设计与限额 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 产品方向与优先级 |
@@ -165,7 +167,7 @@ assets/                    # 品牌图标。Office 脚本在 Agent1
 **Weizhi (微智)** is a **compact, strict JS runtime** for on-device AI agents:
 
 - **~1.1&nbsp;MB stripped core** (`libweizhijni.so`) — sandbox, limits, single `runJs` entry.
-- **Extend on demand**: optional `caps`, in-script `mcp`, IDL native plugins, script folders. Model tools are not in this repo.
+- **Extend on demand**: optional `caps`, in-script `mcp`, IDL native plugins, official `weizhi:` packages (bundled + registry install). Model tools are not in this repo.
 - **[Agent 1](https://github.com/fengshihao/agent1)** is the reference host app; this repo is the engine layer it depends on (separate repos, Maven prebuilts).
 - **Integrator-friendly**: documented error tokens, AAR/Maven delivery — see [INTEGRATION_FOR_AI.md](docs/INTEGRATION_FOR_AI.md).
 

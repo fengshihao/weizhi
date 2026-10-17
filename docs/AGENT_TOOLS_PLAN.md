@@ -35,7 +35,7 @@ AgentToolkit tk = AgentToolsBundle.builder(workspace)
     .build();
 ```
 
-脚本里的 MCP 客户端见 [AGENT_TOOLS_INTEGRATION.md §9](AGENT_TOOLS_INTEGRATION.md#9-mcp-客户端)。
+脚本里的 MCP 客户端见 [DECISIONS.md](DECISIONS.md)（`mcp.connect` / `listTools` / `callTool` / `close`）。
 
 ## 4. 不在范围内
 

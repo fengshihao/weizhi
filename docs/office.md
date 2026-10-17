@@ -12,16 +12,16 @@ Word / PPT 是宿主侧脚本资产，**不在 Weizhi 引擎仓库里**。真源
 | 幻灯片 Skill | `agent-home/skills/pptx/SKILL.md` |
 | 回归 | `DocxOfficeIntegrationTest`、`PptxOfficeIntegrationTest` |
 
-只用 `:weizhi` + `:caps`、不接 Agent1 的集成方，不会随 AAR 得到这些脚本。需要时从 Agent1 拷贝上述 catalog（或自行维护一份与引擎 `import` 约定对齐的脚本包），再用 `setScriptFolder` 指向该目录。
+只用 `:weizhi` + `:caps`、不接 Agent1 的集成方，不会随 AAR 得到这些脚本。需要时把上述脚本打成 package zip（或自行维护一份与引擎 `import` 约定对齐的脚本包），用 `PackageInstaller` 安装到 weizhi-home 再 `setPackageRoot`（见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md) §7、§9）。
 
 ## Weizhi 继续保证的引擎能力
 
 Office 脚本依赖这些，并应保持稳定：
 
 - `import zip from "zip"`、`fs` / `fs.promises`、文本编解码
-- `setFsRoot`（工作区）与 `setScriptFolder`（catalog 单层叶子 `import "leaf.js"`；规划见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)）
+- `setFsRoot`（工作区）与 `setPackageRoot`（官方 Package：`import … from "weizhi:<name>"`；见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)）
 - caps 的 `files.zipExtract` / `files.zipCreate`（可选）
 
-引擎门禁只做最小冒烟：空模块加载 + zip 往返（`CatalogSmokeTest`）。完整 OOXML 回归在 Agent1。
+引擎门禁只做最小冒烟：空模块加载 + zip 往返（`PackageSmokeTest`）。完整 OOXML 回归在 Agent1。
 
 引擎侧没有 Java `host.office`。xlsx / PDF 未实现。

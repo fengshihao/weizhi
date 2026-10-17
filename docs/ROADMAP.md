@@ -1,6 +1,6 @@
 # Weizhi roadmap（安卓编程智能体）
 
-日期：2026-09-25。与 [DECISIONS.md](DECISIONS.md)、[AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) 配套。  
+日期：2026-10-17。与 [DECISIONS.md](DECISIONS.md)、[AGENT_SANDBOX_PROMPT.md](AGENT_SANDBOX_PROMPT.md) 配套。  
 本文是**方向与优先级**，不是当前实现清单；未勾选的项默认未做。
 
 ## 产品目标
@@ -35,7 +35,7 @@
 
 ### 技能库（App 决定，须可写）
 
-- **位置由 Agent App 决定**（通常是应用私有目录），告知引擎/caps 即可（例如挂成工作区子树，或单独 `setScriptFolder` / 技能根）。
+- **位置由 Agent App 决定**（通常是应用私有目录），告知引擎/caps 即可（例如挂成工作区子树，或 App 自行约定的技能根目录）。
 - 必须让 AI **可写**，否则无法自行创建 Skill。
 - 技能如何命名、何时归档、如何索引：**App / Agent 策略**；引擎只负责能 `import './….js'` 跑起来（见 [MODULE_LOADING.md](MODULE_LOADING.md)）。
 
@@ -48,7 +48,7 @@
 ## 脚本复用（方向）
 
 - 引擎：稳定相对模块加载（按需扩展多级路径）；技能以普通文件存在磁盘上。
-- **官方 JS 库**：catalog（`setScriptFolder`）计划归并为 **Weizhi Package**（内置 + 可下载、统一 manifest）；见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（**提案，未实现**）。
+- **官方 JS 库**：已归并为 **Weizhi Package**（内置 + Registry 可下载、统一 manifest，`import … from "weizhi:<name>"`）；旧 catalog / `setScriptFolder` 已移除。见 [WEIZHI_PACKAGES.md](WEIZHI_PACKAGES.md)（P1/P3 已实现）。
 - Agent：总结本轮成果 → 写入技能目录 → 后续 `import` / `runJs` 薄入口调用。
 - **不**在引擎里做「自动记忆」；复用 = 文件系统 + 模块系统。
 
@@ -77,7 +77,7 @@
 
 ## 近期优先级（当前焦点）
 
-1. **把 Agent 准备好并与 Weizhi 集成**（主路径）：工作区接线、`runJs` / caps、`run_js` 工具、现有 Agent 文件工具对 Weizhi 沙箱。接入步骤见 [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
+1. **Agent 集成**（主路径，进行中）：引擎侧入口已稳定（`runJs` / caps / 沙箱 / `weizhi:` Package）；`run_js` 等模型工具与文件工具环属宿主（Agent1 `java-agent-core`），不在本仓库。接入步骤见 [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 2. 双根只读、技能目录约定、多级 import、快照 VCS：**写入路线图，不阻塞集成**；集成稳定后再按需开做。
 
 ## 迭代建议（集成之后）

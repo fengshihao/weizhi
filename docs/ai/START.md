@@ -3,7 +3,7 @@
 ## 给人看的两步
 
 1. **准备环境**：把下面「复制给 AI」发给 Cursor / Claude / 其他编码智能体（不必自己装 NDK）。
-2. **再说意图 + 验收**：环境就绪后说明要改什么；确认 `./scripts/test.sh`（及需要的 android / office 测试）通过后再开 PR。
+2. **再说意图 + 验收**：环境就绪后说明要改什么；确认 `./scripts/test.sh`（及需要的 android 测试）通过后再开 PR。
 
 ---
 
@@ -51,7 +51,7 @@ I want to contribute: 〈one scoped change〉. Follow AGENTS.md and docs/ai/CHEC
 WEIZHI_SKIP_ASAN=1 ./scripts/test.sh
 # 若改了 android/、jni/、java/：
 ./scripts/test.sh android
-# Office 脚本不在本仓库。引擎冒烟含在 test.sh 的 CatalogSmokeTest。
+# Office 脚本不在本仓库。引擎冒烟含在 test.sh 的 PackageSmokeTest。
 ```
 
 细则：[CHECKLIST.md](./CHECKLIST.md) · [PR_PLAYBOOK.md](./PR_PLAYBOOK.md)

@@ -83,7 +83,7 @@ Script return values are always text (JSON). Image bytes go through host functio
 - `fs.promises.unlink` deletes one file (`delete failed` if missing). `fs.promises.readdir` returns a sorted array of names (`not a directory` on a file; entry cap 10000). `fs.promises.stat` returns `{ size, isFile, isDirectory, mtimeMs }` (`file not found` if missing). Not a Node `Stats` object.
 - Web subset used by agents: `TextEncoder` / `TextDecoder` (UTF-8), `btoa` / `atob` (Latin-1), `URL` / `URLSearchParams`, `crypto.getRandomValues` / `crypto.randomUUID`, `crypto.subtle.digest('SHA-256')` (async, returns `ArrayBuffer`; other subtle methods throw `unsupported`), `AbortController` / `AbortSignal` for `fetch`, `Promise.withResolvers`. `Buffer` is a `Uint8Array` subclass (`buf instanceof Uint8Array`, indexable). `Buffer.from` / `toString` accept `utf8`, `hex`, and `base64`; `Buffer.alloc` / `Buffer.isBuffer` exist. `Blob` / `FormData` are available for `fetch` bodies. No `EventEmitter`, WebSocket, Web Streams, `Intl`, `SharedArrayBuffer`, or `FinalizationRegistry`.
 - `Buffer` / `path` / module table / `fs` surface: C + prelude implementation.
-- User libraries: workspace modules via **`import`** with path specifiers resolved under `setFsRoot` (relative or absolute after normalize); catalog via bare **`import "leaf.js"`** under `setScriptFolder` (single-segment leaf only). **`loadScript` removed**. Static import scripts may `export default` as the `runJs` result.
+- User libraries: workspace modules via **`import`** with path specifiers resolved under `setFsRoot` (relative or absolute after normalize); official libraries via **`import … from "weizhi:<name>"`** under `setPackageRoot` (see [Script libraries](#script-libraries)). **`loadScript` removed**; bare-name specifiers resolve built-in modules and `weizhi:` only (no catalog fallback). Static import scripts may `export default` as the `runJs` result.
 - Filesystem: host sandbox root (`setFsRoot`); paths may be relative to root or absolute if they normalize inside the root; escape fails with `path` or `escape` in the error.
 - Missing module / missing member: fails with `unsupported` and a clear name (see next section).
 
@@ -93,7 +93,7 @@ When `runJs` fails, `WeizhiResult.error` is for humans and for agent self-correc
 
 | Case | Keyword / shape that must appear in the error |
 |---|---|
-| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib, zip, or ./file.js under script folder)` |
+| Missing module | `unsupported: module "http" (available: buffer, fs, path, process, zlib, zip, weizhi:<name>, or workspace .js)` |
 | Missing API on a module | `unsupported: fs.watch` (via Proxy, avoid `undefined is not a function`) |
 | Bad arg type/count | `bad argument: Buffer.from: only strings are supported` |
 | Sandbox path issue | `path` or `escape` |
