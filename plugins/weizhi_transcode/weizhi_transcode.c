@@ -377,6 +377,10 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
     if (job == NULL) {
         return json_err("bad job handle", NULL);
     }
+    if (job->spec.nfilters > 0) {
+        /* Filters execute on the GPU path (EGL/GLSL, P3b); keep the contract honest. */
+        return json_err("unsupported: filter (GPU path lands in P3b)", NULL);
+    }
     memset(&pipe, 0, sizeof(pipe));
     pipe.video_mux_track = -1;
     pipe.audio_mux_track = -1;

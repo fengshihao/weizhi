@@ -45,6 +45,16 @@ set(WEIZHI_MCP_JS "\"${WEIZHI_MCP_JS}\"")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/mcp_client.js")
 configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONLY)
 
+# Embed the weizhi:video package source for tests (single source of truth).
+file(READ "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.1.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
+string(REPLACE "\\" "\\\\" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS_RAW}")
+string(REPLACE "\"" "\\\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
+string(REPLACE "\n" "\\n\"\n\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
+set(WEIZHI_VIDEO_PKG_JS "\"${WEIZHI_VIDEO_PKG_JS}\"")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.1.0/index.js")
+configure_file(src/weizhi_video_pkg_js.h.in "${CMAKE_BINARY_DIR}/weizhi_video_pkg_js.h" @ONLY)
+
 add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c src/sha256.c)
 target_include_directories(weizhi PUBLIC include)
 target_include_directories(weizhi PRIVATE include src "${CMAKE_BINARY_DIR}")
@@ -124,6 +134,7 @@ endif()
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)
+target_include_directories(weizhi_tests PRIVATE "${CMAKE_BINARY_DIR}")
 if(WEIZHI_SANITIZE)
     target_compile_options(weizhi_tests PRIVATE ${WEIZHI_SANITIZE_FLAGS})
     target_link_options(weizhi_tests PRIVATE ${WEIZHI_SANITIZE_FLAGS})

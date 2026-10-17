@@ -34,6 +34,7 @@ typedef struct WtJobSpec {
     int nclips;
     char output[WT_MAX_PATH];
     WtVideoOpts video;
+    int nfilters; /* filters[] entries; execution lands with the GPU path (P3b) */
 } WtJobSpec;
 
 /* Returns 0 on success; err holds an English reason otherwise. */

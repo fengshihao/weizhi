@@ -145,6 +145,30 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
         p = skip_ws(p + 1);
         if (strcmp(key, "output") == 0) {
             p = parse_str(p, spec->output, sizeof(spec->output));
+        } else if (strcmp(key, "filters") == 0) {
+            if (*p != '[') {
+                snprintf(err, err_len, "bad argument: job json (filters must be an array)");
+                return -1;
+            }
+            p = skip_ws(p + 1);
+            while (*p != ']') {
+                if (*p == ',') {
+                    p = skip_ws(p + 1);
+                    continue;
+                }
+                if (*p != '{') {
+                    snprintf(err, err_len, "bad argument: job json (filters must be objects)");
+                    return -1;
+                }
+                p = skip_value(p);
+                if (p == NULL) {
+                    snprintf(err, err_len, "bad argument: job json (bad filter)");
+                    return -1;
+                }
+                spec->nfilters++;
+                p = skip_ws(p);
+            }
+            p = skip_ws(p + 1);
         } else if (strcmp(key, "video") == 0) {
             if (*p != '{') {
                 snprintf(err, err_len, "bad argument: job json (video must be an object)");
