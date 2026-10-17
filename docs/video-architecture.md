@@ -41,8 +41,9 @@
 - 加载：`host.ensureNative(name)` → typed loader `dlopen` + manifest 解析
   （`src/plugin_loader.c:360` `load_one`）；生命周期 refcount + 30s idle TTL `dlclose`
   （`docs/HOST_ABI.md` §5）。插件禁止 `JNI_OnLoad`、不碰 QuickJS（`include/weizhi_plugin.h`）。
-- 插件 SO **独立于核心引擎 SO**：目录下发、验签、按需加载——
-  这正是「大体积视频库不进 APK、不进核心 SO」的通道。
+- 插件 SO **独立于核心引擎 SO**。⚠️ 但**交付通道在安卓已断**：targetSdk 29+ / Android 10 起
+  linker 对 app 可写目录执行 W^X 管控，「下载到私有目录再 dlopen」（HOST_ABI §4 的零发版通道）
+  在安卓不可行；桌面 CLI 不受影响。安卓改走**内置独立 SO**（见 §2.2）。
 
 **对视频的含义**：FFmpeg（数 MB～数十 MB）或 MediaCodec 封装应以 `weizhi_video` 插件 SO 形态存在；
 但 IDL v1 的类型面（无句柄、无异步函数、cb 仅 i32、导出≤32）**不足以表达视频管线**，见 §3。
@@ -115,6 +116,25 @@ JS 编排的是**管线图**（哪些片段、什么滤镜、什么参数），�
 GPU 滤镜同样走系统 API：EGL 离屏 + GLSL（`libEGL`/`libGLESv3`，全版本可用）为主线；
 AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 
+### 2.2 交付：安卓内置独立 SO，ensureNative 保留（2026-10-17 与维护者对齐）
+
+安卓 10+/targetSdk 29+ 的 linker W^X 管控使「运行时下载 SO → 私有目录 dlopen」不可行
+（§1.2）；桌面 CLI 不受影响。决策：
+
+1. **内置，但独立 SO**：`libweizhivideo.so` 打进 AAR（建议独立 Gradle 模块，如 `:weizhi-video`），
+   随安装落在 `nativeLibraryDir`，loader 按 soname `dlopen`（`System.loadLibrary` 同源路径，
+   合法加载）。**不并入 `libweizhijni.so` 核心**：`size-check` 的 1.5MB 门禁只管核心 SO；
+   视频 SO 单独立预算（建议 ≤512KB strip）。不需要视频能力的宿主不依赖该模块，零体积。
+   正因为 §2.1 选了系统媒体栈，wrapper 估计仅 100–300KB（P1 remux + P2 转码），
+   +EGL/GL 滤镜再 +100–200KB——「几百 K」量级内得起；若当初选 FFmpeg 此路不通。
+2. **ensureNative 不废弃，语义升级**：JS 侧 `await host.ensureNative("video")` 不变；
+   安卓端解析改为「内置插件表（soname + 内嵌 manifest）优先」，下载/验签目录仅桌面保留。
+   IDL、typed stub、refcount、L3 JS 包全部复用；将来侧载渠道或政策变化可恢复下发。
+3. **「新能力 JS 下发」愿景的边界**：新滤镜/新编排 = JS 下发 Shader 字符串与参数
+   （插件接口通用），**仍可热更**；只有新容器格式/新编码器这类 native 变化才需发版。
+4. 内置插件的 manifest 来源：SO 导出 `weizhi_plugin_init` 时自述（loader 已有该钩子，
+   `src/plugin_loader.c:433`），或随 AAR assets 附 manifest.json——P1 实现时定。
+
 ---
 
 ## 3. 差距清单（Gap analysis）
@@ -162,7 +182,8 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 │     Timeline / Clip / Filter / Transition DSL       │
 │     纯 JS 建模 + 参数校验，编译成图 JSON             │
 ├────────────────────────────────────────────────────┤
-│ L2  weizhi_video* 签名插件 SO（目录下发，验签）      │
+│ L2  weizhi_video 插件 SO（安卓内置进 AAR，独立于核心 │
+│     SO；桌面走目录，见 §2.2）                        │
 │     Android NDK 系统媒体栈（§2.1 路径 A）：          │
 │       AMediaExtractor / AMediaCodec / AMediaMuxer   │
 │       （硬编硬解，零第三方体积）；ffmpeg 后置可选    │
@@ -173,8 +194,8 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 └────────────────────────────────────────────────────┘
 ```
 
-- **新滤镜 = JS 下发**（Shader 字符串 + uniforms 参数），满足「不更新 APK 上新能力」目标；
-- **新容器/编码器 = 目录上架新插件 SO**，走 HOST_ABI §4 零发版通道；
+- **新滤镜 = JS 下发**（Shader 字符串 + uniforms 参数），**不更新 APK 即可上新**；
+- **新容器/编码器**：安卓需随 AAR 发版（§2.2 内置决策的代价）；桌面仍可目录上架插件 SO；
 - **JS 导出脚本形态**：单次 runJs 内 `await video.export(timeline, opts)`，
   Promise 内部由插件 cb 报进度（同轮 flush，D3 语义正好匹配）。
 
@@ -183,7 +204,7 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | P0 | IDL v2（str、句柄规范、cb 扩展、cancel_poll）+ `echo_video` 概念验证插件（纯 C 合成流，仅桌面 CI 测试替身，见 §2.1） | 桌面 test.sh 绿；真机加载成功 |
-| P1 | Android 硬件管线（NDK `libmediandk`）：`AMediaExtractor`→`AMediaMuxer` 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
+| P1 | loader 支持内置插件（soname dlopen + 内嵌 manifest，§2.2）；`libweizhivideo.so` 进 AAR；NDK `libmediandk` 硬件管线：`AMediaExtractor`→`AMediaMuxer` 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
 | P2 | 重编码导出：`AMediaCodec` 解码→（CPU/EGL 变换）→`AMediaCodec` 编码→`AMediaMuxer`；进度 cb + cancel | 真机黄金样本 hash 断言 |
 | P3 | `weizhi:video` JS 包：Timeline/Filter DSL；GPU 滤镜（AGSL/EGL 离屏）；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
@@ -201,7 +222,15 @@ P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 Me
 - **引擎内 FFmpeg**：体积门禁（§1.5）直接否决；只能做独立插件 SO。
 - **Audio DSP 全家桶**：P3 后按需；PCM 处理先走 `bytes` 拷贝（音频数据量小得多）。
 
-## 6. 待拍板的开放问题
+## 6. 已定决策与待拍板的开放问题
+
+已定（正文有细节）：
+
+- **D-交付**（2026-10-17）：安卓内置独立 SO，ensureNative 保留、内置表优先（§2.2）；
+  下载目录仅桌面 CLI。
+- **D-数据面**（2026-10-17）：安卓 NDK 系统媒体栈（`libmediandk`），不自研 FFmpeg（§2.1）。
+
+待拍板：
 
 - **Q1** IDL v2 是否引入显式 `handle` 类型（还是 i64 约定 + 文档规范）？
   倾向：i64 约定，零引擎改动的一部分。
