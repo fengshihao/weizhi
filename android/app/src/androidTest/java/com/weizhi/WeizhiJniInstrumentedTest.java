@@ -191,10 +191,13 @@ public final class WeizhiJniInstrumentedTest {
         }
     }
 
-    /** IDL v2 channel PoC for the video pipeline: i64 handles, str args/returns, cb(s: str). */
+    /** IDL v2 channel PoC for the video pipeline: i64 handles, str args/returns, cb(s: str), resolve_path. */
     @Test
     public void echoVideoPlugin() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-video-ws-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        writeBytes(new File(ws, "clip.mp4"), new byte[] {1, 2, 3, 4, 5});
         File pluginRoot = new File(context.getCacheDir(), "weizhi-video-" + System.currentTimeMillis());
         File videoDir = new File(pluginRoot, "echo_video");
         assertTrue(videoDir.mkdirs());
@@ -202,18 +205,24 @@ public final class WeizhiJniInstrumentedTest {
         copyAssetTo("plugins/echo_video/libecho_video.so", new File(videoDir, "libecho_video.so"));
 
         try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
             engine.enableNativePlugins(pluginRoot.getAbsolutePath());
             String out = engine.runJs(
                     "const p = await host.ensureNative('echo_video');"
                             + "const meta = JSON.parse(p.probe_media('clip.mp4'));"
+                            + "const esc = JSON.parse(p.probe_media('../clip.mp4'));"
                             + "const id = p.open_session(10, '{}');"
                             + "const events = [];"
                             + "const r = JSON.parse(p.run_session(id, (e) => { events.push(e); }));"
                             + "p.close_session(id);"
-                            + "({tracks: meta.tracks.length, cancelled: r.cancelled,"
+                            + "({probeOk: meta.ok, size: meta.size, escErr: esc.error,"
+                            + "  tracks: meta.tracks.length, cancelled: r.cancelled,"
                             + "  frames: r.frameCount, events: events.length,"
                             + "  lastPercent: events[events.length - 1].percent})",
                     10000);
+            assertTrue(out.contains("\"probeOk\":true"));
+            assertTrue(out.contains("\"size\":5"));
+            assertTrue(out.contains("path escape"));
             assertTrue(out.contains("\"tracks\":1"));
             assertTrue(out.contains("\"cancelled\":false"));
             assertTrue(out.contains("\"frames\":10"));

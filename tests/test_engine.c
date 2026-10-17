@@ -1344,16 +1344,21 @@ static void test_typed_plugin_loader(void) {
     weizhi_close(engine);
 }
 
-/* IDL v2 channel PoC: i64 session handles, str args/returns, cb(s: str) progress. */
+/* IDL v2 channel PoC: i64 session handles, str args/returns, cb(s: str) progress,
+   resolve_path workspace semantics (relative / absolute / escape / missing). */
 static void test_echo_video_plugin(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
     char plugin_dir[512];
+    char probe_js[1024];
+    char *dir = make_temp_dir();
     const char *root = getenv("WEIZHI_BUILD_DIR");
     if (root == NULL) {
         root = "build";
     }
     snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    write_file(dir, "clip.mp4", "hello", 5);
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
     EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
     result = weizhi_run_js(engine,
                            "const p = await host.ensureNative('echo_video');"
@@ -1363,13 +1368,15 @@ static void test_echo_video_plugin(void) {
                            "const events = [];"
                            "const r = JSON.parse(p.run_session(id, (e) => { events.push(e); }));"
                            "p.close_session(id);"
-                           "({tracks: meta.tracks.length, synthetic: meta.synthetic,"
-                           "  badHandle: bad, idOk: id > 0,"
+                           "({probeOk: meta.ok, size: meta.size, tracks: meta.tracks.length,"
+                           "  synthetic: meta.synthetic, badHandle: bad, idOk: id > 0,"
                            "  cancelled: r.cancelled, frames: r.frameCount, hashLen: r.hash.length,"
                            "  events: events.length, firstFrame: events[0].frame,"
                            "  firstPercent: events[0].percent, lastPercent: events[events.length - 1].percent})",
                            5000);
     EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"probeOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"size\":5") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"tracks\":1") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"synthetic\":true") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"badHandle\":0") != NULL);
@@ -1380,6 +1387,21 @@ static void test_echo_video_plugin(void) {
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstFrame\":0") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstPercent\":10") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"lastPercent\":100") != NULL);
+    weizhi_result_free(&result);
+    /* Path forms: absolute-under-root resolves; escaping and missing files report errors. */
+    snprintf(probe_js, sizeof(probe_js),
+             "const w = await host.ensureNative('echo_video');"
+             "const abs = JSON.parse(w.probe_media('%s/clip.mp4'));"
+             "const esc = JSON.parse(w.probe_media('../clip.mp4'));"
+             "const miss = JSON.parse(w.probe_media('nope.mp4'));"
+             "({absOk: abs.ok, absSize: abs.size, escErr: esc.error, missErr: miss.error})",
+             dir);
+    result = weizhi_run_js(engine, probe_js, 5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"absOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"absSize\":5") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "path escape") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "file not found") != NULL);
     weizhi_result_free(&result);
     /* Bad session handle path returns plugin JSON, and repeat calls must not
        exhaust the 64 callback slots (same-call scoped release). */
@@ -1399,6 +1421,7 @@ static void test_echo_video_plugin(void) {
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"ok\":true") != NULL);
     weizhi_result_free(&result);
     weizhi_close(engine);
+    free(dir);
 }
 
 typedef struct {

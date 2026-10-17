@@ -83,18 +83,51 @@ static void emit_progress(uint32_t cb, int32_t frame, int32_t frames) {
 }
 
 WEIZHI_PLUGIN_EXPORT char *weizhi_echo_video_probe_media(const char *path) {
+    char err[128];
+    char *resolved;
     char *out;
     const char *safe = path != NULL ? path : "";
-    /* PoC only: no filesystem access (media path authorization is undecided, Q3).
-       Deterministic echo so tests can assert the shape. */
-    out = (char *)malloc(256);
-    if (out == NULL) {
-        return NULL;
+    FILE *f;
+    long size;
+    err[0] = '\0';
+    /* Path form is the script's choice (relative or absolute); semantics are the
+       engine's: normalize under fs_root, escape -> error. See NATIVE_PLUGIN_IDL.md v2. */
+    if (g_host.resolve_path == NULL || g_host.engine == NULL) {
+        out = (char *)malloc(160);
+        if (out != NULL) {
+            strcpy(out, "{\"error\":\"unsupported: path resolution (host too old)\"}");
+        }
+        return out;
     }
-    snprintf(out, 256,
-             "{\"ok\":true,\"path\":\"%.96s\",\"tracks\":[{\"type\":\"video\",\"codec\":\"h264\","
-             "\"width\":64,\"height\":64,\"fps\":30}],\"synthetic\":true}",
-             safe);
+    resolved = g_host.resolve_path(g_host.engine, safe, err, sizeof(err));
+    if (resolved == NULL) {
+        out = (char *)malloc(192);
+        if (out != NULL) {
+            snprintf(out, 192, "{\"error\":\"%.120s\"}", err[0] != '\0' ? err : "invalid path");
+        }
+        return out;
+    }
+    f = fopen(resolved, "rb");
+    if (f == NULL) {
+        out = (char *)malloc(256);
+        if (out != NULL) {
+            snprintf(out, 256, "{\"error\":\"file not found\",\"path\":\"%.160s\"}", resolved);
+        }
+        free(resolved);
+        return out;
+    }
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    fclose(f);
+    out = (char *)malloc(strlen(resolved) + 256);
+    if (out != NULL) {
+        snprintf(out, strlen(resolved) + 256,
+                 "{\"ok\":true,\"path\":\"%s\",\"size\":%ld,"
+                 "\"tracks\":[{\"type\":\"video\",\"codec\":\"h264\",\"width\":64,\"height\":64,\"fps\":30}],"
+                 "\"synthetic\":true}",
+                 resolved, size);
+    }
+    free(resolved);
     return out;
 }
 

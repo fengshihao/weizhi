@@ -235,12 +235,14 @@ P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 Me
   异步 fn + complete 通道暂不引入）。落地时发现并修复引擎一处取消漏检：
   `weizhi_await_value` 在 microtask drain 期间发生的取消会被同一 job 的 settle 掩盖
   （`src/engine.c`，现于 drain 后复检；`test_echo_video_cancel` 覆盖）。
+- **Q3 已定**（2026-10-17）：**不强制路径形态**——脚本传什么形态都按引擎 `fs` 同语义解析
+  （相对 / 绝对 / 带 `.` `..` 均可，归一化后须在 `fs_root` 内，越界 `path escape`）。
+  实现为 `WeizhiPluginHost.resolve_path` 宿主服务，插件把脚本路径先过这层再打开；
+  `echo_video.probe_media` 已按此工作（相对/绝对/越界/缺失四种用例在桌面与真机覆盖）。
+  沙箱外媒体（相册/SAF）由宿主先拷入工作区。见 `docs/NATIVE_PLUGIN_IDL.md` §2.1。
 
 待拍板：
 
-- **Q3** 媒体文件路径授权：插件直接吃沙箱绝对路径，还是复用 fs_root 相对路径语义？
-  涉及安全边界（插件不受引擎沙箱约束）。P0 的 `echo_video.probe_media` 刻意不碰文件系统，
-  该问题必须在 P1 定。
 - **Q4** 插件拆分粒度：`weizhi_video` 单插件（需提高导出上限）vs 按功能拆多插件？
   倾向按功能拆，不动 32 上限。
 - **Q5** 与 ROADMAP 的关系：视频不在当前路线图（近期焦点是 Agent 集成）；

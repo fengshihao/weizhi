@@ -213,6 +213,8 @@ void weizhi_cb_invoke_str(void *engine_ptr, uint32_t cb_id, const char *json);
 void weizhi_cb_release(Engine *engine, uint32_t cb_id);
 /* Host service: 1 when cancel was requested (weizhi_cancel); callable from any thread. */
 int weizhi_cancel_poll(void *engine_ptr);
+/* Host service: workspace path resolution for plugins (see WeizhiPluginHost.resolve_path). */
+char *weizhi_plugin_resolve_path(void *engine_ptr, const char *raw, char *errbuf, size_t errbuf_len);
 int weizhi_drain_cb_queue(Engine *engine);
 void weizhi_plugins_clear(Engine *engine);
 

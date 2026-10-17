@@ -42,6 +42,12 @@ typedef struct WeizhiPluginHost {
     /* 1 when the engine was cancelled (weizhi_cancel / WeizhiEngine.cancel).
        Long-running plugin loops must poll this and return promptly. */
     int (*cancel_poll)(void *engine);
+    /* Resolve a workspace path exactly like engine fs: relative or absolute,
+       whatever normalizes under fs_root. Returns a malloc'd absolute path
+       (caller frees) or NULL with an English reason in errbuf
+       ("path escape", "workspace not set", ...). Plugins SHOULD route every
+       user-supplied path through this so script-visible semantics stay uniform. */
+    char *(*resolve_path)(void *engine, const char *raw, char *errbuf, size_t errbuf_len);
 } WeizhiPluginHost;
 
 /*

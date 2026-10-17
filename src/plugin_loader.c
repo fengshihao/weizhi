@@ -259,6 +259,28 @@ int weizhi_cancel_poll(void *engine_ptr) {
     return atomic_load(&engine->cancel_requested) ? 1 : 0;
 }
 
+char *weizhi_plugin_resolve_path(void *engine_ptr, const char *raw, char *errbuf, size_t errbuf_len) {
+    Engine *engine = (Engine *)engine_ptr;
+    const char *error = NULL;
+    char out[PATH_MAX];
+    if (errbuf != NULL && errbuf_len > 0) {
+        errbuf[0] = '\0';
+    }
+    if (engine == NULL || raw == NULL || raw[0] == '\0') {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "invalid path");
+        }
+        return NULL;
+    }
+    if (weizhi_resolve_workspace_path(engine, raw, out, sizeof(out), &error) != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "invalid path");
+        }
+        return NULL;
+    }
+    return strdup(out);
+}
+
 int weizhi_drain_cb_queue(Engine *engine) {
     WeizhiCbEvent local[WEIZHI_MAX_PENDING];
     int n = 0;
@@ -493,6 +515,7 @@ static int load_one(Engine *engine, const char *name, char *err, size_t errlen) 
     host.cb_invoke_i32 = weizhi_cb_invoke_i32;
     host.cb_invoke_str = weizhi_cb_invoke_str;
     host.cancel_poll = weizhi_cancel_poll;
+    host.resolve_path = weizhi_plugin_resolve_path;
     init_fn = (WeizhiPluginInitFn)dlsym(handle, "weizhi_plugin_init");
     if (init_fn != NULL && init_fn(&host) != 0) {
         snprintf(err, errlen, "native load failed: weizhi_plugin_init");

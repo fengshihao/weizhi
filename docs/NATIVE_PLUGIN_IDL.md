@@ -59,6 +59,12 @@ v2 增补（HOST_ABI 2，2026-10-17，随 `echo_video` 落地）：
 - `cancel_poll(engine) -> int`：长循环插件**必须**每帧/每批次轮询；返回 1 时应尽快清理并返回。
   引擎保证：取消（`weizhi_cancel`）后 `runJs` 必以含 `cancelled` 的错误收场
   （含同步 C 调用期间取消的场景——`weizhi_await_value` 在 drain 后复检）。
+- `resolve_path(engine, raw, errbuf, errlen) -> char *`：把脚本传来的**任意形态**路径
+  （相对 / 绝对 / 带 `.` 与 `..`）按引擎 `fs` 同一套语义归一化——落点必须在 `fs_root` 内，
+  越界报 `path escape`。返回 malloc 的绝对路径（调用方 `free()`），失败返回 NULL 并填
+  英文错误关键词。插件应把所有脚本下发的路径都先过这一层，保证脚本侧语义与 `fs.*` 一致；
+  沙箱外媒体（相册 / SAF）由宿主先拷入工作区。注意：这提供的是**语义一致性**，
+  插件本身的信任边界仍由验签 / 内置交付保障。
 - 旧引擎（HOST_ABI 1）加载 `min_host_abi 2` 的插件会按既有规则拒绝
   （`native incompatible: min_host_abi 2 > host 1`）。
 
