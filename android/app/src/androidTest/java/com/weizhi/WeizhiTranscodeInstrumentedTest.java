@@ -64,9 +64,18 @@ public final class WeizhiTranscodeInstrumentedTest {
         }
     }
 
-    /** GPU path: scale 320x240 -> 160x120 through the package DSL. */
+    /**
+     * GPU path: scale 320x240 -> 176x144 (QCIF) through the package DSL. The
+     * target is macroblock-aligned and above this device's minimum: its AVC
+     * codec accepts width 160 at configure() but the component then dies with
+     * no frame encoded (see GlEncoderProbeInstrumentedTest).
+     */
     @Test
     public void scaleViaPackage() throws Exception {
+        runScaleExport("small.mp4");
+    }
+
+    private void runScaleExport(String outName) throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File ws = new File(context.getCacheDir(), "weizhi-txs-" + System.currentTimeMillis());
         assertTrue(ws.mkdirs());
@@ -85,31 +94,35 @@ public final class WeizhiTranscodeInstrumentedTest {
                                 + "const v = await host.ensureNative('video');\n"
                                 + "const r = await exportVideo({\n"
                                 + "  clips: [{path: 'a.mp4'}],\n"
-                                + "  output: 'small.mp4',\n"
-                                + "  width: 160, height: 120,\n"
+                                + "  output: '" + outName + "',\n"
+                                + "  width: 176, height: 144,\n"
                                 + "});\n"
-                                + "const po = JSON.parse(v.probe('small.mp4'));\n"
-                                + "const log = fs.existsSync('small.mp4.log')\n"
-                                + "  ? fs.readFileSync('small.mp4.log').toString() : '';\n"
+                                + "const po = JSON.parse(v.probe('" + outName + "'));\n"
+                                + "const log = fs.existsSync('" + outName + ".log')\n"
+                                + "  ? fs.readFileSync('" + outName + ".log').toString() : '';\n"
                                 + "export default {ok: r.ok, w: r.width, h: r.height,\n"
                                 + "  pw: po.tracks.length ? po.tracks[0].width : 0,\n"
                                 + "  ph: po.tracks.length ? po.tracks[0].height : 0,\n"
                                 + "  probeErr: po.error || '', dur: r.durationMs, log};\n",
                         60_000, "scale.js");
             } catch (RuntimeException e) {
-                throw new RuntimeException(e.getMessage() + "\n== job log ==\n" + readJobLog(ws, "small.mp4.log"), e);
+                throw new RuntimeException(e.getMessage() + "\n== job log ==\n" + readJobLog(ws, outName + ".log"), e);
             }
             assertTrue(out, out.contains("\"ok\":true"));
-            assertTrue(out, out.contains("\"w\":160"));
-            assertTrue(out, out.contains("\"h\":120"));
-            assertTrue(out, out.contains("\"pw\":160"));
-            assertTrue(out, out.contains("\"ph\":120"));
+            assertTrue(out, out.contains("\"w\":176"));
+            assertTrue(out, out.contains("\"h\":144"));
+            assertTrue(out, out.contains("\"pw\":176"));
+            assertTrue(out, out.contains("\"ph\":144"));
             int dur = WeizhiVideoInstrumentedTest.jsonInt(out, "dur");
             assertTrue("dur=" + dur, dur > 800 && dur < 1300);
         }
     }
 
-    /** GPU path pixel assertion: brightness(0.5) must raise the decoded luma mean. */
+    /**
+     * GPU path pixel assertion: brightness(amount 0.5) must raise the decoded
+     * luma mean. Y deltas are attenuated by the limited-range round trip
+     * ((Y-16)*(1+amount)+16), so 0.5 yields ~+17 on a luma-50 fixture.
+     */
     @Test
     public void brightnessPixelShift() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -126,7 +139,8 @@ public final class WeizhiTranscodeInstrumentedTest {
                     "import { exportVideo } from 'weizhi:video';\n"
                             + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'plain.mp4', bitrate: 2000000});\n"
                             + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'bright.mp4',\n"
-                            + "  bitrate: 2000000, filters: ['brightness'],\n"
+                            + "  bitrate: 2000000,\n"
+                            + "  filters: [{type: 'brightness', params: {amount: 0.5}}],\n"
                             + "  onProgress: () => {}});\n"
                             + "export default 'done';\n",
                     60_000, "bright.js");

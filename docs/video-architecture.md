@@ -1,7 +1,7 @@
 # 视频剪辑能力：调研与架构提案（feat/video-editing）
 
-日期：2026-10-17。状态：**调研完成，未实现**。本文是 `feat/video-editing` 长期分支的第一份产出，
-后续设计/实现以本文为基线演进。
+日期：2026-10-17。状态：**P0–P3b 已落地**（长期分支推进，合入主干前需 ROADMAP 立项，见 §6-Q5）。
+本文是 `feat/video-editing` 长期分支的第一份产出，后续设计/实现以本文为基线演进。
 
 结论先行：**视频剪辑可以进 Weizhi 生态，但 heavy 代码必须以签名插件 SO 形态存在，JS 只做编排；
 核心引擎 `libweizhijni.so` 保持 ≤1.5MB strip 门禁不动。** 用户提出的 Media/GPU/Filter/Compositor
@@ -207,29 +207,35 @@ AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
 | P1 ✅（2026-10-17） | 内置插件注册（`weizhi_register_bundled_plugin` + SO 内嵌 `weizhi_plugin_manifest`，§2.2 落地）；`:weizhi-video` 模块（独立 AAR，`libweizhivideo.so` **61KB**，远低于 512KB 预算）；`weizhi_video` 插件：NDK `AMediaExtractor`/`AMediaMuxer` 无重编码 remux——`probe`（轨道/时长元数据）+ `open_job/run_job/close_job`（掐头去尾 + 拼接，mime 映射跨 clip 复用 muxer 轨道，进度 cb + 取消自清理） | 桌面全量（含 ASan）绿；真机 `WeizhiVideoInstrumentedTest`：MediaCodec 生成确定性 all-intra 夹具 → JS 端到端 probe/trim(200–800ms)/concat → 输出时长/轨道断言通过 |
 | P2 ✅（2026-10-17） | `weizhi_transcode` 重编码导出插件（Q4 拆分的第二个逻辑插件，`libweizhitranscode.so` 82KB）：`AMediaCodec` 解码 → **encoder 输入 Surface 隧道**（帧零拷贝、不经 CPU/YUV 布局）→ `AMediaCodec` 编码 → `AMediaMuxer`；掐头去尾经 `releaseOutputBufferAtTime` 改写 PTS（纳秒），音频独立 extractor 直通不重编码；码率/帧率可配；缩放守卫报 `unsupported: scaling (P3)`；取消自清理删输出。`WeizhiVideo.install` 注册双插件（remux+transcode，共 144KB） | 真机 `WeizhiTranscodeInstrumentedTest` 3/3：剪辑+拼接重编码时长断言、缩放守卫、长任务取消（<15s 退出且无残留文件）；全量 22/22；桌面含 ASan 绿。顺手修复：`weizhi_video` 的 `AMediaFormat` 所有权泄漏（NDK `getTrackFormat`/`getOutputFormat` 需调用方 delete）；`build-android.sh` 平台级别对齐 minSdk 26 |
 | P3a ✅（2026-10-17） | `weizhi:video` JS 编排包（`video@0.1.0`，随 `:app` assets 内置、`syncBundled` 安装）：`buildJob(spec)` 把时间线 DSL（clips 剪辑点 / output / bitrate·width·height·fps / filters 预设或自定义 `{shader, uniforms}` / reencode 开关）编译成插件作业并做英文错误校验；`exportVideo(spec)` 端到端驱动 `video`/`transcode` 插件（进度回调透传）。无 video 参数默认走 remux；native 侧对 filters 明确报 `unsupported: filter (GPU path lands in P3b)`（不做静默丢弃）。包源码经 CMake 嵌入生成测试头，单一真源 | 桌面 `test_weizhi_video_package`（编译器输出精确断言 + 校验错误 + 无 native 提示）；真机 `WeizhiVideoPackageInstrumentedTest`：包导入→重编码导出（时长/进度）→ remux 路径→ filters 守卫全过；全量 23/23 |
-| P3b 🔬（进行中，调试笔记见下） | EGL 离屏 + GLSL 滤镜与缩放（AImageReader + OES 纹理 + `eglPresentationTimeANDROID` 送 PTS 进编码器）；LUT/转场；执行 P3a 预留的 filters 契约 | 缩放分辨率断言 + 采样帧像素断言（Y 均值偏移） |
+| P3b ✅（2026-10-17） | GL 滤镜与缩放路径打通：EGL 离屏（ES2 + `EGL_RECORDABLE_ANDROID`）+ `AImageReader`(PRIVATE, `GPU_SAMPLED_IMAGE`) → OES 纹理 → 用户 shader → 编码器输入表面（`eglPresentationTimeANDROID` 送 PTS）；预设/自定义滤镜与缩放执行 P3a 预留的 filters 契约。两项根因修复见下方「P3b 根因记录」 | 真机 **27/27 全绿**（含 `scaleViaPackage` 320x240→176x144 分辨率断言、`brightnessPixelShift` Y 均值 +17 像素断言）；桌面含 ASan 绿；`GlEncoderProbeInstrumentedTest` 常驻记录设备 GL 编码能力。**遗留**：LUT/转场未做；多滤镜链仍守卫报错（一 job 一滤镜） |
 
-### P3b 调试状态（2026-10-17，供新会话接手）
+### P3b 根因记录（2026-10-17，编码器报错已解）
 
-**代码已全部落地且桌面门禁全绿**：`plugins/weizhi_transcode/` 的 GL 模块（EGL 上下文/OES 纹理/着色器编译/双路径泵循环）、`wtjson` filters 完整解析（shader ≤4KB + float uniforms）、包 `video@0.2.0`（预设 GLSL 生成 + 自定义 shader 包装）、真机测试三件套（scaleViaPackage / brightnessPixelShift / filterChainGuarded）。**唯一未通**：真机 GL 路径的编码器报错。
+调试手段（该机 logcat 不可读，全程靠 `<output>.log` + 断言消息带日志）：
 
-**失败签名**（真机 MAA-AN00，HarmonyOS/Android 16）：
-- 解码 → AImageReader（`newWithUsage`+`GPU_SAMPLED_IMAGE`）→ acquire 全部成功（30/30）；
-- `eglGetNativeClientBufferANDROID` + `eglCreateImageKHR` 成功，draw + `eglSwapBuffers` 成功无错误，PTS 单调（0/33.3/66.6ms→ns）；
-- **编码器吃到 ~2-5 帧 GL 输出后 `AMediaCodec_dequeueOutputBuffer` 返回 `AMEDIA_ERROR_UNKNOWN (0xffffd8f0)`**；帧数与输入队列深度相关（疑似帧未被正常消费）。
-- 对照：**同机直连隧道（decoder→encoder surface，无 GL）完全正常**（P2 测试全过）。
+1. **Java 对照实验**（`GlEncoderProbeInstrumentedTest`，grafika 最小配方，不经过引擎/插件）：
+   腿 1 = `createInputSurface` + EGL14 + swap 纯合成帧；腿 2 = 解码→SurfaceTexture(OES)→GL→编码。
+   两腿在 320x240 全过 → **设备能力无问题，嫌疑收窄到 C 用法**。
+2. **glClear 二分**（临时 `WT_GL_BISECT=clear`，现已移除）：GL 管线保留但不导入 OES 纹理 → 160x120 仍 0 样本即死 → **导入环节无辜，尺寸维度有异**。
+3. **尺寸矩阵**（Java 探针按尺寸逐个跑）：160x120 / 160x112（含对齐尺寸）失败，176x144 / 320x240 通过；反转顺序排除进程状态污染 → **该机（Honor MAA-AN00，`media.hncodec` 厂商栈）AVC Surface 编码模式不支持宽 160**：`configure()` 接受，组件在首批缓冲上报错（`AMEDIA_ERROR_UNKNOWN`），帧数随队列深度 2~5 帧浮动。
 
-**已尝试无效**：`EGL_RECORDABLE_ANDROID`；强制 RGB888 config（RED/GREEN/BLUE 8）；`COLOR_FormatSurface (0x7F000789)`；注意 NDK **没有** `ANativeWindow_setBuffersTimestamp`（Java-only），勿再试。
+两项根因与修复（`plugins/weizhi_transcode/weizhi_transcode.c`）：
 
-**诊断机制**（这台手机 logcat 不可读）：插件写 `<output>.log`（`wt_logf`，`plugins/weizhi_transcode/weizhi_transcode.c`），测试失败时经 `readJobLog` 把日志带进断言消息（`WeizhiTranscodeInstrumentedTest`），gradle 报告 XML 可见全文。
+- **无 fence 的 AImage 归还**：裸 EGLImage 导入路径没有 BufferQueue 的 acquire/release fence，
+  `AImage_delete` 归还缓冲后解码器可立即覆写 GPU 仍在采样的内存（SurfaceTexture 免疫，C 路径不免疫）。
+  修复：swap 后 `glFinish()` 再归还，顺带去掉 `eglCreateImageKHR` 的 `EGL_IMAGE_PRESERVED_KHR`
+  （导入采样一次即弃，无需 preserve；与 SurfaceTexture 用法对齐）。两处一同修复后 320x240 滤镜路径
+  （`brightnessPixelShift`）转绿——未做单独隔离归因，fence 竞争是最合理解释。
+- **设备编码器尺寸限制**：NDK 无能力查询 API，且 configure 不报错。修复：0 样本（muxer 未启动）的
+  编码器失败改报 `encoder failed (no frame encoded at WxH; device codec limit)`（英文关键词可解析），
+  有样本后才失败仍报通用 `encoder failed`。测试缩放目标改 176x144（QCIF，该机支持）。
 
-**下一步（按优先级）**：
-1. **Java 对照实验**（grafika 同款最小配方：`MediaCodec.createInputSurface` + `EGL14` 窗口 surface + 每帧 `eglPresentationTimeANDROID`+swap → mux 成 mp4）判定「设备能力 vs C 用法」。
-2. Java 成功 → 逐项对拍 C：config attribs、context 版本、makeCurrent 时机、`eglCreateImageKHR` 的 ctx 参数（试传当前 ctx 而非 `EGL_NO_CONTEXT`）。
-3. Java 失败 → 该机 AVC Surface-input 不接受 GL 帧，架构回退方案：a) GL 仅用于滤镜/预览，导出走直连（滤镜受限）；b) CPU YUV 路径（NDK 无 `getInputImage/getOutputImage`，需按 decoder 输出 format 的 stride 自行解平面，已知风险）。
-4. 备选清单：pbuffer + `glReadPixels` 回读走 encoder ByteBuffer（YUV 布局问题同上）；升 ES3 context；`AMediaCodec_createPersistentInputSurface` 复用。
+测试语义注记：YUV 亮度断言受 limited-range 往返衰减（`(Y-16)*(1+amount)+16`），默认 amount 0.2 在
+luma-50 夹具上只有 +6.8，`brightnessPixelShift` 现用 amount 0.5（期望 +17，阈值 >10）。
 
-**改动文件**：`plugins/weizhi_transcode/{weizhi_transcode.c,wtjson.[ch]}`、`CMakeLists.txt`（链 `EGL GLESv2 log`，仅安卓）、`android/app/src/main/assets/weizhi-packages/video@0.2.0/`、`android/app/src/androidTest/.../WeizhiTranscodeInstrumentedTest.java`（+`AvcFixtures`/包测试已绿）、`tests/test_engine.c`（0.2.0 编译器断言，桌面已绿）。构建：`./scripts/build-android.sh arm64-v8a`；单测：`cd android && ./gradlew :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=com.weizhi.WeizhiTranscodeInstrumentedTest#scaleViaPackage'`，失败看 XML 报告里的 job log。
+P3b 改动文件：`plugins/weizhi_transcode/weizhi_transcode.c`、
+`android/app/src/androidTest/java/com/weizhi/{WeizhiTranscodeInstrumentedTest,GlEncoderProbeInstrumentedTest}.java`。
+构建：`./scripts/build-android.sh arm64-v8a`；单测：`cd android && ./gradlew :app:connectedDebugAndroidTest`。
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
 
 P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 MediaExtractor/MediaMuxer，

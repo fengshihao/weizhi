@@ -295,7 +295,6 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
 
 /* Draw one hardware buffer into the encoder surface at pts_ns (nanoseconds). */
 static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t out_w, int32_t out_h) {
-    EGLint attrs[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
     EGLImageKHR image;
     int i;
     if (gl->image != EGL_NO_IMAGE_KHR) {
@@ -303,12 +302,15 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
         gl->image = EGL_NO_IMAGE_KHR;
     }
     {
+        /* No attribs on the import: SurfaceTexture-based consumers create
+           these images without EGL_IMAGE_PRESERVED_KHR, and preservation is
+           not needed for a sample-once draw. */
         EGLClientBuffer client = eglGetNativeClientBufferANDROID(ahb);
         if (client == NULL) {
             wt_logf("eglGetNativeClientBufferANDROID failed");
             return;
         }
-        image = eglCreateImageKHR(gl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, client, attrs);
+        image = eglCreateImageKHR(gl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, client, NULL);
     }
     if (image == EGL_NO_IMAGE_KHR) {
         wt_logf("eglCreateImageKHR failed 0x%x", (unsigned)eglGetError());
@@ -333,12 +335,17 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
     glViewport(0, 0, out_w, out_h);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     if (g_tx_draws < 3) {
-        wt_logf("draw pts_ns=%lld", (long long)pts_ns);
+        wt_logf("draw pts_ns=%lld glErr=0x%x", (long long)pts_ns, (unsigned)glGetError());
     }
     eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
     if (!eglSwapBuffers(gl->dpy, gl->surf)) {
         wt_logf("swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(), (long long)pts_ns);
     }
+    /* Wait for the draw to finish before the caller returns the source buffer
+       to the reader (AImage_delete): the decoder may otherwise write into a
+       buffer the GPU is still sampling. SurfaceTexture gets this for free via
+       BufferQueue fences; the raw EGLImage import path does not. */
+    glFinish();
     g_tx_draws++;
 }
 
@@ -381,6 +388,8 @@ typedef struct WtPipeline {
     WtPendingSample pending[WT_MAX_PENDING];
     int npending;
     int muxer_started;
+    int32_t enc_w;
+    int32_t enc_h;
     ssize_t video_mux_track;
     ssize_t audio_mux_track;
     int64_t timeline_us;
@@ -584,7 +593,11 @@ static void wt_pending_free(WtPipeline *p) {
     p->npending = 0;
 }
 
-/* Drain the encoder: format change (adds video mux track), samples, EOS. */
+/* Drain the encoder: format change (adds video mux track), samples, EOS.
+   Death before the first encoded sample means the encoder never accepted the
+   job at all — on some devices configure() accepts a surface-mode size the
+   codec component then refuses (e.g. AVC width 160 on MAA-AN00), so report
+   the size instead of a bare "encoder failed". */
 static void wt_drain_encoder(WtPipeline *p, int64_t timeout_us, int *encoder_eos) {
     AMediaCodecBufferInfo info;
     while (p->fail == NULL && !p->cancelled) {
@@ -592,7 +605,14 @@ static void wt_drain_encoder(WtPipeline *p, int64_t timeout_us, int *encoder_eos
         if (idx == AMEDIA_ERROR_UNKNOWN) {
             wt_logf("encoder dequeue error 0x%x (drew %d frames so far)", (unsigned)AMEDIA_ERROR_UNKNOWN,
                     g_tx_draws);
-            wt_fail(p, "encoder failed", NULL);
+            if (!p->muxer_started) {
+                char detail[80];
+                snprintf(detail, sizeof(detail), "no frame encoded at %dx%d; device codec limit",
+                         p->enc_w, p->enc_h);
+                wt_fail(p, "encoder failed", detail);
+            } else {
+                wt_fail(p, "encoder failed", NULL);
+            }
             return;
         }
         if (idx < 0) {
@@ -768,6 +788,8 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         pipe.fail = json_err("source has no video track", job->spec.clips[0].path);
         goto done;
     }
+    pipe.enc_w = enc_w;
+    pipe.enc_h = enc_h;
     /* GPU path when a filter is set or the target size differs from the source. */
     use_gl = job->spec.nfilters == 1 || enc_w != src_w || enc_h != src_h;
 
