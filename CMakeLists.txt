@@ -92,6 +92,22 @@ add_custom_command(TARGET echo_video POST_BUILD
         "$<TARGET_FILE_DIR:echo_video>/manifest.json"
 )
 
+# Real media plugin: NDK media stack only exists on Android (docs/video-architecture.md §2.1).
+# Bundled delivery via the :weizhi-video AAR; desktop builds skip this target entirely.
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_library(weizhi_video SHARED
+        plugins/weizhi_video/weizhi_video.c
+        plugins/weizhi_video/wjson.c
+    )
+    target_include_directories(weizhi_video PRIVATE include plugins/weizhi_video/generated)
+    target_compile_options(weizhi_video PRIVATE -fvisibility=hidden)
+    target_link_libraries(weizhi_video mediandk)
+    set_target_properties(weizhi_video PROPERTIES
+        OUTPUT_NAME "weizhivideo"
+        PREFIX "lib"
+    )
+endif()
+
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)

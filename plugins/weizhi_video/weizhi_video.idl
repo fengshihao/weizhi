@@ -1,0 +1,13 @@
+# weizhi_video: NDK media-stack plugin (docs/video-architecture.md P1).
+# Remux-only editing: trim clips (startMs/endMs) and concat onto one timeline.
+# No re-encode — same-codec samples are copied through AMediaMuxer (P2 adds encode).
+# Bundled delivery: the SO is built as libweizhivideo.so and ships in the
+# :weizhi-video AAR (dir name weizhi_video is the module; plugin id is "video").
+plugin video
+version 0.1.0
+min_host_abi 2
+
+fn probe(path: str) -> str
+fn open_job(options_json: str) -> i64
+fn run_job(job: i64, on_progress: cb(s: str)) -> str
+fn close_job(job: i64) -> void

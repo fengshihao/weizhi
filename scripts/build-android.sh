@@ -76,6 +76,15 @@ for p in echo_math echo_video; do
     fi
 done
 
+# Bundle the real media plugin into the :weizhi-video AAR jniLibs (soname loading).
+video_so=$(find "$out" -name 'libweizhivideo.so' 2>/dev/null | head -1 || true)
+if [ -n "$video_so" ]; then
+    video_dir="$root/android/weizhi-video/src/main/jniLibs/$abi"
+    mkdir -p "$video_dir"
+    cp -f "$video_so" "$video_dir/libweizhivideo.so"
+    echo "weizhi-video jniLibs: $video_dir/libweizhivideo.so ($(wc -c < "$video_dir/libweizhivideo.so") bytes)"
+fi
+
 # Stage stripped JNI into the :weizhi Android library (Release AAR).
 # Keep unstripped $out/libweizhijni.so for local debugging.
 if [ -f "$out/libweizhijni.so" ]; then

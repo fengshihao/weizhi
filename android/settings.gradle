@@ -16,5 +16,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "weizhi-android"
 include(":weizhi")
+include(":weizhi-video")
 include(":caps")
 include(":app")
