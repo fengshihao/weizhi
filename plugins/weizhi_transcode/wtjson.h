@@ -15,6 +15,10 @@
 
 #define WT_MAX_CLIPS 16
 #define WT_MAX_PATH 1024
+#define WT_MAX_FILTERS 4
+#define WT_MAX_SHADER 4096
+#define WT_MAX_UNIFORMS 8
+#define WT_MAX_UNIFORM_NAME 32
 
 typedef struct WtClip {
     char path[WT_MAX_PATH];
@@ -29,12 +33,27 @@ typedef struct WtVideoOpts {
     int64_t fps;
 } WtVideoOpts;
 
+/* One GPU filter: a complete GLES2 fragment shader (engine prepends the
+   OES extension + precision lines) plus float uniforms. The weizhi:video
+   package compiles presets and custom bodies into this shape. */
+typedef struct WtUniform {
+    char name[WT_MAX_UNIFORM_NAME];
+    double value;
+} WtUniform;
+
+typedef struct WtFilter {
+    char shader[WT_MAX_SHADER];
+    WtUniform uniforms[WT_MAX_UNIFORMS];
+    int nuniforms;
+} WtFilter;
+
 typedef struct WtJobSpec {
     WtClip clips[WT_MAX_CLIPS];
     int nclips;
     char output[WT_MAX_PATH];
     WtVideoOpts video;
-    int nfilters; /* filters[] entries; execution lands with the GPU path (P3b) */
+    WtFilter filters[WT_MAX_FILTERS];
+    int nfilters;
 } WtJobSpec;
 
 /* Returns 0 on success; err holds an English reason otherwise. */

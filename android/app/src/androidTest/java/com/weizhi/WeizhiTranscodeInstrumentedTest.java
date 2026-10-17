@@ -5,6 +5,7 @@ import android.content.Context;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.weizhi.caps.WeizhiPackages;
 import com.weizhi.video.WeizhiVideo;
 
 import org.junit.Test;
@@ -63,26 +64,182 @@ public final class WeizhiTranscodeInstrumentedTest {
         }
     }
 
+    /** GPU path: scale 320x240 -> 160x120 through the package DSL. */
     @Test
-    public void scalingIsGuardedUntilP3() throws Exception {
+    public void scaleViaPackage() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File ws = new File(context.getCacheDir(), "weizhi-txg-" + System.currentTimeMillis());
+        File ws = new File(context.getCacheDir(), "weizhi-txs-" + System.currentTimeMillis());
         assertTrue(ws.mkdirs());
         AvcFixtures.encode(ws, "a.mp4", AvcFixtures.DEFAULT_MS, 90);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
 
         try (WeizhiEngine engine = new WeizhiEngine()) {
             engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
             WeizhiVideo.install(engine);
-            String out = engine.runJs(
-                    "const t = await host.ensureNative('transcode');"
-                            + "const job = t.open_job(JSON.stringify({"
-                            + "  clips: [{path: 'a.mp4'}], output: 'o.mp4',"
-                            + "  video: {width: 100, height: 100}}));"
-                            + "const r = JSON.parse(t.run_job(job, () => {}));"
-                            + "t.close_job(job);"
-                            + "({err: r.error})",
-                    30_000);
-            assertTrue(out, out.contains("scaling"));
+            String out;
+            try {
+                out = engine.runJs(
+                        "import { exportVideo } from 'weizhi:video';\n"
+                                + "import fs from 'fs';\n"
+                                + "const v = await host.ensureNative('video');\n"
+                                + "const r = await exportVideo({\n"
+                                + "  clips: [{path: 'a.mp4'}],\n"
+                                + "  output: 'small.mp4',\n"
+                                + "  width: 160, height: 120,\n"
+                                + "});\n"
+                                + "const po = JSON.parse(v.probe('small.mp4'));\n"
+                                + "const log = fs.existsSync('small.mp4.log')\n"
+                                + "  ? fs.readFileSync('small.mp4.log').toString() : '';\n"
+                                + "export default {ok: r.ok, w: r.width, h: r.height,\n"
+                                + "  pw: po.tracks.length ? po.tracks[0].width : 0,\n"
+                                + "  ph: po.tracks.length ? po.tracks[0].height : 0,\n"
+                                + "  probeErr: po.error || '', dur: r.durationMs, log};\n",
+                        60_000, "scale.js");
+            } catch (RuntimeException e) {
+                throw new RuntimeException(e.getMessage() + "\n== job log ==\n" + readJobLog(ws, "small.mp4.log"), e);
+            }
+            assertTrue(out, out.contains("\"ok\":true"));
+            assertTrue(out, out.contains("\"w\":160"));
+            assertTrue(out, out.contains("\"h\":120"));
+            assertTrue(out, out.contains("\"pw\":160"));
+            assertTrue(out, out.contains("\"ph\":120"));
+            int dur = WeizhiVideoInstrumentedTest.jsonInt(out, "dur");
+            assertTrue("dur=" + dur, dur > 800 && dur < 1300);
+        }
+    }
+
+    /** GPU path pixel assertion: brightness(0.5) must raise the decoded luma mean. */
+    @Test
+    public void brightnessPixelShift() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-txb-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "a.mp4", AvcFixtures.DEFAULT_MS, 50);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'plain.mp4', bitrate: 2000000});\n"
+                            + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'bright.mp4',\n"
+                            + "  bitrate: 2000000, filters: ['brightness'],\n"
+                            + "  onProgress: () => {}});\n"
+                            + "export default 'done';\n",
+                    60_000, "bright.js");
+            int plain = firstFrameYMean(new File(ws, "plain.mp4"));
+            int bright = firstFrameYMean(new File(ws, "bright.mp4"));
+            assertTrue("plain=" + plain + " bright=" + bright, bright > plain + 10);
+        }
+    }
+
+    /** One filter per job is the native rule; chains report an English error. */
+    @Test
+    public void filterChainGuarded() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-txc2-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "a.mp4", AvcFixtures.DEFAULT_MS, 70);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            try {
+                engine.runJs(
+                        "import { exportVideo } from 'weizhi:video';\n"
+                                + "await exportVideo({clips: [{path: 'a.mp4'}], output: 'o.mp4',\n"
+                                + "  filters: ['brightness', 'grayscale']});\n"
+                                + "export default 'no-error';\n",
+                        30_000, "chain.js");
+                fail("expected chain guard");
+            } catch (RuntimeException e) {
+                assertTrue(e.getMessage(), e.getMessage().contains("filter chain"));
+            }
+        }
+    }
+
+    /** Decode the first frame and average the Y plane (pixel-level assertion helper). */
+    private static int firstFrameYMean(File mp4) throws Exception {
+        android.media.MediaExtractor ex = new android.media.MediaExtractor();
+        ex.setDataSource(mp4.getAbsolutePath());
+        int track = -1;
+        for (int i = 0; i < ex.getTrackCount(); i++) {
+            String mime = ex.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME);
+            if (mime != null && mime.startsWith("video/")) {
+                track = i;
+                break;
+            }
+        }
+        assertTrue("no video track", track >= 0);
+        ex.selectTrack(track);
+        android.media.MediaCodec codec =
+                android.media.MediaCodec.createDecoderByType("video/avc");
+        codec.configure(ex.getTrackFormat(track), null, null, 0);
+        codec.start();
+        try {
+            android.media.MediaCodec.BufferInfo info = new android.media.MediaCodec.BufferInfo();
+            boolean inputEos = false;
+            long deadline = System.currentTimeMillis() + 10_000;
+            while (System.currentTimeMillis() < deadline) {
+                int inIdx = codec.dequeueInputBuffer(10_000);
+                if (inIdx >= 0 && !inputEos) {
+                    int size = ex.readSampleData(codec.getInputBuffer(inIdx), 0);
+                    if (size < 0) {
+                        codec.queueInputBuffer(inIdx, 0, 0, 0,
+                                android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        inputEos = true;
+                    } else {
+                        codec.queueInputBuffer(inIdx, 0, size, ex.getSampleTime(), 0);
+                        ex.advance();
+                    }
+                }
+                int outIdx = codec.dequeueOutputBuffer(info, 10_000);
+                if (outIdx >= 0) {
+                    android.media.Image image = codec.getOutputImage(outIdx);
+                    if (image != null) {
+                        java.nio.ByteBuffer y = image.getPlanes()[0].getBuffer();
+                        long sum = 0;
+                        int n = y.remaining();
+                        for (int i = 0; i < n; i++) {
+                            sum += y.get(i) & 0xff;
+                        }
+                        int mean = (int) (sum / Math.max(1, n));
+                        image.close();
+                        codec.releaseOutputBuffer(outIdx, false);
+                        return mean;
+                    }
+                    codec.releaseOutputBuffer(outIdx, false);
+                }
+            }
+            throw new IllegalStateException("no decoded frame");
+        } finally {
+            codec.stop();
+            codec.release();
+            ex.release();
+        }
+    }
+
+    /** This repo's test devices have no readable logcat: surface the job log on failure. */
+    private static String readJobLog(File ws, String name) {
+        try {
+            File log = new File(ws, name);
+            if (!log.exists()) {
+                return "(no log file)";
+            }
+            java.util.Scanner scanner = new java.util.Scanner(log, "UTF-8");
+            StringBuilder sb = new StringBuilder();
+            while (scanner.hasNextLine() && sb.length() < 4000) {
+                sb.append(scanner.nextLine()).append('\n');
+            }
+            scanner.close();
+            return sb.toString();
+        } catch (Exception e) {
+            return "(log read failed: " + e.getMessage() + ")";
         }
     }
 

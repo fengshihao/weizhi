@@ -19,14 +19,50 @@
 #include <media/NdkMediaExtractor.h>
 #include <media/NdkMediaFormat.h>
 #include <media/NdkMediaMuxer.h>
+#include <media/NdkImageReader.h>
 
+#define EGL_EGLEXT_PROTOTYPES 1
+#define GL_GLEXT_PROTOTYPES 1
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+
+#include <android/hardware_buffer.h>
+#include <android/log.h>
 #include <android/native_window.h>
 
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* Diagnostics go next to the output file (<output>.log): this repo's test
+ * devices have no readable logcat. Keep the android log line too. */
+static char g_tx_log_path[1024];
+static int g_tx_draws;
+static int g_tx_acquired;
+static int g_tx_frames;
+
+static void wt_logf(const char *fmt, ...) {
+    va_list ap;
+    FILE *f;
+    __android_log_print(ANDROID_LOG_INFO, "weizhi_tx", "%s", fmt != NULL ? fmt : "");
+    if (g_tx_log_path[0] == '\0') {
+        return;
+    }
+    f = fopen(g_tx_log_path, "a");
+    if (f == NULL) {
+        return;
+    }
+    va_start(ap, fmt);
+    vfprintf(f, fmt, ap);
+    va_end(ap);
+    fputc('\n', f);
+    fclose(f);
+}
 
 #define WT_MAX_JOBS 4
 #define WT_SAMPLE_BUF (2 * 1024 * 1024)
@@ -59,6 +95,281 @@ typedef struct WtPendingSample {
     int64_t pts_us;
     uint32_t flags;
 } WtPendingSample;
+
+/* ---- GPU path (P3b): decoder -> AImageReader -> OES texture -> user shader ----
+ * -> encoder input window surface. Used when the job has a filter or a target
+ * size that differs from the source; otherwise the direct surface tunnel runs. */
+
+static const char *WT_VERT_SRC =
+    "attribute vec2 aPos;\n"
+    "attribute vec2 aUV;\n"
+    "varying vec2 vUV;\n"
+    "void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+
+/* External OES buffers (decoder output) use the gralloc convention; flipping V
+ * here matches the SurfaceTexture-style matrix apps normally apply. */
+static const char *WT_FRAG_HEADER =
+    "#extension GL_OES_EGL_image_external : require\n"
+    "precision mediump float;\n";
+
+static const char *WT_FRAG_IDENTITY =
+    "varying vec2 vUV;\n"
+    "uniform samplerExternalOES uVideo;\n"
+    "void main() { gl_FragColor = texture2D(uVideo, vUV); }\n";
+
+typedef struct WtGL {
+    EGLDisplay dpy;
+    EGLContext ctx;
+    EGLSurface surf;
+    ANativeWindow *target; /* encoder input window (for buffer timestamps) */
+    GLuint prog;
+    GLuint vbo;
+    GLuint tex;
+    EGLImageKHR image;
+    GLint a_pos;
+    GLint a_uv;
+    struct {
+        char name[WT_MAX_UNIFORM_NAME];
+        float value;
+    } uniforms[WT_MAX_UNIFORMS];
+    int nuniforms;
+} WtGL;
+
+static GLuint wt_gl_shader(GLenum kind, const char *src, char *err, size_t err_len) {
+    GLuint sh = glCreateShader(kind);
+    GLint ok = 0;
+    GLint len = 0;
+    if (sh == 0) {
+        snprintf(err, err_len, "glCreateShader failed");
+        return 0;
+    }
+    glShaderSource(sh, 1, &src, NULL);
+    glCompileShader(sh);
+    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        glGetShaderiv(sh, GL_INFO_LOG_LENGTH, &len);
+        if (len > 0) {
+            char *log = (char *)malloc((size_t)len + 1);
+            if (log != NULL) {
+                glGetShaderInfoLog(sh, len + 1, NULL, log);
+                snprintf(err, err_len, "shader compile failed: %.120s", log);
+                free(log);
+            } else {
+                snprintf(err, err_len, "shader compile failed");
+            }
+            glDeleteShader(sh);
+            return 0;
+        }
+        snprintf(err, err_len, "shader compile failed");
+        glDeleteShader(sh);
+        return 0;
+    }
+    return sh;
+}
+
+/* Set up EGL on the encoder input window and build the filter program.
+   frag_src is the user body; the OES extension + precision lines are prepended. */
+static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
+                      const WtFilter *filter, char *err, size_t err_len) {
+    const char *exts;
+    EGLConfig config;
+    EGLint num = 0;
+    EGLint cfg_attr[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
+                         /* required for surfaces feeding MediaCodec encoders */
+                         EGL_RECORDABLE_ANDROID, EGL_TRUE, EGL_NONE};
+    EGLint ctx_attr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    GLuint vs = 0;
+    GLuint fs = 0;
+    GLint ok = 0;
+    char *full = (char *)malloc(strlen(WT_FRAG_HEADER) + strlen(frag_src) + 1);
+    memset(gl, 0, sizeof(*gl));
+    if (full == NULL) {
+        snprintf(err, err_len, "out of memory");
+        return -1;
+    }
+    strcpy(full, WT_FRAG_HEADER);
+    strcat(full, frag_src);
+
+    gl->dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    if (gl->dpy == EGL_NO_DISPLAY || !eglInitialize(gl->dpy, NULL, NULL)) {
+        free(full);
+        snprintf(err, err_len, "egl init failed");
+        return -1;
+    }
+    exts = eglQueryString(gl->dpy, EGL_EXTENSIONS);
+    if (exts == NULL || strstr(exts, "EGL_ANDROID_image_native_buffer") == NULL ||
+        strstr(exts, "EGL_KHR_image_base") == NULL ||
+        strstr(exts, "EGL_ANDROID_get_native_client_buffer") == NULL ||
+        strstr(exts, "EGL_ANDROID_presentation_time") == NULL) {
+        free(full);
+        snprintf(err, err_len, "unsupported: filter (device lacks EGL extensions)");
+        return -1;
+    }
+    if (!eglChooseConfig(gl->dpy, cfg_attr, &config, 1, &num) || num < 1) {
+        free(full);
+        snprintf(err, err_len, "egl config failed");
+        return -1;
+    }
+    gl->ctx = eglCreateContext(gl->dpy, config, EGL_NO_CONTEXT, ctx_attr);
+    if (gl->ctx == EGL_NO_CONTEXT) {
+        free(full);
+        snprintf(err, err_len, "egl context failed");
+        return -1;
+    }
+    gl->surf = eglCreateWindowSurface(gl->dpy, config, target, NULL);
+    if (gl->surf == EGL_NO_SURFACE) {
+        free(full);
+        snprintf(err, err_len, "egl surface failed");
+        return -1;
+    }
+    gl->target = target;
+    if (!eglMakeCurrent(gl->dpy, gl->surf, gl->surf, gl->ctx)) {
+        free(full);
+        snprintf(err, err_len, "egl makecurrent failed");
+        return -1;
+    }
+
+    vs = wt_gl_shader(GL_VERTEX_SHADER, WT_VERT_SRC, err, err_len);
+    fs = vs != 0 ? wt_gl_shader(GL_FRAGMENT_SHADER, full, err, err_len) : 0;
+    free(full);
+    if (vs == 0 || fs == 0) {
+        if (vs != 0) glDeleteShader(vs);
+        if (fs != 0) glDeleteShader(fs);
+        return -1;
+    }
+    gl->prog = glCreateProgram();
+    glAttachShader(gl->prog, vs);
+    glAttachShader(gl->prog, fs);
+    glLinkProgram(gl->prog);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    glGetProgramiv(gl->prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        snprintf(err, err_len, "shader link failed");
+        return -1;
+    }
+    glUseProgram(gl->prog);
+
+    {
+        /* pos(2) + uv(2) per vertex, triangle strip quad; V flipped for OES */
+        static const float quad[] = {
+            -1.0f, -1.0f, 0.0f, 1.0f,
+            1.0f, -1.0f, 1.0f, 1.0f,
+            -1.0f, 1.0f, 0.0f, 0.0f,
+            1.0f, 1.0f, 1.0f, 0.0f,
+        };
+        glGenBuffers(1, &gl->vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, gl->vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    }
+    gl->a_pos = glGetAttribLocation(gl->prog, "aPos");
+    gl->a_uv = glGetAttribLocation(gl->prog, "aUV");
+    if (gl->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_pos);
+        glVertexAttribPointer((GLuint)gl->a_pos, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+    }
+    if (gl->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_uv);
+        glVertexAttribPointer((GLuint)gl->a_uv, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+    }
+
+    glGenTextures(1, &gl->tex);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl->tex);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    if (filter != NULL) {
+        int i;
+        for (i = 0; i < filter->nuniforms && gl->nuniforms < WT_MAX_UNIFORMS; i++) {
+            snprintf(gl->uniforms[gl->nuniforms].name, WT_MAX_UNIFORM_NAME, "%s",
+                     filter->uniforms[i].name);
+            gl->uniforms[gl->nuniforms].value = (float)filter->uniforms[i].value;
+            gl->nuniforms++;
+        }
+    }
+    return 0;
+}
+
+/* Draw one hardware buffer into the encoder surface at pts_ns (nanoseconds). */
+static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t out_w, int32_t out_h) {
+    EGLint attrs[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+    EGLImageKHR image;
+    int i;
+    if (gl->image != EGL_NO_IMAGE_KHR) {
+        eglDestroyImageKHR(gl->dpy, gl->image);
+        gl->image = EGL_NO_IMAGE_KHR;
+    }
+    {
+        EGLClientBuffer client = eglGetNativeClientBufferANDROID(ahb);
+        if (client == NULL) {
+            wt_logf("eglGetNativeClientBufferANDROID failed");
+            return;
+        }
+        image = eglCreateImageKHR(gl->dpy, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, client, attrs);
+    }
+    if (image == EGL_NO_IMAGE_KHR) {
+        wt_logf("eglCreateImageKHR failed 0x%x", (unsigned)eglGetError());
+        return; /* drop the frame rather than fail the job */
+    }
+    gl->image = image;
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, image);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl->tex);
+    {
+        GLint loc = glGetUniformLocation(gl->prog, "uVideo");
+        if (loc >= 0) {
+            glUniform1i(loc, 0);
+        }
+    }
+    for (i = 0; i < gl->nuniforms; i++) {
+        GLint loc = glGetUniformLocation(gl->prog, gl->uniforms[i].name);
+        if (loc >= 0) {
+            glUniform1f(loc, gl->uniforms[i].value);
+        }
+    }
+    glViewport(0, 0, out_w, out_h);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    if (g_tx_draws < 3) {
+        wt_logf("draw pts_ns=%lld", (long long)pts_ns);
+    }
+    eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
+    if (!eglSwapBuffers(gl->dpy, gl->surf)) {
+        wt_logf("swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(), (long long)pts_ns);
+    }
+    g_tx_draws++;
+}
+
+static void wt_gl_destroy(WtGL *gl) {
+    if (gl->dpy == EGL_NO_DISPLAY) {
+        return;
+    }
+    if (gl->image != EGL_NO_IMAGE_KHR) {
+        eglDestroyImageKHR(gl->dpy, gl->image);
+    }
+    if (gl->surf != EGL_NO_SURFACE && gl->ctx != EGL_NO_CONTEXT) {
+        eglMakeCurrent(gl->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    }
+    if (gl->prog != 0) {
+        glDeleteProgram(gl->prog);
+    }
+    if (gl->vbo != 0) {
+        glDeleteBuffers(1, &gl->vbo);
+    }
+    if (gl->tex != 0) {
+        glDeleteTextures(1, &gl->tex);
+    }
+    if (gl->surf != EGL_NO_SURFACE) {
+        eglDestroySurface(gl->dpy, gl->surf);
+    }
+    if (gl->ctx != EGL_NO_CONTEXT) {
+        eglDestroyContext(gl->dpy, gl->ctx);
+    }
+    eglTerminate(gl->dpy);
+    memset(gl, 0, sizeof(*gl));
+}
 
 typedef struct WtPipeline {
     AMediaMuxer *muxer;
@@ -279,6 +590,8 @@ static void wt_drain_encoder(WtPipeline *p, int64_t timeout_us, int *encoder_eos
     while (p->fail == NULL && !p->cancelled) {
         ssize_t idx = AMediaCodec_dequeueOutputBuffer(p->encoder, &info, timeout_us);
         if (idx == AMEDIA_ERROR_UNKNOWN) {
+            wt_logf("encoder dequeue error 0x%x (drew %d frames so far)", (unsigned)AMEDIA_ERROR_UNKNOWN,
+                    g_tx_draws);
             wt_fail(p, "encoder failed", NULL);
             return;
         }
@@ -373,13 +686,18 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
     int c;
     char progress[96];
     int progress_tick = 0;
+    int32_t src_w = 0;
+    int32_t src_h = 0;
+    int use_gl = 0;
+    WtGL gl;
+    memset(&gl, 0, sizeof(gl));
 
     if (job == NULL) {
         return json_err("bad job handle", NULL);
     }
-    if (job->spec.nfilters > 0) {
-        /* Filters execute on the GPU path (EGL/GLSL, P3b); keep the contract honest. */
-        return json_err("unsupported: filter (GPU path lands in P3b)", NULL);
+    if (job->spec.nfilters > 1) {
+        /* Multi-pass chains need intermediate FBOs; one filter per job for now. */
+        return json_err("unsupported: filter chain (one filter per job)", NULL);
     }
     memset(&pipe, 0, sizeof(pipe));
     pipe.video_mux_track = -1;
@@ -404,6 +722,14 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         goto done;
     }
     pipe.muxer = AMediaMuxer_new(pipe.out_fd, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
+    {
+        /* diagnostics: per-job log next to the output (test devices lack logcat) */
+        snprintf(g_tx_log_path, sizeof(g_tx_log_path), "%s.log", pipe.out_abs);
+        g_tx_draws = 0;
+        g_tx_acquired = 0;
+        g_tx_frames = 0;
+        wt_logf("job start: clips=%d filters=%d", job->spec.nclips, job->spec.nfilters);
+    }
 
     /* Encoder config defaults to the first clip's video track. */
     {
@@ -425,15 +751,15 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         }
         enc_w = src.width;
         enc_h = src.height;
+        src_w = src.width;
+        src_h = src.height;
         enc_fps = src.fps > 0 ? src.fps : 30;
         close_source(&src);
         free(abs);
     }
-    if (job->spec.video.width > 0 || job->spec.video.height > 0) {
-        if ((int)job->spec.video.width != enc_w || (int)job->spec.video.height != enc_h) {
-            pipe.fail = json_err("unsupported: scaling (P3; EGL not wired yet)", NULL);
-            goto done;
-        }
+    if (job->spec.video.width > 0 && job->spec.video.height > 0) {
+        enc_w = (int32_t)job->spec.video.width;
+        enc_h = (int32_t)job->spec.video.height;
     }
     if (job->spec.video.fps > 0) {
         enc_fps = (int32_t)job->spec.video.fps;
@@ -442,6 +768,8 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         pipe.fail = json_err("source has no video track", job->spec.clips[0].path);
         goto done;
     }
+    /* GPU path when a filter is set or the target size differs from the source. */
+    use_gl = job->spec.nfilters == 1 || enc_w != src_w || enc_h != src_h;
 
     enc_fmt = AMediaFormat_new();
     AMediaFormat_setString(enc_fmt, AMEDIAFORMAT_KEY_MIME, "video/avc");
@@ -451,6 +779,9 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                           job->spec.video.bitrate > 0 ? (int32_t)job->spec.video.bitrate : 4000000);
     AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_FRAME_RATE, enc_fps);
     AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, 1);
+    /* COLOR_FormatSurface (0x7F000789): frames arrive via the input surface.
+       Some encoders reject the job without it. */
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000789);
     pipe.encoder = AMediaCodec_createEncoderByType("video/avc");
     if (pipe.encoder == NULL ||
         AMediaCodec_configure(pipe.encoder, enc_fmt, NULL, NULL, AMEDIACODEC_CONFIGURE_FLAG_ENCODE) !=
@@ -463,12 +794,26 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         pipe.fail = json_err("encoder start failed", NULL);
         goto done;
     }
+    if (use_gl) {
+        char gl_err[192];
+        const char *frag =
+            job->spec.nfilters == 1 ? job->spec.filters[0].shader : WT_FRAG_IDENTITY;
+        const WtFilter *filt = job->spec.nfilters == 1 ? &job->spec.filters[0] : NULL;
+        gl_err[0] = '\0';
+        if (wt_gl_init(&gl, pipe.enc_surface, frag, filt, gl_err, sizeof(gl_err)) != 0) {
+            pipe.fail = json_err(gl_err[0] != '\0' ? gl_err : "GPU setup failed", NULL);
+            goto done;
+        }
+        wt_logf("gl init ok (target %dx%d, filter=%d)", enc_w, enc_h, job->spec.nfilters);
+    }
 
     for (c = 0; c < job->spec.nclips && pipe.fail == NULL && !pipe.cancelled; c++) {
         WtClip *clip = &job->spec.clips[c];
         char *abs = resolved_or_error(clip->path);
         WtSource vsrc;
         AMediaCodec *decoder = NULL;
+        AImageReader *reader = NULL;
+        ANativeWindow *dec_window = NULL;
         int64_t start_us = clip->start_ms * 1000;
         int64_t end_us = clip->end_ms > 0 ? clip->end_ms * 1000 : (int64_t)1 << 62;
         int64_t last_rel = 0;
@@ -491,17 +836,31 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
             pipe.fail = json_err(open_err, clip->path);
             goto clip_done;
         }
-        if (vsrc.width != enc_w || vsrc.height != enc_h) {
-            pipe.fail = json_err("unsupported: mixed clip resolutions (all clips must match output)",
-                                 clip->path);
+        if (!use_gl && (vsrc.width != enc_w || vsrc.height != enc_h)) {
+            pipe.fail = json_err(
+                "unsupported: mixed clip resolutions (set video width/height to scale them)", clip->path);
             close_source(&vsrc);
             goto clip_done;
+        }
+        if (use_gl) {
+            /* per-clip reader at the clip's own size; GPU-sampled usage so EGL can
+             * import the buffers (plain AImageReader_new lacks GPU usage). */
+            if (AImageReader_newWithUsage(vsrc.width, vsrc.height, AIMAGE_FORMAT_PRIVATE,
+                                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 3,
+                                          &reader) != AMEDIA_OK ||
+                reader == NULL ||
+                AImageReader_getWindow(reader, &dec_window) != AMEDIA_OK || dec_window == NULL) {
+                pipe.fail = json_err("image reader setup failed", clip->path);
+                close_source(&vsrc);
+                goto clip_done;
+            }
         }
         {
             AMediaFormat *dec_fmt = source_track_format(vsrc.ex, vsrc.track);
             decoder = AMediaCodec_createDecoderByType(vsrc.mime);
             if (decoder == NULL || dec_fmt == NULL ||
-                AMediaCodec_configure(decoder, dec_fmt, pipe.enc_surface, NULL, 0) != AMEDIA_OK) {
+                AMediaCodec_configure(decoder, dec_fmt, use_gl ? dec_window : pipe.enc_surface, NULL,
+                                      0) != AMEDIA_OK) {
                 AMediaFormat_delete(dec_fmt);
                 pipe.fail = json_err("decoder setup failed", vsrc.mime);
                 close_source(&vsrc);
@@ -560,9 +919,36 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                             AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, false);
                         } else {
                             int64_t rel = t - start_us;
-                            /* render into the encoder input surface at the output pts (ns) */
-                            AMediaCodec_releaseOutputBufferAtTime(
-                                decoder, (size_t)out_idx, (pipe.timeline_us + rel) * 1000);
+                            if (use_gl) {
+                                /* frame lands in the reader; draw it through the shader */
+                                AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, true);
+                                g_tx_frames++;
+                                for (;;) {
+                                    AImage *img = NULL;
+                                    AHardwareBuffer *ahb = NULL;
+                                    media_status_t st = AImageReader_acquireNextImage(reader, &img);
+                                    if (st != AMEDIA_OK || img == NULL) {
+                                        if (st != AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) {
+                                            wt_logf("acquire st=%d after frame pts=%lld", (int)st,
+                                                    (long long)t);
+                                        }
+                                        break;
+                                    }
+                                    g_tx_acquired++;
+                                    if (AImage_getHardwareBuffer(img, &ahb) == AMEDIA_OK &&
+                                        ahb != NULL) {
+                                        wt_gl_draw(&gl, ahb, (pipe.timeline_us + rel) * 1000, enc_w,
+                                                   enc_h);
+                                    } else {
+                                        wt_logf("no hardware buffer on image");
+                                    }
+                                    AImage_delete(img);
+                                }
+                            } else {
+                                /* direct tunnel: render into the encoder surface at the output pts */
+                                AMediaCodec_releaseOutputBufferAtTime(
+                                    decoder, (size_t)out_idx, (pipe.timeline_us + rel) * 1000);
+                            }
                             last_rel = rel;
                             wrote_any = 1;
                             progress_tick++;
@@ -626,6 +1012,10 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
             AMediaCodec_stop(decoder);
             AMediaCodec_delete(decoder);
         }
+        if (reader != NULL) {
+            /* dec_window is owned by the reader; deleting the reader frees it. */
+            AImageReader_delete(reader);
+        }
         free(abs);
     }
 
@@ -635,9 +1025,15 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         while (!encoder_eos && pipe.fail == NULL) {
             wt_drain_encoder(&pipe, 100 * 1000, &encoder_eos);
         }
+        wt_logf("job done: frames=%d acquired=%d draws=%d muxer_started=%d timeline_ms=%lld",
+                g_tx_frames, g_tx_acquired, g_tx_draws, pipe.muxer_started,
+                (long long)(pipe.timeline_us / 1000));
     }
 
 done:
+    if (use_gl) {
+        wt_gl_destroy(&gl);
+    }
     if (pipe.encoder != NULL) {
         AMediaCodec_stop(pipe.encoder);
         AMediaCodec_delete(pipe.encoder);

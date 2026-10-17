@@ -46,13 +46,13 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_D
 configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONLY)
 
 # Embed the weizhi:video package source for tests (single source of truth).
-file(READ "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.1.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
+file(READ "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.2.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
 string(REPLACE "\\" "\\\\" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS_RAW}")
 string(REPLACE "\"" "\\\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
 string(REPLACE "\n" "\\n\"\n\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
 set(WEIZHI_VIDEO_PKG_JS "\"${WEIZHI_VIDEO_PKG_JS}\"")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.1.0/index.js")
+    "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.2.0/index.js")
 configure_file(src/weizhi_video_pkg_js.h.in "${CMAKE_BINARY_DIR}/weizhi_video_pkg_js.h" @ONLY)
 
 add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c src/sha256.c)
@@ -124,7 +124,7 @@ if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     )
     target_include_directories(weizhi_transcode PRIVATE include plugins/weizhi_transcode/generated)
     target_compile_options(weizhi_transcode PRIVATE -fvisibility=hidden)
-    target_link_libraries(weizhi_transcode mediandk android)
+    target_link_libraries(weizhi_transcode mediandk android log EGL GLESv2)
     set_target_properties(weizhi_transcode PROPERTIES
         OUTPUT_NAME "weizhitranscode"
         PREFIX "lib"

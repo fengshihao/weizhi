@@ -69,22 +69,18 @@ public final class WeizhiVideoPackageInstrumentedTest {
             int rdur = WeizhiVideoInstrumentedTest.jsonInt(remux, "dur");
             assertTrue("rdur=" + rdur, rdur > 1800 && rdur < 2300);
 
-            /* filters are compiled but rejected by native until the GPU path (P3b) */
-            try {
-                engine.runJs(
-                        "import { exportVideo } from 'weizhi:video';\n"
-                                + "await exportVideo({\n"
-                                + "  clips: [{path: 'a.mp4'}],\n"
-                                + "  output: 'pkg-flt.mp4',\n"
-                                + "  filters: ['brightness'],\n"
-                                + "});\n"
-                                + "export default 'no-error';\n",
-                        30_000, "pkg3.js");
-                fail("expected filter guard");
-            } catch (RuntimeException e) {
-                assertTrue(e.getMessage(), e.getMessage().contains("unsupported: filter"));
-                assertTrue(e.getMessage().contains("P3b"));
-            }
+            /* filters execute on the GPU path (P3b): brightness export succeeds */
+            String flt = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const rf = await exportVideo({\n"
+                            + "  clips: [{path: 'a.mp4'}],\n"
+                            + "  output: 'pkg-flt.mp4',\n"
+                            + "  filters: ['brightness'],\n"
+                            + "});\n"
+                            + "export default {ok: rf.ok, dur: rf.durationMs};\n",
+                    30_000, "pkg3.js");
+            assertTrue(flt, flt.contains("\"ok\":true"));
+            assertTrue(flt, WeizhiVideoInstrumentedTest.jsonInt(flt, "dur") > 800);
         }
     }
 }

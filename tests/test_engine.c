@@ -1545,7 +1545,7 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.1.0", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.2.0", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
@@ -1553,7 +1553,8 @@ static void test_weizhi_video_package(void) {
                               "const remux = buildJob({clips: [{path: 'a.mp4', startMs: 200, endMs: 800}, {path: 'b.mp4'}], output: 'o.mp4'});\n"
                               "const enc = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', bitrate: 500000});\n"
                               "const flt = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['brightness']});\n"
-                              "const custom = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{shader: 'void main(){}', uniforms: {k: 1}}]});\n"
+                              "const flt2 = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'contrast', params: {amount: 0.5}}]});\n"
+                              "const custom = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{shader: 'uniform float uK;\\nvoid main() { gl_FragColor = texture2D(uVideo, vUV) * uK; }', uniforms: {uK: 0.5}}]});\n"
                               "let e1 = '';\n"
                               "try { buildJob({clips: [], output: 'o.mp4'}); } catch (e) { e1 = e.message; }\n"
                               "let e2 = '';\n"
@@ -1562,9 +1563,15 @@ static void test_weizhi_video_package(void) {
                               "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['nope']}); } catch (e) { e3 = e.message; }\n"
                               "const encOpts = JSON.parse(enc.optionsJson);\n"
                               "const fltOpts = JSON.parse(flt.optionsJson);\n"
+                              "const flt2Opts = JSON.parse(flt2.optionsJson);\n"
                               "const customOpts = JSON.parse(custom.optionsJson);\n"
+                              "const customShader = customOpts.filters[0].shader;\n"
                               "export default [remux.plugin, enc.plugin, flt.plugin,\n"
-                              "  encOpts.video.bitrate, fltOpts.filters[0].type, customOpts.filters[0].shader,\n"
+                              "  encOpts.video.bitrate, fltOpts.filters[0].uniforms.uAmount,\n"
+                              "  flt2Opts.filters[0].uniforms.uAmount,\n"
+                              "  fltOpts.filters[0].shader.indexOf('samplerExternalOES') >= 0,\n"
+                              "  customShader.indexOf('void main()') >= 0 && customShader.indexOf('samplerExternalOES') >= 0,\n"
+                              "  customOpts.filters[0].uniforms.uK,\n"
                               "  JSON.stringify(remux.options.clips[0]),\n"
                               "  e1.includes('bad argument'), e2.includes('remux cannot'), e3.indexOf('nope') >= 0];\n",
                               3000,
@@ -1572,7 +1579,7 @@ static void test_weizhi_video_package(void) {
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL &&
            strcmp(result.output_text,
-                  "[\"video\",\"transcode\",\"transcode\",500000,\"brightness\",\"void main(){}\","
+                  "[\"video\",\"transcode\",\"transcode\",500000,0.2,0.5,true,true,0.5,"
                   "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true]") == 0);
     weizhi_result_free(&result);
     /* exportVideo without native plugins fails with the agent-facing hint. */

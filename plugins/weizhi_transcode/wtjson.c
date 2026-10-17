@@ -73,6 +73,16 @@ static const char *parse_i64(const char *p, int64_t *out) {
     return end;
 }
 
+static const char *parse_f64(const char *p, double *out) {
+    char *end;
+    double v = strtod(p, &end);
+    if (end == p) {
+        return NULL;
+    }
+    *out = v;
+    return end;
+}
+
 static const char *skip_value(const char *p) {
     int depth = 0;
     p = skip_ws(p);
@@ -152,21 +162,103 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
             }
             p = skip_ws(p + 1);
             while (*p != ']') {
+                WtFilter *filter;
                 if (*p == ',') {
                     p = skip_ws(p + 1);
                     continue;
                 }
-                if (*p != '{') {
-                    snprintf(err, err_len, "bad argument: job json (filters must be objects)");
+                if (*p != '{' || spec->nfilters >= WT_MAX_FILTERS) {
+                    snprintf(err, err_len, "bad argument: job json (bad filter or too many filters)");
                     return -1;
                 }
-                p = skip_value(p);
-                if (p == NULL) {
-                    snprintf(err, err_len, "bad argument: job json (bad filter)");
-                    return -1;
+                filter = &spec->filters[spec->nfilters];
+                memset(filter, 0, sizeof(*filter));
+                p = skip_ws(p + 1);
+                while (*p != '}') {
+                    if (*p == ',') {
+                        p = skip_ws(p + 1);
+                        continue;
+                    }
+                    p = parse_str(p, key, sizeof(key));
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad filter key)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
+                    if (*p != ':') {
+                        snprintf(err, err_len, "bad argument: job json (expected ':')");
+                        return -1;
+                    }
+                    p = skip_ws(p + 1);
+                    if (strcmp(key, "shader") == 0) {
+                        const char *before = p;
+                        p = parse_str(p, filter->shader, sizeof(filter->shader));
+                        if (p == NULL) {
+                            snprintf(err, err_len, "bad argument: job json (bad shader)");
+                            return -1;
+                        }
+                        if (filter->shader[0] == '\0') {
+                            snprintf(err, err_len, "bad argument: job json (empty shader)");
+                            return -1;
+                        }
+                        if (strlen(filter->shader) >= sizeof(filter->shader) - 1) {
+                            /* truncated: only safe if the copy clearly ended early */
+                            (void)before;
+                            snprintf(err, err_len, "bad argument: job json (shader too long)");
+                            return -1;
+                        }
+                    } else if (strcmp(key, "uniforms") == 0) {
+                        if (*p != '{') {
+                            snprintf(err, err_len, "bad argument: job json (uniforms must be an object)");
+                            return -1;
+                        }
+                        p = skip_ws(p + 1);
+                        while (*p != '}') {
+                            if (*p == ',') {
+                                p = skip_ws(p + 1);
+                                continue;
+                            }
+                            p = parse_str(p, key, sizeof(key));
+                            if (p == NULL) {
+                                snprintf(err, err_len, "bad argument: job json (bad uniform name)");
+                                return -1;
+                            }
+                            p = skip_ws(p);
+                            if (*p != ':') {
+                                snprintf(err, err_len, "bad argument: job json (expected ':')");
+                                return -1;
+                            }
+                            p = skip_ws(p + 1);
+                            {
+                                double vval = 0;
+                                const char *num_start = p;
+                                p = parse_f64(p, &vval);
+                                if (p == num_start) {
+                                    snprintf(err, err_len,
+                                             "bad argument: job json (uniform %s must be a number)", key);
+                                    return -1;
+                                }
+                                if (filter->nuniforms < WT_MAX_UNIFORMS) {
+                                    snprintf(filter->uniforms[filter->nuniforms].name,
+                                             WT_MAX_UNIFORM_NAME, "%s", key);
+                                    filter->uniforms[filter->nuniforms].value = vval;
+                                    filter->nuniforms++;
+                                }
+                            }
+                            p = skip_ws(p);
+                        }
+                        p = skip_ws(p + 1);
+                    } else {
+                        p = skip_value(p);
+                    }
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad filter value)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
                 }
+                p = skip_ws(p + 1);
                 spec->nfilters++;
-                p = skip_ws(p);
             }
             p = skip_ws(p + 1);
         } else if (strcmp(key, "video") == 0) {
