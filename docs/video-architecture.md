@@ -243,10 +243,18 @@ P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 Me
 
 待拍板：
 
-- **Q4** 插件拆分粒度：`weizhi_video` 单插件（需提高导出上限）vs 按功能拆多插件？
-  倾向按功能拆，不动 32 上限。
 - **Q5** 与 ROADMAP 的关系：视频不在当前路线图（近期焦点是 Agent 集成）；
   本特性按长期分支推进，合入主干前需在 `docs/ROADMAP.md` 立项。
+
+已定（补充）：**Q4**（2026-10-17）：**按功能拆多逻辑插件**，不动单插件 32 导出上限——
+P2 起按 demux / decode-encode / mux 等功能面拆分（各自独立 SO 与 manifest，
+宿主按需 `registerBundledPlugin`），`weizhi_video`（remux）保持现状不拆。
+
+另：P0/P1 记录中提到的真机 `workspaceRelativeImport` 失败已定位并修复——
+非 Android 16 设备问题，而是引擎通用 bug：根级脚本的 `./util.js` 被 QuickJS
+默认规范化成裸名 `util.js`，加载器视为非路径报 unsupported（桌面同样复现）。
+修复为自定义模块规范化器：路径形态说明符规范化后若丢失路径性则补回 `./`；
+裸名语义（仅 built-ins / weizhi:）不变。真机 19/19 全绿（该用例首次全绿）。
 
 ## 7. 测试策略（对齐 AGENTS.md）
 
