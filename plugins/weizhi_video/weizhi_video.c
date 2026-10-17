@@ -173,6 +173,7 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_video_probe(const char *path) {
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &rate);
             AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &ch);
         }
+        AMediaFormat_delete(fmt); /* caller-owned per NdkMediaExtractor.h */
         snprintf(piece, sizeof(piece),
                  "%s{\"index\":%d,\"type\":\"%s\",\"mime\":\"%s\",\"durationMs\":%lld,"
                  "\"width\":%d,\"height\":%d,\"fps\":%d,\"sampleRate\":%d,\"channels\":%d}",
@@ -303,6 +304,7 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_video_run_job(int64_t job_id, uint32_t on_prog
             }
             AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime);
             if (mime == NULL || mime[0] == '\0') {
+                AMediaFormat_delete(fmt);
                 continue;
             }
             for (k = 0; k < nmimes; k++) {
@@ -312,10 +314,12 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_video_run_job(int64_t job_id, uint32_t on_prog
             }
             if (k == nmimes) {
                 if (nmimes >= WV_MAX_TRACKS) {
+                    AMediaFormat_delete(fmt);
                     continue;
                 }
                 mimes[k].mux_track = AMediaMuxer_addTrack(muxer, fmt);
                 if (mimes[k].mux_track < 0) {
+                    AMediaFormat_delete(fmt);
                     result = json_err("muxer track add failed", mime);
                     AMediaExtractor_delete(ex);
                     goto done;
@@ -324,6 +328,7 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_video_run_job(int64_t job_id, uint32_t on_prog
                 nmimes++;
             }
             clip_map[i] = mimes[k].mux_track;
+            AMediaFormat_delete(fmt); /* caller-owned per NdkMediaExtractor.h */
         }
         if (!started) {
             if (AMediaMuxer_start(muxer) != AMEDIA_OK) {

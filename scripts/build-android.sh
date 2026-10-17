@@ -4,7 +4,8 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 "$root/scripts/fetch-deps.sh"
 
 abi=${1:-arm64-v8a}
-api=${ANDROID_API:-24}
+# Align with the Gradle modules' minSdk (26); NDK media surface APIs need 26.
+api=${ANDROID_API:-26}
 sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 
 pick_ndk() {
@@ -76,14 +77,16 @@ for p in echo_math echo_video; do
     fi
 done
 
-# Bundle the real media plugin into the :weizhi-video AAR jniLibs (soname loading).
-video_so=$(find "$out" -name 'libweizhivideo.so' 2>/dev/null | head -1 || true)
-if [ -n "$video_so" ]; then
-    video_dir="$root/android/weizhi-video/src/main/jniLibs/$abi"
-    mkdir -p "$video_dir"
-    cp -f "$video_so" "$video_dir/libweizhivideo.so"
-    echo "weizhi-video jniLibs: $video_dir/libweizhivideo.so ($(wc -c < "$video_dir/libweizhivideo.so") bytes)"
-fi
+# Bundle the media plugins into the :weizhi-video AAR jniLibs (soname loading).
+video_dir="$root/android/weizhi-video/src/main/jniLibs/$abi"
+mkdir -p "$video_dir"
+for so in libweizhivideo.so libweizhitranscode.so; do
+    built=$(find "$out" -name "$so" 2>/dev/null | head -1 || true)
+    if [ -n "$built" ]; then
+        cp -f "$built" "$video_dir/$so"
+        echo "weizhi-video jniLibs: $video_dir/$so ($(wc -c < "$video_dir/$so") bytes)"
+    fi
+done
 
 # Stage stripped JNI into the :weizhi Android library (Release AAR).
 # Keep unstripped $out/libweizhijni.so for local debugging.
