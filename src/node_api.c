@@ -1938,6 +1938,73 @@ static int module_path_spec(const char *module_name) {
     return module_name != NULL && (module_name[0] == '/' || strchr(module_name, '/') != NULL);
 }
 
+/*
+ * QuickJS's default normalize resolves './util.js' against a root-level base
+ * ("run.js") to the bare name "util.js"; the loader then treats bare names as
+ * non-paths and reports "unsupported: module". Same algorithm here, but when a
+ * path-form specifier (leading '.') normalizes to a bare leaf we re-prefix
+ * "./" so workspace resolution still applies. Bare specifiers keep their
+ * documented meaning (built-ins and weizhi: only).
+ */
+static char *weizhi_module_normalize(JSContext *ctx, const char *base_name, const char *name,
+                                     void *opaque) {
+    char *filename;
+    char *p;
+    const char *r;
+    size_t cap;
+    size_t len;
+    (void)opaque;
+    if (name[0] != '.') {
+        return js_strdup(ctx, name);
+    }
+    p = strrchr(base_name, '/');
+    len = p != NULL ? (size_t)(p - base_name) : 0;
+    cap = len + strlen(name) + 4;
+    filename = (char *)js_malloc(ctx, cap);
+    if (filename == NULL) {
+        return NULL;
+    }
+    memcpy(filename, base_name, len);
+    filename[len] = '\0';
+    r = name;
+    for (;;) {
+        if (r[0] == '.' && r[1] == '/') {
+            r += 2;
+        } else if (r[0] == '.' && r[1] == '.' && r[2] == '/') {
+            if (filename[0] == '\0') {
+                break;
+            }
+            p = strrchr(filename, '/');
+            p = p != NULL ? p + 1 : filename;
+            if (strcmp(p, ".") == 0 || strcmp(p, "..") == 0) {
+                break;
+            }
+            if (p > filename) {
+                p--;
+            }
+            *p = '\0';
+            r += 3;
+        } else {
+            break;
+        }
+    }
+    if (filename[0] != '\0') {
+        strcat(filename, "/");
+    }
+    strcat(filename, r);
+    if (filename[0] != '/' && strchr(filename, '/') == NULL) {
+        char *fixed = (char *)js_malloc(ctx, strlen(filename) + 3);
+        if (fixed != NULL) {
+            fixed[0] = '.';
+            fixed[1] = '/';
+            strcpy(fixed + 2, filename);
+            js_free(ctx, filename);
+            return fixed;
+        }
+    }
+    return filename;
+}
+
 static JSModuleDef *load_user_js_module(JSContext *ctx, Engine *engine, const char *module_name) {
     uint8_t *bytes = NULL;
     size_t length = 0;
@@ -3600,7 +3667,7 @@ int weizhi_install_node_api(Engine *engine) {
     JSValue console;
     JSValue process;
     JS_SetRuntimeOpaque(engine->rt, engine);
-    JS_SetModuleLoaderFunc(engine->rt, NULL, builtin_module_loader, engine);
+    JS_SetModuleLoaderFunc(engine->rt, weizhi_module_normalize, builtin_module_loader, engine);
 
     global = JS_GetGlobalObject(engine->ctx);
     JS_SetPropertyStr(engine->ctx, global, "require", JS_NewCFunction(engine->ctx, js_require, "require", 1));

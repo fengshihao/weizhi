@@ -457,6 +457,32 @@ static void test_relative_import(void) {
     free(dir);
 }
 
+/* Root-level scripts: './util.js' must not normalize to a bare name (device-suite
+   regression: QuickJS default normalize made it 'util.js' → unsupported). */
+static void test_root_relative_import(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    const char *lib = "export function inc(x){ return x + 1; }\n";
+    write_file(dir, "util.js", lib, strlen(lib));
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    result = weizhi_run_js_ex(engine,
+                              "import { inc } from './util.js';\n"
+                              "export default inc(41);\n",
+                              2000,
+                              "run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
+    weizhi_result_free(&result);
+    /* Bare specifiers keep their documented meaning: built-ins / weizhi: only. */
+    result = weizhi_run_js_ex(engine, "import { inc } from 'util.js';\n", 1000, "run.js");
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: module") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
 static void test_promise_await(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result = weizhi_run_js(engine, "await Promise.resolve(42)", 1000);
@@ -1714,6 +1740,7 @@ int main(void) {
     test_host_function_limit();
     test_load_script_removed();
     test_relative_import();
+    test_root_relative_import();
     test_promise_await();
     test_buffer_path_require();
     test_fs_sync_and_promises();
