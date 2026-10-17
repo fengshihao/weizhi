@@ -96,6 +96,25 @@
 JS 编排的是**管线图**（哪些片段、什么滤镜、什么参数），不是帧本身；唯一例外是缩略图/
 封面等小产物，按 `bytes` 拷贝出（受 `fs_io_bytes` 级别约束即可）。
 
+### 2.1 安卓系统 API 是主线，不是自研 FFmpeg（2026-10-17 与维护者对齐）
+
+视频处理**不写软解/软编算法**，全部调用安卓系统媒体栈，两条可达路径：
+
+| 路径 | 说明 | 结论 |
+| --- | --- | --- |
+| **A. NDK 原生媒体 API（`libmediandk`）** | `AMediaExtractor`（解复用）、`AMediaCodec`（硬解/硬编，与 Java `MediaCodec` 是同一套底层硬件编解码器）、`AMediaMuxer`（复用）、`AImageReader`（GPU 帧出口，API 24+）。C 插件直接链接调用，无需 JNI | **主线**。完全符合插件规则（纯 C、禁 `JNI_OnLoad`），可验签目录下发、零第三方体积；minSdk 26 > API 21/24 门槛，全量可用 |
+| B. Java 层 `MediaCodec`（放 `:caps` 或宿主） | 能用 Surface 模式等全部 Java 面 | 否决为数据面：caps 桥是同步 JSON（§1.3），长导出会阻塞 JS 线程且需新造异步通道；Java 代码打进 AAR，更新必须发版，违背「不更新 APK 下发新能力」 |
+
+因此「纯 C」在本方案里只出现在两处，都不是自研编解码：
+
+1. **插件胶水层**：IDL 插件 ABI 本身是 C（`include/weizhi_plugin.h`），这层是薄封装，
+   内部转调 `libmediandk`——相当于给系统媒体栈套一层可验签下发的 C 门面；
+2. **P0 概念验证插件**：纯 C 生成确定性合成视频流，仅作桌面 CI 测试替身
+   （桌面没有 MediaCodec，用它验证 IDL v2 通道），不是产品形态。
+
+GPU 滤镜同样走系统 API：EGL 离屏 + GLSL（`libEGL`/`libGLESv3`，全版本可用）为主线；
+AGSL `RuntimeShader` 需 API 33+，只作高版本可选加速。
+
 ---
 
 ## 3. 差距清单（Gap analysis）
@@ -144,10 +163,10 @@ JS 编排的是**管线图**（哪些片段、什么滤镜、什么参数），�
 │     纯 JS 建模 + 参数校验，编译成图 JSON             │
 ├────────────────────────────────────────────────────┤
 │ L2  weizhi_video* 签名插件 SO（目录下发，验签）      │
-│     Android: MediaCodec/MediaExtractor/MediaMuxer    │
-│              （硬编硬解，零第三方体积）               │
-│     可选:  ffmpeg 插件 SO（软解/更多容器，后置）      │
-│     GPU 滤镜: GLSL 经 AGSL/EGL 离屏 或 后置          │
+│     Android NDK 系统媒体栈（§2.1 路径 A）：          │
+│       AMediaExtractor / AMediaCodec / AMediaMuxer   │
+│       （硬编硬解，零第三方体积）；ffmpeg 后置可选    │
+│     GPU 滤镜: EGL 离屏 + GLSL；AGSL(33+) 可选       │
 ├────────────────────────────────────────────────────┤
 │ L1  引擎（现有 + IDL v2 小增量）                     │
 │     ensureNative / typed stub / cb 队列 / cancel     │
@@ -163,9 +182,9 @@ JS 编排的是**管线图**（哪些片段、什么滤镜、什么参数），�
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| P0 | IDL v2（str、句柄规范、cb 扩展、cancel_poll）+ `echo_video` 概念验证插件（纯 C 合成流，无 MediaCodec） | 桌面 test.sh 绿；真机加载成功 |
-| P1 | Android 硬件管线：MediaExtractor→MediaCodec 解码→MediaMuxer 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
-| P2 | 重编码导出：解码→（CPU 变换）→MediaCodec 编码→Mux；进度 cb + cancel | 真机黄金样本 hash 断言 |
+| P0 | IDL v2（str、句柄规范、cb 扩展、cancel_poll）+ `echo_video` 概念验证插件（纯 C 合成流，仅桌面 CI 测试替身，见 §2.1） | 桌面 test.sh 绿；真机加载成功 |
+| P1 | Android 硬件管线（NDK `libmediandk`）：`AMediaExtractor`→`AMediaMuxer` 直通转封装 + 剪辑（掐头去尾/拼接，无重编码） | 真机 instrumented：输出 mp4 时长/轨道断言 |
+| P2 | 重编码导出：`AMediaCodec` 解码→（CPU/EGL 变换）→`AMediaCodec` 编码→`AMediaMuxer`；进度 cb + cancel | 真机黄金样本 hash 断言 |
 | P3 | `weizhi:video` JS 包：Timeline/Filter DSL；GPU 滤镜（AGSL/EGL 离屏）；LUT/转场 | JS 用例测试 + 采样帧像素断言 |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
 
