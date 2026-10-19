@@ -1,0 +1,33 @@
+{
+  "name": "transcode",
+  "version": "0.1.0",
+  "min_host_abi": 2,
+  "abi": "weizhi_plugin_v1",
+  "exports": [
+    {
+      "name": "open_job",
+      "symbol": "weizhi_transcode_open_job",
+      "args": [
+        "str"
+      ],
+      "ret": "i64"
+    },
+    {
+      "name": "run_job",
+      "symbol": "weizhi_transcode_run_job",
+      "args": [
+        "i64",
+        "cb(s: str)"
+      ],
+      "ret": "str"
+    },
+    {
+      "name": "close_job",
+      "symbol": "weizhi_transcode_close_job",
+      "args": [
+        "i64"
+      ],
+      "ret": "void"
+    }
+  ]
+}

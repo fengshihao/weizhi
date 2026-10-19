@@ -4,6 +4,8 @@
 与 [HOST_ABI.md](HOST_ABI.md) 目录/验签/生命周期配合；**调用面**不再以 JSON RPC 为主。
 
 状态（2026-09-24）：**已落地**；桌面 + 真机 `./scripts/test.sh android` 通过。  
+IDL v2（`str` / `cb(s: str)` / `cancel_poll`，随 `plugins/echo_video` 通道 PoC）于 2026-10-17 落地，
+`WEIZHI_HOST_ABI_VERSION` 升为 **2**。  
 §7 决策项已按推荐默认**锁定**（产品确认）。
 
 ---
@@ -31,7 +33,9 @@ fn echo_bytes(data: bytes) -> bytes
 fn count_with_cb(n: i32, on_i: cb(i: i32)) -> i32
 ```
 
-### 2.1 第一期类型子集
+### 2.1 类型子集
+
+v1（HOST_ABI 1）：
 
 | IDL | JS | C |
 | --- | --- | --- |
@@ -42,7 +46,43 @@ fn count_with_cb(n: i32, on_i: cb(i: i32)) -> i32
 | `cb(...)` | function | `uint32_t cb_id`（宿主/引擎分配） |
 | `void` | `undefined` | `void` |
 
-### 2.2 工具
+v2 增补（HOST_ABI 2，2026-10-17，随 `echo_video` 落地）：
+
+| IDL | JS | C | 说明 |
+| --- | --- | --- | --- |
+| `str` | string | `const char *`（参数）/ `char *`（返回） | 返回值为 malloc 的 UTF-8，引擎拷贝后 `free()`；典型用途是 JSON |
+| `cb(s: str)` | function（收到解析后的 JSON 对象） | `uint32_t cb_id` + `host->cb_invoke_str(engine, cb_id, json)` | **同调用作用域**：回调仅在该导出调用返回前有效，drain 后引擎自动释放槽位（不占 64 槽预算） |
+| `i64` 句柄 | number | `int64_t` | **句柄约定**：会话/资源句柄用 `i64` 传递，`0` 恒为非法句柄；非法句柄由插件在返回 JSON 中报 `error` |
+
+配套宿主服务（`WeizhiPluginHost` 追加字段，向后兼容）：
+
+- `cancel_poll(engine) -> int`：长循环插件**必须**每帧/每批次轮询；返回 1 时应尽快清理并返回。
+  引擎保证：取消（`weizhi_cancel`）后 `runJs` 必以含 `cancelled` 的错误收场
+  （含同步 C 调用期间取消的场景——`weizhi_await_value` 在 drain 后复检）。
+- `resolve_path(engine, raw, errbuf, errlen) -> char *`：把脚本传来的**任意形态**路径
+  （相对 / 绝对 / 带 `.` 与 `..`）按引擎 `fs` 同一套语义归一化——落点必须在 `fs_root` 内，
+  越界报 `path escape`。返回 malloc 的绝对路径（调用方 `free()`），失败返回 NULL 并填
+  英文错误关键词。插件应把所有脚本下发的路径都先过这一层，保证脚本侧语义与 `fs.*` 一致；
+  沙箱外媒体（相册 / SAF）由宿主先拷入工作区。注意：这提供的是**语义一致性**，
+  插件本身的信任边界仍由验签 / 内置交付保障。
+- 旧引擎（HOST_ABI 1）加载 `min_host_abi 2` 的插件会按既有规则拒绝
+  （`native incompatible: min_host_abi 2 > host 1`）。
+
+### 2.2 内置（bundled）交付
+
+Android 10+/targetSdk 29+ 禁止 dlopen app 可写目录（HOST_ABI §4 的目录下发在安卓不可行），
+插件可改为**随 AAR 内置**、按 soname 合法加载：
+
+- 引擎：`weizhi_register_bundled_plugin(engine, name, soname)` / Java
+  `WeizhiEngine.registerBundledPlugin(name, soname)`。`soname` 是 dlopen 文件名
+  （如 `libweizhivideo.so`；桌面测试也可传绝对路径）；`ensureNative` 先查内置表再回落插件目录。
+- SO 必须导出 `const char *weizhi_plugin_manifest(void)` 返回 manifest JSON——
+  `scripts/weizhi-bindgen.py` 生成 `weizhi_<name>_manifest.h`（`WEIZHI_PLUGIN_MANIFEST_JSON`）
+  供插件 `#include` 后直接返回。
+- 模块形态参考 `:weizhi-video`（独立 AAR，含 `libweizhivideo.so`（remux）与
+  `libweizhitranscode.so`（重编码）两个逻辑插件的 SO，`WeizhiVideo.install(engine)` 一行接线）。
+
+### 2.3 工具
 
 `scripts/weizhi-bindgen.py`：
 
@@ -106,6 +146,8 @@ Android：构建时拷到 androidTest assets，测试解压到 app 私有 `plugi
 | D6 | Android 存放 | **app 私有 `plugin_dir`**，可由 assets 解压 |
 | D7 | JSON `native_call` | **保留给 mock/调试**；正式插件走 typed |
 | D8 | OpenCV | **本阶段不做整库**；用 IDL `bytes` 等契约后续接薄封装 |
+| D9 | v2 回调作用域（2026-10-17） | `cb(s: str)` **同调用作用域**，drain 后释放槽位；v1 `cb(i: i32)` 行为不变 |
+| D10 | v2 取消语义（2026-10-17） | 长任务用 `cancel_poll` 轮询；引擎在 microtask drain 后复检取消，同步 C 调用期间的取消不再漏检 |
 
 ## 8. 验收清单
 

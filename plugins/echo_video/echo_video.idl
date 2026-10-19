@@ -1,0 +1,12 @@
+# echo_video: IDL v2 channel PoC for the video pipeline (see docs/video-architecture.md).
+# Synthetic deterministic frames only — no MediaCodec here. This plugin exists so the
+# desktop CI can exercise handle sessions, str args/returns, cb(s: str) progress and
+# cancel_poll without any media stack.
+plugin echo_video
+version 0.1.0
+min_host_abi 2
+
+fn probe_media(path: str) -> str
+fn open_session(frame_count: i32, options_json: str) -> i64
+fn run_session(session: i64, on_progress: cb(s: str)) -> str
+fn close_session(session: i64) -> void

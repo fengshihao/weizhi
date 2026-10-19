@@ -35,6 +35,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private static final int DEFAULT_MAX_ASYNC_IO = 16;
     /** Matches WEIZHI_DEFAULT_FS_IO_BYTES in weizhi.h. */
     private static final long DEFAULT_FS_IO = 32L * 1024L * 1024L;
+    /** Matches WEIZHI_HOST_ABI_VERSION in weizhi.h (mock error text only). */
+    private static final int WEIZHI_HOST_ABI = 2;
 
     static {
         System.loadLibrary("weizhijni");
@@ -196,6 +198,20 @@ public final class WeizhiEngine implements AutoCloseable {
     }
 
     /**
+     * Register a bundled plugin that ships inside an AAR's {@code nativeLibraryDir}
+     * (Android 10+ forbids dlopen from app-writable dirs, so bundled SOs are the
+     * supported delivery there). {@code soname} is the exact dlopen filename,
+     * e.g. {@code "libweizhivideo.so"}; the SO must export
+     * {@code weizhi_plugin_manifest()}. Afterwards {@code host.ensureNative(name)}
+     * resolves it without any plugin dir. Call while idle.
+     */
+    public void registerBundledPlugin(String name, String soname) {
+        if (nativeRegisterBundledPlugin(nativeHandle, name, soname) != 0) {
+            throw new IllegalArgumentException("registerBundledPlugin failed");
+        }
+    }
+
+    /**
      * Install the single sync host entry {@code __caps(args)} used by a platform object.
      * Call while idle (before or between {@code runJs}). The Java callback may be replaced later;
      * the native binding is installed once per engine.
@@ -278,7 +294,7 @@ public final class WeizhiEngine implements AutoCloseable {
             }
             if ("too_new".equals(name)) {
                 nativeCompleteNative(engine, requestId, false, null,
-                        "native incompatible: min_host_abi 99 > host " + 1);
+                        "native incompatible: min_host_abi 99 > host " + WEIZHI_HOST_ABI);
                 return;
             }
             if ("echo_math".equals(name)) {
@@ -799,6 +815,8 @@ public final class WeizhiEngine implements AutoCloseable {
     private native void nativeInstallJavaNative(long handle);
 
     private static native int nativeEnablePluginLoader(long handle, String pluginDir);
+
+    private static native int nativeRegisterBundledPlugin(long handle, String name, String soname);
 
     private native int nativeInstallHostCall(long handle);
 

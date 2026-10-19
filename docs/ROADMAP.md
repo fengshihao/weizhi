@@ -79,6 +79,19 @@
 
 1. **Agent 集成**（主路径，进行中）：引擎侧入口已稳定（`runJs` / caps / 沙箱 / `weizhi:` Package）；`run_js` 等模型工具与文件工具环属宿主（Agent1 `java-agent-core`），不在本仓库。接入步骤见 [INTEGRATION_FOR_AI.md](INTEGRATION_FOR_AI.md)。
 2. 双根只读、技能目录约定、多级 import、快照 VCS：**写入路线图，不阻塞集成**；集成稳定后再按需开做。
+3. **视频剪辑能力**（2026-10-19 立项，随 `feat/video-editing` 合入主干）：见下节。
+
+## 视频剪辑能力（已立项）
+
+- **状态**：P0–P3c 已落地（IDL v2、`weizhi_video` remux / `weizhi_transcode` 重编码插件、
+  GL 滤镜与缩放、LUT 与 fade 转场、`weizhi:video` JS 编排包 `video@0.3.0`），
+  真机 29/29、桌面含 ASan 全绿。架构与阶段记录：[video-architecture.md](video-architecture.md)。
+- **边界不变**：heavy 代码全部在独立签名插件 SO（`libweizhivideo.so` ≈60KB、
+  `libweizhitranscode.so` ≈133KB，预算 ≤512KB）；核心 `libweizhijni.so` 的 1.5MB strip 门禁不动；
+  安卓数据面走 NDK 系统媒体栈（`libmediandk`），不自研 FFmpeg。
+- **后续（不阻塞主线）**：多滤镜链（解除「一 job 一滤镜」守卫）、P4 预览协作面
+  （宿主 Surface，需与 Agent1 对齐跨仓协议）。ffmpeg 插件**暂不做**——安卓系统
+  编解码器已覆盖主线需求；仅当出现系统栈覆盖不了的容器/编码诉求再评估。
 
 ## 迭代建议（集成之后）
 

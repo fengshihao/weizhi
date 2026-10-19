@@ -45,8 +45,14 @@ static int ty_from_str(const char *s) {
     if (strcmp(s, "bytes") == 0) {
         return WEIZHI_TY_BYTES;
     }
+    if (strcmp(s, "str") == 0) {
+        return WEIZHI_TY_STR;
+    }
     if (strcmp(s, "void") == 0) {
         return WEIZHI_TY_VOID;
+    }
+    if (strcmp(s, "cb(s: str)") == 0) {
+        return WEIZHI_TY_CB_STR;
     }
     if (strncmp(s, "cb(", 3) == 0) {
         return WEIZHI_TY_CB;
@@ -91,8 +97,7 @@ static int json_find_string(const char *json, const char *key, char *out, size_t
     return 0;
 }
 
-static char *read_file_all(const char *path, size_t *out_len) {
-    FILE *f = fopen(path, "rb");
+static char *read_file_all(const char *path, size_t *out_len) {    FILE *f = fopen(path, "rb");
     long sz;
     char *buf;
     if (f == NULL) {
@@ -164,6 +169,13 @@ void weizhi_plugins_clear(Engine *engine) {
         }
     }
     engine->cb_queue_len = 0;
+    for (i = 0; i < engine->bundled_count; i++) {
+        free(engine->bundled_names[i]);
+        free(engine->bundled_sonames[i]);
+        engine->bundled_names[i] = NULL;
+        engine->bundled_sonames[i] = NULL;
+    }
+    engine->bundled_count = 0;
     free(engine->plugin_dir);
     engine->plugin_dir = NULL;
 }
@@ -203,10 +215,76 @@ void weizhi_cb_invoke_i32(void *engine_ptr, uint32_t cb_id, int32_t v0) {
         WeizhiCbEvent *ev = &engine->cb_queue[engine->cb_queue_len++];
         ev->cb_id = cb_id;
         ev->v0 = v0;
+        ev->json = NULL;
         ev->ready = 1;
     }
     pthread_cond_signal(&engine->wake_cv);
     pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_cb_invoke_str(void *engine_ptr, uint32_t cb_id, const char *json) {
+    Engine *engine = (Engine *)engine_ptr;
+    char *copy;
+    if (engine == NULL || cb_id == 0 || cb_id >= WEIZHI_MAX_CBS) {
+        return;
+    }
+    copy = strdup(json != NULL ? json : "{}");
+    if (copy == NULL) {
+        return; /* out of memory: drop the event rather than queue a NULL payload */
+    }
+    pthread_mutex_lock(&engine->wake_mu);
+    if (engine->cb_queue_len < WEIZHI_MAX_PENDING) {
+        WeizhiCbEvent *ev = &engine->cb_queue[engine->cb_queue_len++];
+        ev->cb_id = cb_id;
+        ev->v0 = 0;
+        ev->json = copy;
+        ev->ready = 1;
+    } else {
+        free(copy); /* queue full: coalesce by dropping intermediate progress events */
+    }
+    pthread_cond_signal(&engine->wake_cv);
+    pthread_mutex_unlock(&engine->wake_mu);
+}
+
+void weizhi_cb_release(Engine *engine, uint32_t cb_id) {
+    if (engine == NULL || cb_id == 0 || cb_id >= WEIZHI_MAX_CBS) {
+        return;
+    }
+    if (engine->cbs[cb_id].in_use) {
+        JS_FreeValue(engine->ctx, engine->cbs[cb_id].fn);
+        engine->cbs[cb_id].fn = JS_UNDEFINED;
+        engine->cbs[cb_id].in_use = 0;
+    }
+}
+
+int weizhi_cancel_poll(void *engine_ptr) {
+    Engine *engine = (Engine *)engine_ptr;
+    if (engine == NULL) {
+        return 0;
+    }
+    return atomic_load(&engine->cancel_requested) ? 1 : 0;
+}
+
+char *weizhi_plugin_resolve_path(void *engine_ptr, const char *raw, char *errbuf, size_t errbuf_len) {
+    Engine *engine = (Engine *)engine_ptr;
+    const char *error = NULL;
+    char out[PATH_MAX];
+    if (errbuf != NULL && errbuf_len > 0) {
+        errbuf[0] = '\0';
+    }
+    if (engine == NULL || raw == NULL || raw[0] == '\0') {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "invalid path");
+        }
+        return NULL;
+    }
+    if (weizhi_resolve_workspace_path(engine, raw, out, sizeof(out), &error) != 0) {
+        if (errbuf != NULL && errbuf_len > 0) {
+            snprintf(errbuf, errbuf_len, "%s", error != NULL ? error : "invalid path");
+        }
+        return NULL;
+    }
+    return strdup(out);
 }
 
 int weizhi_drain_cb_queue(Engine *engine) {
@@ -214,6 +292,7 @@ int weizhi_drain_cb_queue(Engine *engine) {
     int n = 0;
     int i;
     int applied = 0;
+    int failed = 0;
     if (engine == NULL) {
         return 0;
     }
@@ -229,18 +308,28 @@ int weizhi_drain_cb_queue(Engine *engine) {
         JSValue arg;
         JSValue ret;
         if (id == 0 || id >= WEIZHI_MAX_CBS || !engine->cbs[id].in_use) {
+            free(local[i].json);
             continue;
         }
-        arg = JS_NewInt32(engine->ctx, local[i].v0);
+        if (local[i].json != NULL) {
+            arg = JS_ParseJSON(engine->ctx, local[i].json, strlen(local[i].json), "<native-cb>");
+            if (JS_IsException(arg)) {
+                JS_FreeValue(engine->ctx, JS_GetException(engine->ctx));
+                arg = JS_NewString(engine->ctx, local[i].json);
+            }
+        } else {
+            arg = JS_NewInt32(engine->ctx, local[i].v0);
+        }
+        free(local[i].json);
         ret = JS_Call(engine->ctx, engine->cbs[id].fn, JS_UNDEFINED, 1, &arg);
         JS_FreeValue(engine->ctx, arg);
         applied++;
         if (JS_IsException(ret)) {
-            return -1;
+            failed = 1;
         }
         JS_FreeValue(engine->ctx, ret);
     }
-    return applied;
+    return failed ? -1 : applied;
 }
 
 static int parse_exports(WeizhiLoadedPlugin *plugin, const char *json, void *handle, char *err, size_t errlen) {
@@ -357,32 +446,18 @@ static int parse_exports(WeizhiLoadedPlugin *plugin, const char *json, void *han
     return 0;
 }
 
-static int load_one(Engine *engine, const char *name, char *err, size_t errlen) {
-    char manifest_path[PATH_MAX];
-    char so_path[PATH_MAX];
-    char *json;
+static int loader_ensure(WeizhiEngine *engine, int64_t request_id, const char *name, void *userdata);
+
+/* Shared tail after a handle + manifest JSON exist: parse exports, init, link. */
+static int plugin_attach(Engine *engine, const char *name, void *handle, const char *json,
+                         char *err, size_t errlen) {
     WeizhiLoadedPlugin *plugin;
-    void *handle;
     WeizhiPluginInitFn init_fn;
     WeizhiPluginHost host;
     char version[64];
     int abi = 0;
     char abi_s[32];
 
-    if (engine->plugin_dir == NULL) {
-        snprintf(err, errlen, "unsupported: native (plugin dir not set)");
-        return -1;
-    }
-    if (weizhi_find_plugin(engine, name) != NULL) {
-        return 0;
-    }
-    snprintf(manifest_path, sizeof(manifest_path), "%s/%s/manifest.json", engine->plugin_dir, name);
-    snprintf(so_path, sizeof(so_path), "%s/%s/lib%s%s", engine->plugin_dir, name, name, WEIZHI_SO_EXT);
-    json = read_file_all(manifest_path, NULL);
-    if (json == NULL) {
-        snprintf(err, errlen, "unsupported: native \"%s\" (not in catalog)", name);
-        return -1;
-    }
     version[0] = '\0';
     json_find_string(json, "version", version, sizeof(version));
     abi_s[0] = '\0';
@@ -400,19 +475,10 @@ static int load_one(Engine *engine, const char *name, char *err, size_t errlen) 
     }
     if (abi > WEIZHI_HOST_ABI_VERSION) {
         snprintf(err, errlen, "native incompatible: min_host_abi %d > host %d", abi, WEIZHI_HOST_ABI_VERSION);
-        free(json);
-        return -1;
-    }
-    handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        snprintf(err, errlen, "native download failed: dlopen %s (%s)", so_path, dlerror());
-        free(json);
         return -1;
     }
     plugin = calloc(1, sizeof(*plugin));
     if (plugin == NULL) {
-        dlclose(handle);
-        free(json);
         snprintf(err, errlen, "out of memory");
         return -1;
     }
@@ -421,15 +487,16 @@ static int load_one(Engine *engine, const char *name, char *err, size_t errlen) 
     plugin->handle = handle;
     if (parse_exports(plugin, json, handle, err, errlen) != 0) {
         free_loaded(plugin);
-        free(json);
         return -1;
     }
-    free(json);
     memset(&host, 0, sizeof(host));
     host.engine = engine;
     host.buf_alloc = host_buf_alloc;
     host.buf_free = host_buf_free;
     host.cb_invoke_i32 = weizhi_cb_invoke_i32;
+    host.cb_invoke_str = weizhi_cb_invoke_str;
+    host.cancel_poll = weizhi_cancel_poll;
+    host.resolve_path = weizhi_plugin_resolve_path;
     init_fn = (WeizhiPluginInitFn)dlsym(handle, "weizhi_plugin_init");
     if (init_fn != NULL && init_fn(&host) != 0) {
         snprintf(err, errlen, "native load failed: weizhi_plugin_init");
@@ -438,6 +505,119 @@ static int load_one(Engine *engine, const char *name, char *err, size_t errlen) 
     }
     plugin->next = engine->plugins;
     engine->plugins = plugin;
+    return 0;
+}
+
+static const char *find_bundled(Engine *engine, const char *name) {
+    int i;
+    for (i = 0; i < engine->bundled_count; i++) {
+        if (strcmp(engine->bundled_names[i], name) == 0) {
+            return engine->bundled_sonames[i];
+        }
+    }
+    return NULL;
+}
+
+int weizhi_register_bundled_plugin(WeizhiEngine *engine_ptr, const char *name, const char *soname) {
+    Engine *engine = (Engine *)engine_ptr;
+    int i;
+    if (engine == NULL || name == NULL || name[0] == '\0' || soname == NULL || soname[0] == '\0' ||
+        strchr(name, '/') != NULL) {
+        return -1;
+    }
+    if (atomic_load(&engine->state) != ST_IDLE) {
+        return -1;
+    }
+    for (i = 0; i < engine->bundled_count; i++) {
+        if (strcmp(engine->bundled_names[i], name) == 0) {
+            char *copy = strdup(soname);
+            if (copy == NULL) {
+                return -1;
+            }
+            free(engine->bundled_sonames[i]);
+            engine->bundled_sonames[i] = copy;
+            break;
+        }
+    }
+    if (i == engine->bundled_count) {
+        if (engine->bundled_count >= WEIZHI_MAX_BUNDLED_PLUGINS) {
+            return -1;
+        }
+        engine->bundled_names[i] = strdup(name);
+        engine->bundled_sonames[i] = strdup(soname);
+        if (engine->bundled_names[i] == NULL || engine->bundled_sonames[i] == NULL) {
+            free(engine->bundled_names[i]);
+            free(engine->bundled_sonames[i]);
+            engine->bundled_names[i] = NULL;
+            engine->bundled_sonames[i] = NULL;
+            return -1;
+        }
+        engine->bundled_count++;
+    }
+    if (engine->native_ensure == NULL) {
+        weizhi_set_native(engine_ptr, loader_ensure, NULL, engine_ptr);
+    }
+    return 0;
+}
+
+static int load_one(Engine *engine, const char *name, char *err, size_t errlen) {
+    char manifest_path[PATH_MAX];
+    char so_path[PATH_MAX];
+    const char *soname;
+    const char *(*manifest_fn)(void);
+    char *json = NULL;
+    void *handle = NULL;
+
+    if (weizhi_find_plugin(engine, name) != NULL) {
+        return 0;
+    }
+    soname = find_bundled(engine, name);
+    if (soname != NULL) {
+        handle = dlopen(soname, RTLD_NOW | RTLD_LOCAL);
+        if (handle == NULL) {
+            snprintf(err, errlen, "native load failed: dlopen %s (%s)", soname, dlerror());
+            return -1;
+        }
+        manifest_fn = (const char *(*)(void))dlsym(handle, "weizhi_plugin_manifest");
+        if (manifest_fn == NULL) {
+            dlclose(handle);
+            snprintf(err, errlen, "native load failed: bundled \"%s\" missing weizhi_plugin_manifest",
+                     name);
+            return -1;
+        }
+        json = strdup(manifest_fn());
+        if (json == NULL) {
+            dlclose(handle);
+            snprintf(err, errlen, "out of memory");
+            return -1;
+        }
+    } else {
+        if (engine->plugin_dir == NULL) {
+            snprintf(err, errlen, "unsupported: native (plugin dir not set)");
+            return -1;
+        }
+        snprintf(manifest_path, sizeof(manifest_path), "%s/%s/manifest.json", engine->plugin_dir, name);
+        snprintf(so_path, sizeof(so_path), "%s/%s/lib%s%s", engine->plugin_dir, name, name, WEIZHI_SO_EXT);
+        json = read_file_all(manifest_path, NULL);
+        if (json == NULL) {
+            snprintf(err, errlen, "unsupported: native \"%s\" (not in catalog)", name);
+            return -1;
+        }
+        handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
+        if (handle == NULL) {
+            free(json);
+            snprintf(err, errlen, "native download failed: dlopen %s (%s)", so_path, dlerror());
+            return -1;
+        }
+    }
+    {
+        int rc = plugin_attach(engine, name, handle, json, err, errlen);
+        free(json);
+        if (rc != 0) {
+            /* plugin_attach freed the plugin (and dlclose'd via free_loaded) on failure. */
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -463,12 +643,16 @@ static char *build_typed_json(WeizhiLoadedPlugin *plugin) {
             const char *ts = "i32";
             if (ex->args[j] == WEIZHI_TY_BYTES) {
                 ts = "bytes";
+            } else if (ex->args[j] == WEIZHI_TY_CB_STR) {
+                ts = "cb(s: str)";
             } else if (ex->args[j] == WEIZHI_TY_CB) {
                 ts = "cb(i: i32)";
             } else if (ex->args[j] == WEIZHI_TY_F64) {
                 ts = "f64";
             } else if (ex->args[j] == WEIZHI_TY_I64) {
                 ts = "i64";
+            } else if (ex->args[j] == WEIZHI_TY_STR) {
+                ts = "str";
             }
             n += snprintf(piece + n, sizeof(piece) - (size_t)n, "%s\"%s\"", j ? "," : "", ts);
         }
@@ -482,6 +666,8 @@ static char *build_typed_json(WeizhiLoadedPlugin *plugin) {
                 rts = "f64";
             } else if (ex->ret == WEIZHI_TY_I64) {
                 rts = "i64";
+            } else if (ex->ret == WEIZHI_TY_STR) {
+                rts = "str";
             }
             n += snprintf(piece + n, sizeof(piece) - (size_t)n, "],\"ret\":\"%s\"}", rts);
         }

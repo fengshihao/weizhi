@@ -1,5 +1,7 @@
 #include "weizhi.h"
 
+#include "weizhi_video_pkg_js.h"
+
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
@@ -452,6 +454,32 @@ static void test_relative_import(void) {
     weizhi_result_free(&result);
     result = weizhi_run_js_ex(engine, "import './../util.js';\n", 1000, "jobs/run.js");
     EXPECT(result.ok == 0);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
+/* Root-level scripts: './util.js' must not normalize to a bare name (device-suite
+   regression: QuickJS default normalize made it 'util.js' → unsupported). */
+static void test_root_relative_import(void) {
+    char *dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    const char *lib = "export function inc(x){ return x + 1; }\n";
+    write_file(dir, "util.js", lib, strlen(lib));
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    result = weizhi_run_js_ex(engine,
+                              "import { inc } from './util.js';\n"
+                              "export default inc(41);\n",
+                              2000,
+                              "run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strcmp(result.output_text, "42") == 0);
+    weizhi_result_free(&result);
+    /* Bare specifiers keep their documented meaning: built-ins / weizhi: only. */
+    result = weizhi_run_js_ex(engine, "import { inc } from 'util.js';\n", 1000, "run.js");
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "unsupported: module") != NULL);
     weizhi_result_free(&result);
     weizhi_close(engine);
     free(dir);
@@ -1344,6 +1372,261 @@ static void test_typed_plugin_loader(void) {
     weizhi_close(engine);
 }
 
+/* IDL v2 channel PoC: i64 session handles, str args/returns, cb(s: str) progress,
+   resolve_path workspace semantics (relative / absolute / escape / missing). */
+static void test_echo_video_plugin(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char plugin_dir[512];
+    char probe_js[1024];
+    char *dir = make_temp_dir();
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    write_file(dir, "clip.mp4", "hello", 5);
+    EXPECT(weizhi_set_fs_root(engine, dir) == 0);
+    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_video');"
+                           "const meta = JSON.parse(p.probe_media('clip.mp4'));"
+                           "const bad = p.open_session(0, '{}');"
+                           "const id = p.open_session(10, '{\"delayMs\":0}');"
+                           "const events = [];"
+                           "const r = JSON.parse(p.run_session(id, (e) => { events.push(e); }));"
+                           "p.close_session(id);"
+                           "({probeOk: meta.ok, size: meta.size, tracks: meta.tracks.length,"
+                           "  synthetic: meta.synthetic, badHandle: bad, idOk: id > 0,"
+                           "  cancelled: r.cancelled, frames: r.frameCount, hashLen: r.hash.length,"
+                           "  events: events.length, firstFrame: events[0].frame,"
+                           "  firstPercent: events[0].percent, lastPercent: events[events.length - 1].percent})",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"probeOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"size\":5") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"tracks\":1") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"synthetic\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"badHandle\":0") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"idOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"cancelled\":false") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"frames\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"events\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstFrame\":0") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"firstPercent\":10") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"lastPercent\":100") != NULL);
+    weizhi_result_free(&result);
+    /* Path forms: absolute-under-root resolves; escaping and missing files report errors. */
+    snprintf(probe_js, sizeof(probe_js),
+             "const w = await host.ensureNative('echo_video');"
+             "const abs = JSON.parse(w.probe_media('%s/clip.mp4'));"
+             "const esc = JSON.parse(w.probe_media('../clip.mp4'));"
+             "const miss = JSON.parse(w.probe_media('nope.mp4'));"
+             "({absOk: abs.ok, absSize: abs.size, escErr: esc.error, missErr: miss.error})",
+             dir);
+    result = weizhi_run_js(engine, probe_js, 5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"absOk\":true") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"absSize\":5") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "path escape") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "file not found") != NULL);
+    weizhi_result_free(&result);
+    /* Bad session handle path returns plugin JSON, and repeat calls must not
+       exhaust the 64 callback slots (same-call scoped release). */
+    result = weizhi_run_js(engine,
+                           "const v = await host.ensureNative('echo_video');"
+                           "const bh = JSON.parse(v.run_session(0, () => {})).error;"
+                           "let ok = true;"
+                           "for (let i = 0; i < 80; i++) {"
+                           "  const id2 = v.open_session(1, '{}');"
+                           "  if (JSON.parse(v.run_session(id2, () => {})).cancelled !== false) ok = false;"
+                           "  v.close_session(id2);"
+                           "}"
+                           "({bh, ok})",
+                           10000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"bh\":\"bad session handle\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"ok\":true") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(dir);
+}
+
+typedef struct {
+    WeizhiEngine *engine;
+    int delay_ms;
+} CancelAfter;
+
+static void *cancel_thread(void *arg) {
+    CancelAfter *ca = arg;
+    struct timespec ts;
+    ts.tv_sec = ca->delay_ms / 1000;
+    ts.tv_nsec = (ca->delay_ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+    weizhi_cancel(ca->engine);
+    return NULL;
+}
+
+/* Bundled (soname) registration: loads without any plugin dir, manifest from the SO. */
+static void test_bundled_plugin_loader(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char soname[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(soname, sizeof(soname), "%s/plugins/echo_video/libecho_video%s", root,
+#ifdef __APPLE__
+             ".dylib"
+#else
+             ".so"
+#endif
+    );
+    EXPECT(weizhi_register_bundled_plugin(engine, "echo_video", soname) == 0);
+    /* Bundled wins even with no plugin dir configured at all. */
+    result = weizhi_run_js(engine,
+                           "const b = await host.ensureNative('echo_video');"
+                           "const meta = JSON.parse(b.probe_media('x'));" /* no fs root: resolve error */
+                           "const id = b.open_session(4, '{}');"
+                           "const r = JSON.parse(b.run_session(id, () => {}));"
+                           "b.close_session(id);"
+                           "({name: b.name, resolveErr: meta.error, cancelled: r.cancelled,"
+                           "  frames: r.frameCount})",
+                           5000);
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"name\":\"echo_video\"") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "workspace not set") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"cancelled\":false") != NULL);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "\"frames\":4") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+/* cancel_poll: a cancelled runJs must exit the plugin's long loop promptly. */
+static void test_echo_video_cancel(void) {
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    char plugin_dir[512];
+    const char *root = getenv("WEIZHI_BUILD_DIR");
+    pthread_t thread;
+    CancelAfter ca;
+    if (root == NULL) {
+        root = "build";
+    }
+    snprintf(plugin_dir, sizeof(plugin_dir), "%s/plugins", root);
+    EXPECT(weizhi_enable_plugin_loader(engine, plugin_dir) == 0);
+    /* 100000 frames x 5ms = 500s without cancel; the cancel thread fires at 150ms. */
+    ca.engine = engine;
+    ca.delay_ms = 150;
+    EXPECT(pthread_create(&thread, NULL, cancel_thread, &ca) == 0);
+    result = weizhi_run_js(engine,
+                           "const p = await host.ensureNative('echo_video');"
+                           "const id = p.open_session(100000, '{\"delayMs\":5}');"
+                           "p.run_session(id, () => {});",
+                           30000);
+    pthread_join(thread, NULL);
+    EXPECT(result.ok == 0);
+    EXPECT(result.error != NULL && strstr(result.error, "cancelled") != NULL);
+    EXPECT(result.duration_ms >= 0 && result.duration_ms < 5000);
+    weizhi_result_free(&result);
+    /* The engine stays usable after cancel. */
+    result = weizhi_run_js(engine, "1 + 1", 2000);
+    EXPECT(result.ok == 1);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+}
+
+/* weizhi:video package (P3a): buildJob compiles specs into plugin jobs; exportVideo
+   drives the native plugins. Native execution is device-only; here we verify the
+   compiler, validation errors, and the no-native failure path. */
+static void test_weizhi_video_package(void) {
+    char *pkg_home = make_temp_dir();
+    char *fs_dir = make_temp_dir();
+    WeizhiEngine *engine = weizhi_open(NULL);
+    WeizhiResult result;
+    install_test_package(pkg_home, "video", "0.3.0", WEIZHI_VIDEO_PKG_JS);
+    EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
+    EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
+    result = weizhi_run_js_ex(engine,
+                              "import { buildJob } from 'weizhi:video';\n"
+                              "const remux = buildJob({clips: [{path: 'a.mp4', startMs: 200, endMs: 800}, {path: 'b.mp4'}], output: 'o.mp4'});\n"
+                              "const enc = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', bitrate: 500000});\n"
+                              "const flt = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['brightness']});\n"
+                              "const flt2 = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'contrast', params: {amount: 0.5}}]});\n"
+                              "const custom = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{shader: 'uniform float uK;\\nvoid main() { gl_FragColor = texture2D(uVideo, vUV) * uK; }', uniforms: {uK: 0.5}}]});\n"
+                              "const lut = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'lut', params: {path: 'w.cube'}}]});\n"
+                              "const fade = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 200}]});\n"
+                              "const cast = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}, {path: 'c.mp4'}], output: 'o.mp4', transitions: {type: 'fade', durationMs: 100}});\n"
+                              "let e1 = '';\n"
+                              "try { buildJob({clips: [], output: 'o.mp4'}); } catch (e) { e1 = e.message; }\n"
+                              "let e2 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', reencode: false, bitrate: 5}); } catch (e) { e2 = e.message; }\n"
+                              "let e3 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['nope']}); } catch (e) { e3 = e.message; }\n"
+                              "let e4 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', transitions: [{type: 'wipe', durationMs: 100}]}); } catch (e) { e4 = e.message; }\n"
+                              "let e5 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}, {path: 'c.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e5 = e.message; }\n"
+                              "let e6 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', reencode: false, transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e6 = e.message; }\n"
+                              "let e7 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'lut'}]}); } catch (e) { e7 = e.message; }\n"
+                              "let e8 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e8 = e.message; }\n"
+                              "let e9 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4', fadeInMs: 100}], output: 'o.mp4'}); } catch (e) { e9 = e.message; }\n"
+                              "const encOpts = JSON.parse(enc.optionsJson);\n"
+                              "const fltOpts = JSON.parse(flt.optionsJson);\n"
+                              "const flt2Opts = JSON.parse(flt2.optionsJson);\n"
+                              "const customOpts = JSON.parse(custom.optionsJson);\n"
+                              "const customShader = customOpts.filters[0].shader;\n"
+                              "const lutOpts = JSON.parse(lut.optionsJson);\n"
+                              "const fadeOpts = JSON.parse(fade.optionsJson);\n"
+                              "const castOpts = JSON.parse(cast.optionsJson);\n"
+                              "export default [remux.plugin, enc.plugin, flt.plugin,\n"
+                              "  encOpts.video.bitrate, fltOpts.filters[0].uniforms.uAmount,\n"
+                              "  flt2Opts.filters[0].uniforms.uAmount,\n"
+                              "  fltOpts.filters[0].shader.indexOf('samplerExternalOES') >= 0,\n"
+                              "  customShader.indexOf('void main()') >= 0 && customShader.indexOf('samplerExternalOES') >= 0,\n"
+                              "  customOpts.filters[0].uniforms.uK,\n"
+                              "  JSON.stringify(remux.options.clips[0]),\n"
+                              "  e1.includes('bad argument'), e2.includes('remux cannot'), e3.indexOf('nope') >= 0,\n"
+                              "  lut.plugin, lutOpts.filters[0].lut, lutOpts.filters[0].uniforms.uAmount,\n"
+                              "  lutOpts.filters[0].shader.indexOf('uLutSize') >= 0,\n"
+                              "  fade.plugin, fadeOpts.clips[0].fadeOutMs, fadeOpts.clips[1].fadeInMs,\n"
+                              "  castOpts.clips[0].fadeOutMs, castOpts.clips[1].fadeInMs,\n"
+                              "  castOpts.clips[1].fadeOutMs, castOpts.clips[2].fadeInMs,\n"
+                              "  e4.includes('unsupported: transition type'), e5.includes('clips.length - 1'),\n"
+                              "  e6.includes('remux cannot'), e7.includes('params.path'),\n"
+                              "  e8.includes('at least two clips'), e9.includes('compiled from transitions')];\n",
+                              3000,
+                              "run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL &&
+           strcmp(result.output_text,
+                  "[\"video\",\"transcode\",\"transcode\",500000,0.2,0.5,true,true,0.5,"
+                  "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true,"
+                  "\"transcode\",\"w.cube\",1,true,\"transcode\",200,200,100,100,100,100,"
+                  "true,true,true,true,true,true]") == 0);
+    weizhi_result_free(&result);
+    /* exportVideo without native plugins fails with the agent-facing hint. */
+    result = weizhi_run_js_ex(engine,
+                              "import { exportVideo } from 'weizhi:video';\n"
+                              "let msg = '';\n"
+                              "try { await exportVideo({clips: [{path: 'a.mp4'}], output: 'o.mp4'}); }\n"
+                              "catch (e) { msg = e.message; }\n"
+                              "export default msg;\n",
+                              3000,
+                              "run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL && strstr(result.output_text, "unsupported: native") != NULL);
+    weizhi_result_free(&result);
+    weizhi_close(engine);
+    free(pkg_home);
+    free(fs_dir);
+}
+
 static void test_zlib_roundtrip(void) {
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result = weizhi_run_js(engine,
@@ -1549,6 +1832,7 @@ int main(void) {
     test_host_function_limit();
     test_load_script_removed();
     test_relative_import();
+    test_root_relative_import();
     test_promise_await();
     test_buffer_path_require();
     test_fs_sync_and_promises();
@@ -1566,6 +1850,10 @@ int main(void) {
     test_mcp_client();
     test_native_ensure_mock();
     test_typed_plugin_loader();
+    test_echo_video_plugin();
+    test_bundled_plugin_loader();
+    test_echo_video_cancel();
+    test_weizhi_video_package();
     test_zlib_roundtrip();
     test_zip_roundtrip();
     test_queue_microtask_digest_fs_and_abort();

@@ -45,6 +45,16 @@ set(WEIZHI_MCP_JS "\"${WEIZHI_MCP_JS}\"")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/mcp_client.js")
 configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONLY)
 
+# Embed the weizhi:video package source for tests (single source of truth).
+file(READ "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.3.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
+string(REPLACE "\\" "\\\\" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS_RAW}")
+string(REPLACE "\"" "\\\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
+string(REPLACE "\n" "\\n\"\n\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
+set(WEIZHI_VIDEO_PKG_JS "\"${WEIZHI_VIDEO_PKG_JS}\"")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/android/app/src/main/assets/weizhi-packages/video@0.3.0/index.js")
+configure_file(src/weizhi_video_pkg_js.h.in "${CMAKE_BINARY_DIR}/weizhi_video_pkg_js.h" @ONLY)
+
 add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c src/sha256.c)
 target_include_directories(weizhi PUBLIC include)
 target_include_directories(weizhi PRIVATE include src "${CMAKE_BINARY_DIR}")
@@ -76,9 +86,55 @@ add_custom_command(TARGET echo_math POST_BUILD
         "$<TARGET_FILE_DIR:echo_math>/manifest.json"
 )
 
+# IDL v2 channel PoC for the video pipeline (docs/video-architecture.md P0).
+add_library(echo_video SHARED plugins/echo_video/echo_video.c)
+target_include_directories(echo_video PRIVATE include plugins/echo_video/generated)
+target_compile_options(echo_video PRIVATE -fvisibility=hidden)
+set_target_properties(echo_video PROPERTIES
+    OUTPUT_NAME "echo_video"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_video"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/plugins/echo_video"
+    PREFIX "lib"
+)
+add_custom_command(TARGET echo_video POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/plugins/echo_video/generated/manifest.json"
+        "$<TARGET_FILE_DIR:echo_video>/manifest.json"
+)
+
+# Real media plugin: NDK media stack only exists on Android (docs/video-architecture.md §2.1).
+# Bundled delivery via the :weizhi-video AAR; desktop builds skip this target entirely.
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    add_library(weizhi_video SHARED
+        plugins/weizhi_video/weizhi_video.c
+        plugins/weizhi_video/wjson.c
+    )
+    target_include_directories(weizhi_video PRIVATE include plugins/weizhi_video/generated)
+    target_compile_options(weizhi_video PRIVATE -fvisibility=hidden)
+    target_link_libraries(weizhi_video mediandk)
+    set_target_properties(weizhi_video PROPERTIES
+        OUTPUT_NAME "weizhivideo"
+        PREFIX "lib"
+    )
+
+    # P2: re-encoding export (decoder -> encoder surface tunnel -> muxer).
+    add_library(weizhi_transcode SHARED
+        plugins/weizhi_transcode/weizhi_transcode.c
+        plugins/weizhi_transcode/wtjson.c
+    )
+    target_include_directories(weizhi_transcode PRIVATE include plugins/weizhi_transcode/generated)
+    target_compile_options(weizhi_transcode PRIVATE -fvisibility=hidden)
+    target_link_libraries(weizhi_transcode mediandk android log EGL GLESv2)
+    set_target_properties(weizhi_transcode PROPERTIES
+        OUTPUT_NAME "weizhitranscode"
+        PREFIX "lib"
+    )
+endif()
+
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)
+target_include_directories(weizhi_tests PRIVATE "${CMAKE_BINARY_DIR}")
 if(WEIZHI_SANITIZE)
     target_compile_options(weizhi_tests PRIVATE ${WEIZHI_SANITIZE_FLAGS})
     target_link_options(weizhi_tests PRIVATE ${WEIZHI_SANITIZE_FLAGS})

@@ -4,7 +4,8 @@ root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 "$root/scripts/fetch-deps.sh"
 
 abi=${1:-arm64-v8a}
-api=${ANDROID_API:-24}
+# Align with the Gradle modules' minSdk (26); NDK media surface APIs need 26.
+api=${ANDROID_API:-26}
 sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 
 pick_ndk() {
@@ -58,23 +59,34 @@ cmake "$root" \
 jobs=$(sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 cmake --build . -- -j"$jobs"
 
-# Stage typed sample plugin next to JNI for device tests / local loading.
-plugin_out="$out/plugins/echo_math"
-mkdir -p "$plugin_out"
-cp -f "$root/plugins/echo_math/generated/manifest.json" "$plugin_out/manifest.json" || true
-built=$(find "$out" -name 'libecho_math.so' 2>/dev/null | head -1 || true)
-if [ -n "$built" ] && [ "$built" != "$plugin_out/libecho_math.so" ]; then
-    cp -f "$built" "$plugin_out/libecho_math.so" || true
-elif [ -n "$built" ]; then
-    : # already in place
-fi
+# Stage typed sample plugins next to JNI for device tests / local loading.
+for p in echo_math echo_video; do
+    plugin_out="$out/plugins/$p"
+    mkdir -p "$plugin_out"
+    cp -f "$root/plugins/$p/generated/manifest.json" "$plugin_out/manifest.json" || true
+    built=$(find "$out" -name "lib$p.so" 2>/dev/null | head -1 || true)
+    if [ -n "$built" ] && [ "$built" != "$plugin_out/lib$p.so" ]; then
+        cp -f "$built" "$plugin_out/lib$p.so" || true
+    fi
 
-assets_plugin="$root/android/app/src/androidTest/assets/plugins/echo_math"
-mkdir -p "$assets_plugin"
-cp -f "$plugin_out/manifest.json" "$assets_plugin/" || true
-if [ -f "$plugin_out/libecho_math.so" ]; then
-    cp -f "$plugin_out/libecho_math.so" "$assets_plugin/" || true
-fi
+    assets_plugin="$root/android/app/src/androidTest/assets/plugins/$p"
+    mkdir -p "$assets_plugin"
+    cp -f "$plugin_out/manifest.json" "$assets_plugin/" || true
+    if [ -f "$plugin_out/lib$p.so" ]; then
+        cp -f "$plugin_out/lib$p.so" "$assets_plugin/" || true
+    fi
+done
+
+# Bundle the media plugins into the :weizhi-video AAR jniLibs (soname loading).
+video_dir="$root/android/weizhi-video/src/main/jniLibs/$abi"
+mkdir -p "$video_dir"
+for so in libweizhivideo.so libweizhitranscode.so; do
+    built=$(find "$out" -name "$so" 2>/dev/null | head -1 || true)
+    if [ -n "$built" ]; then
+        cp -f "$built" "$video_dir/$so"
+        echo "weizhi-video jniLibs: $video_dir/$so ($(wc -c < "$video_dir/$so") bytes)"
+    fi
+done
 
 # Stage stripped JNI into the :weizhi Android library (Release AAR).
 # Keep unstripped $out/libweizhijni.so for local debugging.
@@ -115,8 +127,10 @@ if [ -f "$out/libweizhijni.so" ]; then
     fi
     echo "AAR jniLibs: $root/android/weizhi/src/main/jniLibs/$abi/libweizhijni.so"
 fi
-if [ -f "$plugin_out/libecho_math.so" ]; then
-    echo "plugin: $plugin_out/libecho_math.so"
-fi
+for p in echo_math echo_video; do
+    if [ -f "$out/plugins/$p/lib$p.so" ]; then
+        echo "plugin: $out/plugins/$p/lib$p.so"
+    fi
+done
 echo "Java: $root/java/com/weizhi/WeizhiEngine.java"
 echo "Gradle AAR: cd android && gradle :weizhi:assembleRelease"

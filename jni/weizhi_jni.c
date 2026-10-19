@@ -401,6 +401,24 @@ JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeEnablePluginLoader(JNI
     return rc;
 }
 
+JNIEXPORT jint JNICALL Java_com_weizhi_WeizhiEngine_nativeRegisterBundledPlugin(JNIEnv *env, jclass clazz,
+                                                                                jlong handle, jstring name,
+                                                                                jstring soname) {
+    char *name_utf = jstring_to_utf8(env, name);
+    char *soname_utf = jstring_to_utf8(env, soname);
+    int rc;
+    (void)clazz;
+    if (name_utf == NULL || soname_utf == NULL) {
+        free(name_utf);
+        free(soname_utf);
+        return -1;
+    }
+    rc = weizhi_register_bundled_plugin((WeizhiEngine *)(intptr_t)handle, name_utf, soname_utf);
+    free(name_utf);
+    free(soname_utf);
+    return rc;
+}
+
 static jmethodID g_host_mid = NULL;
 
 static char *java_host_call(const char *args_json, void *userdata) {

@@ -22,4 +22,6 @@ case "$(uname -s)" in
 esac
 
 echo "Running ASan/UBSan tests..."
-exec "$out/weizhi_tests"
+# Plugin tests resolve plugins/ under WEIZHI_BUILD_DIR (test fallback is "build");
+# without this the ASan run looks for build-asan/build/plugins and fails "not in catalog".
+WEIZHI_BUILD_DIR="$out" exec "$out/weizhi_tests"

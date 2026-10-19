@@ -94,11 +94,12 @@ static void write_u32(uint8_t *p, uint32_t v) {
 }
 
 static uint16_t read_u16(const uint8_t *p) {
-    return (uint16_t)(p[0] | (p[1] << 8));
+    return (uint16_t)((uint16_t)p[0] | ((uint32_t)p[1] << 8));
 }
 
 static uint32_t read_u32(const uint8_t *p) {
-    return (uint32_t)(p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24));
+    return (uint32_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+                      ((uint32_t)p[3] << 24));
 }
 
 static int call_vfs(Engine *engine, WeizhiVfsOp op, const char *relpath, const char *relpath2,

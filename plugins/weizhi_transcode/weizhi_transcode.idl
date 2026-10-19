@@ -1,0 +1,12 @@
+# weizhi_transcode: re-encoding export plugin (docs/video-architecture.md P2).
+# decode(AMediaCodec, surface-tunneled into encoder) -> encode(AMediaCodec input
+# surface) -> mux(AMediaMuxer); audio is passed through without re-encoding.
+# Bundled delivery: libweizhitranscode.so ships in the :weizhi-video AAR.
+# Plugin id "transcode" is a separate logical plugin from "video" (remux), per Q4.
+plugin transcode
+version 0.1.0
+min_host_abi 2
+
+fn open_job(options_json: str) -> i64
+fn run_job(job: i64, on_progress: cb(s: str)) -> str
+fn close_job(job: i64) -> void
