@@ -1,6 +1,6 @@
 # 视频剪辑能力：调研与架构提案（feat/video-editing）
 
-日期：2026-10-17。状态：**P0–P3c 已落地**（长期分支推进，合入主干前需 ROADMAP 立项，见 §6-Q5）。
+日期：2026-10-17。状态：**P0–P3c 已落地并合入主干**（2026-10-19 ROADMAP 立项，见 §6-Q5 与 [ROADMAP.md](ROADMAP.md)）。
 本文是 `feat/video-editing` 长期分支的第一份产出，后续设计/实现以本文为基线演进。
 
 结论先行：**视频剪辑可以进 Weizhi 生态，但 heavy 代码必须以签名插件 SO 形态存在，JS 只做编排；
@@ -242,7 +242,7 @@ P3b 改动文件：`plugins/weizhi_transcode/weizhi_transcode.c`、
 `android/app/src/androidTest/java/com/weizhi/{WeizhiTranscodeInstrumentedTest,GlEncoderProbeInstrumentedTest}.java`。
 构建：`./scripts/build-android.sh arm64-v8a`；单测：`cd android && ./gradlew :app:connectedDebugAndroidTest`。
 | P3c ✅（2026-10-17） | LUT 与 fade 转场（补 P3b 遗留）：`filters:[{type:'lut',params:{path,amount}}]`——插件按 fs 沙箱解析 Adobe/IRIDAS `.cube` 3D LUT（2..64 格）并上传为 N×N² 2D 纹理（unit 1；native 绑定 `uLut`/`uLutSize`，JS 预设 GLSL 做跨 slice 三线性插值）；`transitions:{type:'fade',durationMs}`（单对象广播到全部边界；数组须恰为 clips.length-1 项）编译为每 clip `fadeInMs/fadeOutMs`，native 用 GL 常量色混合（`GL_CONSTANT_COLOR`）逐帧衰减——与滤镜 shader 完全正交、可任意组合。语义：fade 只发生在 clip 边界（时间线首尾不淡出）、只影响视频（音频直通不变）；时长越界报 `unsupported: transition longer than clip`。包升至 `video@0.3.0` | 桌面 `test_weizhi_video_package`（lut/转场编译精确断言 + 6 类校验错误）与含 ASan 全量绿；真机 `lutPixelMap`（常量白 LUT→Y≈235、恒等 LUT 不变色）、`fadeTransitionBoundary`（两侧边界帧 Y<40、clip 中段与时间线尾 Y∈[45,75]）通过，全量 **29/29** |
-| P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）；ffmpeg 可选插件 | 跨仓协议文档 |
+| P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）。~~ffmpeg 可选插件~~（2026-10-19 划掉：安卓系统媒体栈已覆盖主线，仅桌面 CLI 按需再评估） | 跨仓协议文档 |
 
 P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 MediaExtractor/MediaMuxer，
 不碰 codec，代码量小，真机即可验证端到端通道。
@@ -278,8 +278,10 @@ P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 Me
 
 待拍板：
 
-- **Q5** 与 ROADMAP 的关系：视频不在当前路线图（近期焦点是 Agent 集成）；
-  本特性按长期分支推进，合入主干前需在 `docs/ROADMAP.md` 立项。
+（无。）
+
+- **Q5 已定**（2026-10-19）：ROADMAP 已立项（[ROADMAP.md](ROADMAP.md)「视频剪辑能力」节），
+  本特性随 `feat/video-editing` 合入主干；多滤镜链与 P4 预览协作面列为后续、不阻塞主线。
 
 已定（补充）：**Q4**（2026-10-17）：**按功能拆多逻辑插件**，不动单插件 32 导出上限——
 P2 起按 demux / decode-encode / mux 等功能面拆分（各自独立 SO 与 manifest，
