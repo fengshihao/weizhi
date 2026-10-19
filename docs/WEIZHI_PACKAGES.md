@@ -325,6 +325,9 @@ engine.setPackageRoot(weizhiHome.toString());
 | LLM 工具 `install_package` | **宿主注册**，内部调 `PackageInstaller` |
 
 **Android 内置包路径**：`app/src/main/assets/weizhi-packages/<name>@<version>/`（含 `manifest.json` + 入口 js）。
+也可放在**库模块 assets**里随 AAR 交付（Gradle 自动合并进宿主 APK）——`weizhi:video` 即此形态：
+随 `:weizhi-video` AAR 原子交付 JS 包 + 插件 SO（`android/weizhi-video/src/main/assets/weizhi-packages/`），
+宿主 `syncBundled` 既有调用自动安装，无需上云。
 
 ---
 

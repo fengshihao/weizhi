@@ -89,8 +89,16 @@ cd android_agent && ./gradlew :app:assembleDebug
 dependencies {
     implementation(project(":weizhi"))   // 或 files("weizhi-release.aar") + jni
     implementation(project(":caps"))    // 需要 android.* 时
+    implementation(project(":weizhi-video"))  // 可选：视频剪辑（见下）
 }
 ```
+
+可选模块 `:weizhi-video`（视频剪辑，≈194KB SO + JS 包）：SO 走 AAR `jniLibs`
+（`nativeLibraryDir`，Android 10+ 合法 dlopen 位置），`weizhi:video` JS 包随 AAR
+assets 自动合并——宿主 `WeizhiPackages.syncBundled(context)` 既有调用会自动安装，
+初始化时调 `com.weizhi.video.WeizhiVideo.install(engine)` 注册插件即可，脚本侧
+`await host.ensureNative("video" / "transcode")` + `import "weizhi:video"`。
+视频细节见 [video-architecture.md](video-architecture.md)。
 
 桌面冒烟（有 JDK）：`./scripts/test-jni.sh`。真机：`./scripts/test.sh android`。
 
