@@ -1545,11 +1545,11 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.3.0", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.3.1", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
-                              "import { buildJob } from 'weizhi:video';\n"
+                              "import { buildJob, probe } from 'weizhi:video';\n"
                               "const remux = buildJob({clips: [{path: 'a.mp4', startMs: 200, endMs: 800}, {path: 'b.mp4'}], output: 'o.mp4'});\n"
                               "const enc = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', bitrate: 500000});\n"
                               "const flt = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: ['brightness']});\n"
@@ -1576,6 +1576,10 @@ static void test_weizhi_video_package(void) {
                               "try { buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 100}]}); } catch (e) { e8 = e.message; }\n"
                               "let e9 = '';\n"
                               "try { buildJob({clips: [{path: 'a.mp4', fadeInMs: 100}], output: 'o.mp4'}); } catch (e) { e9 = e.message; }\n"
+                              "let pe1 = '';\n"
+                              "try { await probe(''); } catch (e) { pe1 = e.message; }\n"
+                              "let pe2 = '';\n"
+                              "try { await probe('a.mp4'); } catch (e) { pe2 = e.message; }\n"
                               "const encOpts = JSON.parse(enc.optionsJson);\n"
                               "const fltOpts = JSON.parse(flt.optionsJson);\n"
                               "const flt2Opts = JSON.parse(flt2.optionsJson);\n"
@@ -1599,7 +1603,9 @@ static void test_weizhi_video_package(void) {
                               "  castOpts.clips[1].fadeOutMs, castOpts.clips[2].fadeInMs,\n"
                               "  e4.includes('unsupported: transition type'), e5.includes('clips.length - 1'),\n"
                               "  e6.includes('remux cannot'), e7.includes('params.path'),\n"
-                              "  e8.includes('at least two clips'), e9.includes('compiled from transitions')];\n",
+                              "  e8.includes('at least two clips'), e9.includes('compiled from transitions'),\n"
+                              "  typeof probe === 'function', pe1.includes('bad argument: probe'),\n"
+                              "  pe2.includes('unsupported: native')];\n",
                               3000,
                               "run.js");
     EXPECT(result.ok == 1);
@@ -1608,7 +1614,8 @@ static void test_weizhi_video_package(void) {
                   "[\"video\",\"transcode\",\"transcode\",500000,0.2,0.5,true,true,0.5,"
                   "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true,"
                   "\"transcode\",\"w.cube\",1,true,\"transcode\",200,200,100,100,100,100,"
-                  "true,true,true,true,true,true]") == 0);
+                  "true,true,true,true,true,true,"
+                  "true,true,true]") == 0);
     weizhi_result_free(&result);
     /* exportVideo without native plugins fails with the agent-facing hint. */
     result = weizhi_run_js_ex(engine,
