@@ -1756,7 +1756,15 @@ static void test_queue_microtask_digest_fs_and_abort(void) {
                            "await fs.promises.unlink('gone.txt');"
                            "({names, size: st.size, isFile: st.isFile, isDirectory: dirSt.isDirectory,"
                            " gone: fs.existsSync('gone.txt')})",
-                           3000);
+                           10000);
+    /* I/O wait counts toward the runJs timeout; heavily loaded CI runners
+       (agent1 job assembles a gradle env concurrently) once flaked the old 3s
+       budget. Dump the error so a recurrence distinguishes timeout vs runtime
+       failure (#40). */
+    if (result.ok != 1) {
+        fprintf(stderr, "fs.promises combo failed: %s\n",
+                result.error != NULL ? result.error : "(no error)");
+    }
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"names\":[\"a.txt\",\"b.txt\"]") != NULL);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "\"size\":3") != NULL);
