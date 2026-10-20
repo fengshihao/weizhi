@@ -37,6 +37,17 @@ public final class WeizhiVideoPackageInstrumentedTest {
             engine.setPackageRoot(pkgRoot);
             WeizhiVideo.install(engine);
 
+            /* probe: input metadata via the package surface before deciding trim points (#39) */
+            String pr = engine.runJs(
+                    "import { probe } from 'weizhi:video';\n"
+                            + "const m = await probe('a.mp4');\n"
+                            + "export default {tracks: m.tracks.length, w: m.tracks[0].width, dur: m.durationMs};\n",
+                    10_000, "probe.js");
+            assertTrue(pr, pr.contains("\"tracks\":1"));
+            assertTrue(pr, pr.contains("\"w\":320"));
+            int pdur = WeizhiVideoInstrumentedTest.jsonInt(pr, "dur");
+            assertTrue("pdur=" + pdur, pdur > 800 && pdur < 1300);
+
             /* re-encode path: trim + concat + bitrate, progress via package callback */
             String out = engine.runJs(
                     "import { exportVideo } from 'weizhi:video';\n"

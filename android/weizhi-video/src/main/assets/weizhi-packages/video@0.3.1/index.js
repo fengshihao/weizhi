@@ -12,6 +12,9 @@
 // and uLutSize uniforms are bound natively). Transitions compile to per-clip
 // fadeInMs/fadeOutMs and fade through black on the GPU; they compose with any
 // filter and are video-only (audio passes through untouched).
+// API surface: buildJob(spec), exportVideo(spec, opts?), probe(path) — probe
+// returns the input's metadata ({tracks: [{codec, width, height, ...}], durationMs})
+// so callers can validate trim points before exporting.
 // NOTE: tests/test_engine.c embeds this file via CMake; keep that in sync.
 
 const PRESETS = ['brightness', 'contrast', 'saturation', 'grayscale', 'lut'];
@@ -237,6 +240,23 @@ export async function exportVideo(spec) {
   } finally {
     p.close_job(id);
   }
+  if (parsed.error) {
+    throw new Error('video: ' + parsed.error);
+  }
+  return parsed;
+}
+
+/**
+ * Probe an input file's metadata via the remux plugin: resolves with
+ * {tracks: [{...codec, width, height}], durationMs}. Use it to validate
+ * trim points (startMs/endMs) before exportVideo.
+ */
+export async function probe(path) {
+  if (typeof path !== 'string' || path.length === 0) {
+    throw new Error('bad argument: probe: path (string) is required');
+  }
+  const v = await host.ensureNative('video');
+  const parsed = JSON.parse(v.probe(path));
   if (parsed.error) {
     throw new Error('video: ' + parsed.error);
   }
