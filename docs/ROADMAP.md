@@ -90,10 +90,11 @@
 - **边界不变**：heavy 代码全部在独立签名插件 SO（`libweizhivideo.so` ≈60KB、
   `libweizhitranscode.so` ≈133KB，预算 ≤512KB）；核心 `libweizhijni.so` 的 1.5MB strip 门禁不动；
   安卓数据面走 NDK 系统媒体栈（`libmediandk`），不自研 FFmpeg。
-- **后续（不阻塞主线）**：多滤镜链（解除「一 job 一滤镜」守卫）、混合时间线
-  （clips 与 slides 同作业混排）、P4 预览协作面（宿主 Surface，需与 Agent1 对齐
-  跨仓协议）。ffmpeg 插件**暂不做**——安卓系统编解码器已覆盖主线需求；仅当出现
-  系统栈覆盖不了的容器/编码诉求再评估。
+- **后续（不阻塞主线）**：**P5 时间线 schema v2**（多轨叠加 + 关键帧，Flash/NLE 级结构；
+  设计与分期见 [video-timeline-v2.md](video-timeline-v2.md)）、多滤镜链（解除
+  「一 job 一滤镜」守卫）、混合时间线（clips 与 slides 同作业混排，v2 兼容层自然解决）、
+  P4 预览协作面（宿主 Surface，需与 Agent1 对齐跨仓协议）。ffmpeg 插件**暂不做**——
+  安卓系统编解码器已覆盖主线需求；仅当出现系统栈覆盖不了的容器/编码诉求再评估。
 
 ## 迭代建议（集成之后）
 
