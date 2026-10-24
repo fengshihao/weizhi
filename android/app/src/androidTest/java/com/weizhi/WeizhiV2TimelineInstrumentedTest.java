@@ -20,10 +20,9 @@ import java.nio.ByteBuffer;
 import static org.junit.Assert.assertTrue;
 
 /**
- * On-device P5b gate: timeline v2 executes on the native renderer — main
- * video/image track compositing with transformed image overlays (region-level
- * Y assertions) and the v2 soundtrack path. Later-phase features are guarded
- * with English errors.
+ * On-device P5b–P5c gate: timeline v2 native renderer — layer compositing,
+ * per-property keyframes, image-track crossfade, video-main transform; ROI /
+ * full-frame Y assertions. P5d/P5e features guarded with English errors.
  */
 @RunWith(AndroidJUnit4.class)
 public final class WeizhiV2TimelineInstrumentedTest {
@@ -269,6 +268,37 @@ public final class WeizhiV2TimelineInstrumentedTest {
             File faded = new File(ws, "o.mp4");
             int yo = WeizhiTranscodeInstrumentedTest.yMeanAtPts(faded, 500_000);
             assertTrue("video main opacity not applied: " + yo, yo > 100 && yo < 160);
+        }
+    }
+
+    /** P5c: video main track scale keyframes (same kenBurns curve as image main). */
+    @Test
+    public void v2VideoMainTrackScaleKeyframe() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-v2vk-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "wv.mp4", 1000, 235);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            String out = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const r = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'video', clips: [{src: 'wv.mp4',\n"
+                            + "    transform: {scale: [{t: 0, v: 1}, {t: 800, v: 0.5}]}}]}],\n"
+                            + "  output: 'vk.mp4'});\n"
+                            + "export default r.ok;\n",
+                    30_000, "v2vk.js");
+            assertTrue(out, out.contains("true"));
+            File mp4 = new File(ws, "vk.mp4");
+            int y0 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 0);
+            int y1 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 900_000);
+            assertTrue("video kf start not full: " + y0, y0 > 200);
+            assertTrue("video kf end not shrunk: " + y1, y1 > 40 && y1 < 120);
         }
     }
 

@@ -540,7 +540,14 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                                                 p = skip_ws(p + 1);
                                                 continue;
                                             }
-                                            if (prop_id >= 0 && clip->nkfs < WT_MAX_KFS) {
+                                            if (prop_id >= 0) {
+                                                if (clip->nkfs >= WT_MAX_KFS) {
+                                                    snprintf(err, err_len,
+                                                             "unsupported: too many keyframes per "
+                                                             "clip (max %d)",
+                                                             WT_MAX_KFS);
+                                                    return -1;
+                                                }
                                                 WtKfEntry *kf =
                                                     &clip->kfs[clip->nkfs];
                                                 int done = 0;

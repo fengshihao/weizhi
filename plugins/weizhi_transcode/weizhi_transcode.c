@@ -1427,6 +1427,26 @@ static void wt_overlay_release(WtOverlay *ov) {
     ov->decoded_clip = -1;
 }
 
+/* Per-clip transform / keyframe sanity (mirrors JS compiler; blocks bypass jobs). */
+static int wt_v2_clip_transform_ok(const WtV2Clip *clip, char *err, size_t err_len) {
+    int j;
+    if (clip->transform.scale <= 0.0) {
+        snprintf(err, err_len, "bad argument: v2 clip scale must be positive");
+        return -1;
+    }
+    if (clip->nkfs > WT_MAX_KFS) {
+        snprintf(err, err_len, "unsupported: too many keyframes per clip (max %d)", WT_MAX_KFS);
+        return -1;
+    }
+    for (j = 0; j < clip->nkfs; j++) {
+        if (clip->kfs[j].prop == WT_KF_SCALE && clip->kfs[j].v <= 0.0) {
+            snprintf(err, err_len, "bad argument: v2 scale keyframes must be positive");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Validate a v2 spec; returns the main track index (>= 0) or -1 with err set. */
 static int wt_v2_validate(WtJobSpec *spec, char *err, size_t err_len) {
     int main = -1;
@@ -1452,6 +1472,10 @@ static int wt_v2_validate(WtJobSpec *spec, char *err, size_t err_len) {
             nimage++;
         }
         for (i = 0; i < track->nclips; i++) {
+            if (track->type != WT_TRACK_AUDIO &&
+                wt_v2_clip_transform_ok(&track->clips[i], err, err_len) != 0) {
+                return -1;
+            }
             if (track->clips[i].has_gain_kf) {
                 snprintf(err, err_len, "unsupported: v2 audio keyframes (P5d)");
                 return -1;
@@ -1525,8 +1549,8 @@ static int wt_v2_validate(WtJobSpec *spec, char *err, size_t err_len) {
     return main;
 }
 
-/* wt_transform_at returning a pointer into a static ring (max overlays + main
-   clips evaluated per frame is small); avoids callers needing storage. */
+/* wt_transform_at as pointer: static ring sized for worst case per frame
+   (image main overlaps + <=3 overlay tracks). Raise WT_TR_RING if layers grow. */
 static WtTransform *wt_transform_at_ptr(const WtV2Clip *clip, int64_t t_rel_ms) {
     enum { WT_TR_RING = 8 };
     static WtTransform ring[WT_TR_RING];
