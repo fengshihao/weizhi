@@ -1545,7 +1545,7 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.5.0", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.6.0", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
@@ -1715,7 +1715,7 @@ static void test_weizhi_video_package(void) {
                               "  f3.includes('linear|ease'), f4.includes('[0, 1]'),\n"
                               "  f5.includes('video|image|text|audio'), f6.includes('v1 vs v2'),\n"
                               "  f7.includes('durationMs must be a positive'),\n"
-                              "  ex.includes('unsupported: v2 tracks export')];\n",
+                              "  ex.includes('unsupported: native')];\n",
                               3000,
                               "run.js");
     EXPECT(result.ok == 1);

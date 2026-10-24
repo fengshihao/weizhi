@@ -68,6 +68,45 @@ typedef struct WtFilter {
     int nuniforms;
 } WtFilter;
 
+/* ---- timeline v2 (P5, docs/video-timeline-v2.md) ---- */
+#define WT_MAX_TRACKS 8
+#define WT_MAX_TRACK_CLIPS 64
+
+typedef struct WtTransform {
+    double x;        /* normalized, 0 = center */
+    double y;
+    double scale;    /* 1 = fit */
+    double rotation; /* degrees, clockwise */
+    double opacity;  /* [0, 1] */
+} WtTransform;
+
+typedef struct WtV2Clip {
+    char path[WT_MAX_PATH];
+    char text[256]; /* text track clips: compiled, execution lands in P5d */
+    int64_t start_ms;
+    int64_t in_ms;
+    int64_t out_ms;      /* video/audio: 0 = to end of source */
+    int64_t duration_ms; /* image/text */
+    int has_out;
+    int has_duration;
+    WtTransform transform;
+    int has_kf;      /* any keyframes present (constant-only is P5b) */
+    int has_filters; /* per-clip effects present (later phase) */
+} WtV2Clip;
+
+typedef struct WtTrack {
+    int type; /* WT_TRACK_* */
+    WtV2Clip clips[WT_MAX_TRACK_CLIPS];
+    int nclips;
+} WtTrack;
+
+enum {
+    WT_TRACK_VIDEO = 0,
+    WT_TRACK_IMAGE = 1,
+    WT_TRACK_TEXT = 2,
+    WT_TRACK_AUDIO = 3,
+};
+
 typedef struct WtJobSpec {
     WtClip clips[WT_MAX_CLIPS];
     int nclips;
@@ -78,6 +117,9 @@ typedef struct WtJobSpec {
     WtVideoOpts video;
     WtFilter filters[WT_MAX_FILTERS];
     int nfilters;
+    int v2; /* 1 = tracks[] form (P5b+) */
+    WtTrack tracks[WT_MAX_TRACKS];
+    int ntracks;
 } WtJobSpec;
 
 /* Returns 0 on success; err holds an English reason otherwise. */
