@@ -150,6 +150,9 @@ typedef struct WtGL {
     EGLImageKHR image;
     GLint a_pos;
     GLint a_uv;
+    GLuint ov_prog; /* v2 overlays: dedicated 2D identity program (independent of main) */
+    GLint ov_a_pos;
+    GLint ov_a_uv;
     struct {
         char name[WT_MAX_UNIFORM_NAME];
         float value;
@@ -585,6 +588,40 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
             gl->nuniforms++;
         }
     }
+    /* v2 overlay layer: its own 2D identity program so overlays composite on
+       any main-track program (OES or filtered). */
+    {
+        char *ov_src = (char *)malloc(strlen(WT_FRAG_HEADER_2D) + strlen(WT_FRAG_IDENTITY_2D) + 1);
+        GLuint vs2;
+        GLuint fs2;
+        if (ov_src == NULL) {
+            snprintf(err, err_len, "out of memory");
+            return -1;
+        }
+        strcpy(ov_src, WT_FRAG_HEADER_2D);
+        strcat(ov_src, WT_FRAG_IDENTITY_2D);
+        vs2 = wt_gl_shader(GL_VERTEX_SHADER, WT_VERT_SRC, err, err_len);
+        fs2 = vs2 != 0 ? wt_gl_shader(GL_FRAGMENT_SHADER, ov_src, err, err_len) : 0;
+        free(ov_src);
+        if (vs2 == 0 || fs2 == 0) {
+            if (vs2 != 0) glDeleteShader(vs2);
+            if (fs2 != 0) glDeleteShader(fs2);
+            return -1;
+        }
+        gl->ov_prog = glCreateProgram();
+        glAttachShader(gl->ov_prog, vs2);
+        glAttachShader(gl->ov_prog, fs2);
+        glLinkProgram(gl->ov_prog);
+        glDeleteShader(vs2);
+        glDeleteShader(fs2);
+        glGetProgramiv(gl->ov_prog, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            snprintf(err, err_len, "overlay shader link failed");
+            return -1;
+        }
+        gl->ov_a_pos = glGetAttribLocation(gl->ov_prog, "aPos");
+        gl->ov_a_uv = glGetAttribLocation(gl->ov_prog, "aUV");
+    }
     return 0;
 }
 
@@ -610,11 +647,25 @@ static float wt_fade_factor(int64_t rel_us, int64_t dur_us, int64_t fade_in_us,
     return (float)f;
 }
 
+/* Present the frame composed so far: pts + swap (+ optional glFinish, needed
+   when borrowed decoder buffers are about to be returned). */
+static void wt_gl_present(WtGL *gl, int64_t pts_ns, int need_finish) {
+    eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
+    if (!eglSwapBuffers(gl->dpy, gl->surf)) {
+        wt_logf("swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(), (long long)pts_ns);
+    }
+    if (need_finish) {
+        glFinish();
+    }
+}
+
 /* Draw one hardware buffer into the encoder surface at pts_ns (nanoseconds).
    fade < 1 scales every fragment through constant-color blending, which keeps
-   transitions independent of whatever the filter shader does. */
+   transitions independent of whatever the filter shader does. defer_swap: draw
+   into the back buffer only — the caller composites more layers, then
+   wt_gl_present() once (v2 overlays). */
 static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t out_w,
-                       int32_t out_h, float fade) {
+                       int32_t out_h, float fade, int defer_swap) {
     EGLImageKHR image;
     int i;
     if (gl->image != EGL_NO_IMAGE_KHR) {
@@ -640,6 +691,24 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
     glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, image);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl->tex);
+    glUseProgram(gl->prog); /* overlay draws may have switched programs */
+    {
+        /* overlays rewrite the shared VBO; restore the full-screen quad */
+        static const float quad[] = {
+            -1.0f, -1.0f, 0.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f,
+            -1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f,
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, gl->vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+    }
+    if (gl->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_pos);
+        glVertexAttribPointer((GLuint)gl->a_pos, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+    }
+    if (gl->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_uv);
+        glVertexAttribPointer((GLuint)gl->a_uv, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+    }
     {
         GLint loc = glGetUniformLocation(gl->prog, "uVideo");
         if (loc >= 0) {
@@ -666,15 +735,13 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
     if (g_tx_draws < 3) {
         wt_logf("draw pts_ns=%lld glErr=0x%x", (long long)pts_ns, (unsigned)glGetError());
     }
-    eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
-    if (!eglSwapBuffers(gl->dpy, gl->surf)) {
-        wt_logf("swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(), (long long)pts_ns);
+    if (!defer_swap) {
+        /* Wait for the draw to finish before the caller returns the source buffer
+           to the reader (AImage_delete): the decoder may otherwise write into a
+           buffer the GPU is still sampling. SurfaceTexture gets this for free via
+           BufferQueue fences; the raw EGLImage import path does not. */
+        wt_gl_present(gl, pts_ns, 1);
     }
-    /* Wait for the draw to finish before the caller returns the source buffer
-       to the reader (AImage_delete): the decoder may otherwise write into a
-       buffer the GPU is still sampling. SurfaceTexture gets this for free via
-       BufferQueue fences; the raw EGLImage import path does not. */
-    glFinish();
     g_tx_draws++;
 }
 
@@ -683,7 +750,8 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
    shrinks the quad, so the image itself is never stretched. Same fade
    blending and pts path as the video draw, but no fence: the texture is
    owned here, not borrowed from a decoder buffer. */
-static void wt_gl_draw_slide(WtGL *gl, int64_t pts_ns, int32_t out_w, int32_t out_h, float fade) {
+static void wt_gl_draw_slide(WtGL *gl, int64_t pts_ns, int32_t out_w, int32_t out_h, float fade,
+                             int defer_swap) {
     int i;
     float x0 = -1.0f;
     float x1 = 1.0f;
@@ -719,6 +787,16 @@ static void wt_gl_draw_slide(WtGL *gl, int64_t pts_ns, int32_t out_w, int32_t ou
     }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, gl->tex);
+    glUseProgram(gl->prog); /* overlay draws may have switched programs */
+    glBindBuffer(GL_ARRAY_BUFFER, gl->vbo);
+    if (gl->a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_pos);
+        glVertexAttribPointer((GLuint)gl->a_pos, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+    }
+    if (gl->a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->a_uv);
+        glVertexAttribPointer((GLuint)gl->a_uv, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+    }
     {
         GLint loc = glGetUniformLocation(gl->prog, "uVideo");
         if (loc >= 0) {
@@ -742,11 +820,87 @@ static void wt_gl_draw_slide(WtGL *gl, int64_t pts_ns, int32_t out_w, int32_t ou
     glViewport(0, 0, out_w, out_h);
     glClear(GL_COLOR_BUFFER_BIT);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
-    if (!eglSwapBuffers(gl->dpy, gl->surf)) {
-        wt_logf("slide swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(),
-                (long long)pts_ns);
+    if (!defer_swap) {
+        wt_gl_present(gl, pts_ns, 0);
     }
+    g_tx_draws++;
+}
+
+/* Draw one v2 overlay layer (image clip) on top of the current back buffer:
+   contain-fit quad, then translate (x, y in NDC), scale, rotate; opacity via
+   constant-alpha blending. Never swaps — the caller presents the frame. */
+static void wt_gl_draw_overlay(WtGL *gl, GLuint tex, int img_w, int img_h, const WtTransform *tr,
+                               int32_t out_w, int32_t out_h) {
+    double fit_hw;
+    double fit_hh;
+    double hx;
+    double hy;
+    double rad = tr->rotation * 3.14159265358979323846 / 180.0;
+    double cosr = cos(rad);
+    double sinr = sin(rad);
+    double cx = tr->x;
+    double cy = tr->y;
+    float quad[16];
+    int i;
+    if (img_w <= 0 || img_h <= 0 || tr->scale <= 0.0) {
+        return;
+    }
+    {
+        double img_ar = (double)img_w / (double)img_h;
+        double out_ar = (double)out_w / (double)out_h;
+        if (img_ar > out_ar) {
+            fit_hw = 1.0;         /* NDC half-extent: full width */
+            fit_hh = out_ar / img_ar;
+        } else {
+            fit_hh = 1.0;
+            fit_hw = img_ar / out_ar;
+        }
+    }
+    hx = fit_hw * tr->scale;
+    hy = fit_hh * tr->scale;
+    {
+        static const double corner[4][2] = {
+            {-1.0, -1.0},
+            {1.0, -1.0},
+            {-1.0, 1.0},
+            {1.0, 1.0},
+        };
+        static const float uv[4][2] = {{0.0f, 1.0f}, {1.0f, 1.0f}, {0.0f, 0.0f}, {1.0f, 0.0f}};
+        for (i = 0; i < 4; i++) {
+            double sx = corner[i][0] * hx;
+            double sy = corner[i][1] * hy;
+            quad[i * 4 + 0] = (float)(cx + sx * cosr - sy * sinr);
+            quad[i * 4 + 1] = (float)(cy + sx * sinr + sy * cosr);
+            quad[i * 4 + 2] = uv[i][0];
+            quad[i * 4 + 3] = uv[i][1];
+        }
+    }
+    glUseProgram(gl->ov_prog);
+    glBindBuffer(GL_ARRAY_BUFFER, gl->vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+    if (gl->ov_a_pos >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->ov_a_pos);
+        glVertexAttribPointer((GLuint)gl->ov_a_pos, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+    }
+    if (gl->ov_a_uv >= 0) {
+        glEnableVertexAttribArray((GLuint)gl->ov_a_uv);
+        glVertexAttribPointer((GLuint)gl->ov_a_uv, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    {
+        GLint loc = glGetUniformLocation(gl->ov_prog, "uVideo");
+        if (loc >= 0) {
+            glUniform1i(loc, 0);
+        }
+    }
+    /* out = src * opacity + dst * (1 - opacity) */
+    glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+    glBlendColor(0.0f, 0.0f, 0.0f, (float)tr->opacity);
+    glEnable(GL_BLEND);
+    glViewport(0, 0, out_w, out_h);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDisable(GL_BLEND);
     g_tx_draws++;
 }
 
@@ -762,6 +916,9 @@ static void wt_gl_destroy(WtGL *gl) {
     }
     if (gl->prog != 0) {
         glDeleteProgram(gl->prog);
+    }
+    if (gl->ov_prog != 0) {
+        glDeleteProgram(gl->ov_prog);
     }
     if (gl->vbo != 0) {
         glDeleteBuffers(1, &gl->vbo);
@@ -1099,8 +1256,721 @@ static void wt_pass_audio(WtPipeline *p, AMediaExtractor *ex, int64_t start_us, 
     }
 }
 
+/* ---- timeline v2 execution (P5b) ----
+ * Main track (first video, else first image track) drives the frame clock;
+ * image overlay tracks composite on top with constant transforms. Keyframes,
+ * text tracks, extra video tracks and crossfades are guarded to later phases
+ * with English errors (docs/video-timeline-v2.md §5). */
+
+typedef struct WtOverlay {
+    WtTrack *track;  /* image track (not the main one) */
+    GLuint tex;      /* 2D texture of the currently decoded clip */
+    int decoded_clip; /* clip index held in tex (-1 = none) */
+    int img_w;
+    int img_h;
+} WtOverlay;
+
+static void wt_overlay_release(WtOverlay *ov) {
+    if (ov->tex != 0) {
+        glDeleteTextures(1, &ov->tex);
+        ov->tex = 0;
+    }
+    ov->decoded_clip = -1;
+}
+
+/* Validate a v2 spec; returns the main track index (>= 0) or -1 with err set. */
+static int wt_v2_validate(WtJobSpec *spec, char *err, size_t err_len) {
+    int main = -1;
+    int nvideo = 0;
+    int nimage = 0;
+    int naudio = 0;
+    int t;
+    int i;
+    int noverlay = 0;
+    for (t = 0; t < spec->ntracks; t++) {
+        WtTrack *track = &spec->tracks[t];
+        if (track->type == WT_TRACK_TEXT) {
+            snprintf(err, err_len, "unsupported: v2 text track (P5d)");
+            return -1;
+        }
+        if (track->type == WT_TRACK_AUDIO) {
+            naudio++;
+        }
+        if (track->type == WT_TRACK_VIDEO) {
+            nvideo++;
+        }
+        if (track->type == WT_TRACK_IMAGE) {
+            nimage++;
+        }
+        for (i = 0; i < track->nclips; i++) {
+            if (track->clips[i].has_kf) {
+                snprintf(err, err_len, "unsupported: v2 keyframes (P5c)");
+                return -1;
+            }
+            if (track->clips[i].has_filters) {
+                snprintf(err, err_len, "unsupported: v2 per-clip effects (later phase)");
+                return -1;
+            }
+        }
+    }
+    if (naudio > 1) {
+        snprintf(err, err_len, "unsupported: too many audio tracks (P5d)");
+        return -1;
+    }
+    if (nvideo > 1) {
+        snprintf(err, err_len, "unsupported: v2 extra video tracks (P5c)");
+        return -1;
+    }
+    for (t = 0; t < spec->ntracks; t++) {
+        if (spec->tracks[t].type == WT_TRACK_VIDEO) {
+            main = t;
+            break;
+        }
+    }
+    if (main < 0) {
+        for (t = 0; t < spec->ntracks; t++) {
+            if (spec->tracks[t].type == WT_TRACK_IMAGE) {
+                main = t;
+                break;
+            }
+        }
+    }
+    if (main < 0) {
+        snprintf(err, err_len, "bad argument: v2 needs a video or image main track");
+        return -1;
+    }
+    {
+        WtTrack *mt = &spec->tracks[main];
+        const WtTransform id = {0.0, 0.0, 1.0, 0.0, 1.0};
+        for (i = 0; i < mt->nclips; i++) {
+            if (mt->clips[i].transform.x != id.x || mt->clips[i].transform.y != id.y ||
+                mt->clips[i].transform.scale != id.scale ||
+                mt->clips[i].transform.rotation != id.rotation ||
+                mt->clips[i].transform.opacity != id.opacity) {
+                snprintf(err, err_len, "unsupported: v2 main-track transform (P5c)");
+                return -1;
+            }
+        }
+        for (i = 1; i < mt->nclips; i++) {
+            int64_t prev_end;
+            prev_end = mt->type == WT_TRACK_VIDEO
+                           ? (mt->clips[i - 1].has_out
+                                  ? mt->clips[i - 1].start_ms +
+                                        (mt->clips[i - 1].out_ms - mt->clips[i - 1].in_ms)
+                                  : (int64_t)1 << 62)
+                           : mt->clips[i - 1].start_ms + mt->clips[i - 1].duration_ms;
+            if (mt->clips[i].start_ms != prev_end) {
+                snprintf(err, err_len, "unsupported: v2 timeline gaps (P5c)");
+                return -1;
+            }
+        }
+    }
+    for (t = 0; t < spec->ntracks; t++) {
+        if (t != main && spec->tracks[t].type == WT_TRACK_IMAGE) {
+            noverlay++;
+        }
+    }
+    if (noverlay > 3) {
+        snprintf(err, err_len, "unsupported: too many overlay tracks (max 3)");
+        return -1;
+    }
+    return main;
+}
+
+/* Draw every overlay active at t_ms; decodes/uploads textures on first use
+ * and releases them once the clip ends. */
+static void wt_v2_draw_overlays(WtOverlay *overlays, int noverlays, WtGL *gl, int64_t t_ms,
+                                int32_t enc_w, int32_t enc_h, WtPipeline *pipe) {
+    int i;
+    for (i = 0; i < noverlays; i++) {
+        WtOverlay *ov = &overlays[i];
+        int active = -1;
+        int j;
+        for (j = 0; j < ov->track->nclips; j++) {
+            WtV2Clip *cl = &ov->track->clips[j];
+            if (t_ms >= cl->start_ms && t_ms < cl->start_ms + cl->duration_ms) {
+                active = j;
+                break;
+            }
+        }
+        if (active < 0) {
+            if (ov->tex != 0) {
+                wt_overlay_release(ov);
+            }
+            continue;
+        }
+        if (ov->decoded_clip != active) {
+            char serr[192];
+            char *abs;
+            uint8_t *rgba;
+            int32_t iw = 0;
+            int32_t ih = 0;
+            wt_overlay_release(ov);
+            abs = resolved_or_error(ov->track->clips[active].path);
+            if (abs == NULL) {
+                wt_fail(pipe, "out of memory", NULL);
+                return;
+            }
+            if (abs[0] != '/') {
+                wt_fail(pipe, abs, NULL);
+                free(abs);
+                return;
+            }
+            serr[0] = '\0';
+            rgba = wt_decode_image(abs, enc_w, enc_h, &iw, &ih, serr, sizeof(serr));
+            free(abs);
+            if (rgba == NULL) {
+                wt_fail(pipe, serr[0] != '\0' ? serr : "image decode failed",
+                        ov->track->clips[active].path);
+                return;
+            }
+            glGenTextures(1, &ov->tex);
+            glBindTexture(GL_TEXTURE_2D, ov->tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, iw, ih, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            free(rgba);
+            if (glGetError() != GL_NO_ERROR) {
+                wt_overlay_release(ov);
+                wt_fail(pipe, "unsupported: overlay (texture upload failed)",
+                        ov->track->clips[active].path);
+                return;
+            }
+            ov->decoded_clip = active;
+            ov->img_w = iw;
+            ov->img_h = ih;
+            wt_logf("overlay %d: clip %d %dx%d for %lldms", i, active, iw, ih,
+                    (long long)ov->track->clips[active].duration_ms);
+        }
+        wt_gl_draw_overlay(gl, ov->tex, ov->img_w, ov->img_h,
+                           &ov->track->clips[active].transform, enc_w, enc_h);
+    }
+}
+
+static char *wt_run_v2(WtJob *job, uint32_t on_progress) {
+    WtPipeline pipe;
+    AMediaFormat *enc_fmt = NULL;
+    char open_err[128];
+    char verr[192];
+    char *result = NULL;
+    char progress[96];
+    int progress_tick = 0;
+    int32_t enc_w = 1280;
+    int32_t enc_h = 720;
+    int32_t enc_fps = 30;
+    int main_idx;
+    WtTrack *main_track;
+    WtGL gl;
+    WtOverlay overlays[WT_MAX_TRACKS];
+    int noverlays = 0;
+    int audio_idx = -1;
+    char *audio_first_abs = NULL;
+    int t;
+    int c;
+    memset(&gl, 0, sizeof(gl));
+    memset(&pipe, 0, sizeof(pipe));
+    memset(overlays, 0, sizeof(overlays));
+    pipe.video_mux_track = -1;
+    pipe.audio_mux_track = -1;
+    pipe.out_fd = -1;
+
+    verr[0] = '\0';
+    main_idx = wt_v2_validate(&job->spec, verr, sizeof(verr));
+    if (main_idx < 0) {
+        return json_err(verr[0] != '\0' ? verr : "bad argument: v2 job", NULL);
+    }
+    main_track = &job->spec.tracks[main_idx];
+    for (t = 0; t < job->spec.ntracks; t++) {
+        if (job->spec.tracks[t].type == WT_TRACK_AUDIO) {
+            audio_idx = t;
+        } else if (t != main_idx && job->spec.tracks[t].type == WT_TRACK_IMAGE) {
+            overlays[noverlays].track = &job->spec.tracks[t];
+            overlays[noverlays].decoded_clip = -1;
+            noverlays++;
+        }
+    }
+
+    pipe.out_abs = resolved_or_error(job->spec.output);
+    if (pipe.out_abs == NULL) {
+        return json_err("out of memory", NULL);
+    }
+    if (pipe.out_abs[0] != '/') {
+        return pipe.out_abs;
+    }
+    pipe.buf = (uint8_t *)malloc(WT_SAMPLE_BUF);
+    if (pipe.buf == NULL) {
+        free(pipe.out_abs);
+        return json_err("out of memory", NULL);
+    }
+    pipe.out_fd = open(pipe.out_abs, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (pipe.out_fd < 0) {
+        result = json_err("output open failed", pipe.out_abs);
+        goto done;
+    }
+    pipe.muxer = AMediaMuxer_new(pipe.out_fd, AMEDIAMUXER_OUTPUT_FORMAT_MPEG_4);
+    snprintf(g_tx_log_path, sizeof(g_tx_log_path), "%s.log", pipe.out_abs);
+    g_tx_draws = 0;
+    g_tx_acquired = 0;
+    g_tx_frames = 0;
+    wt_logf("v2 job start: tracks=%d main=%d(type %d) overlays=%d", job->spec.ntracks, main_idx,
+            main_track->type, noverlays);
+
+    if (main_track->type == WT_TRACK_VIDEO) {
+        /* probe the first main clip for encoder defaults */
+        char *abs = resolved_or_error(main_track->clips[0].path);
+        WtSource src;
+        if (abs == NULL) {
+            pipe.fail = json_err("out of memory", NULL);
+            goto done;
+        }
+        if (abs[0] != '/') {
+            pipe.fail = abs;
+            goto done;
+        }
+        open_err[0] = '\0';
+        if (open_source(abs, "video/", &src, open_err, sizeof(open_err)) != 0) {
+            pipe.fail = json_err(open_err, main_track->clips[0].path);
+            free(abs);
+            goto done;
+        }
+        enc_w = src.width;
+        enc_h = src.height;
+        enc_fps = src.fps > 0 ? src.fps : 30;
+        close_source(&src);
+        free(abs);
+    }
+    if (job->spec.video.width > 0 && job->spec.video.height > 0) {
+        enc_w = (int32_t)job->spec.video.width;
+        enc_h = (int32_t)job->spec.video.height;
+    }
+    if (job->spec.video.fps > 0) {
+        enc_fps = (int32_t)job->spec.video.fps;
+    }
+    if (enc_w <= 0 || enc_h <= 0) {
+        pipe.fail = json_err("source has no video track", main_track->clips[0].path);
+        goto done;
+    }
+    pipe.enc_w = enc_w;
+    pipe.enc_h = enc_h;
+
+    enc_fmt = AMediaFormat_new();
+    AMediaFormat_setString(enc_fmt, AMEDIAFORMAT_KEY_MIME, "video/avc");
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_WIDTH, enc_w);
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_HEIGHT, enc_h);
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_BIT_RATE,
+                          job->spec.video.bitrate > 0 ? (int32_t)job->spec.video.bitrate : 4000000);
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_FRAME_RATE, enc_fps);
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_I_FRAME_INTERVAL, 1);
+    AMediaFormat_setInt32(enc_fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000789);
+    pipe.encoder = AMediaCodec_createEncoderByType("video/avc");
+    if (pipe.encoder == NULL ||
+        AMediaCodec_configure(pipe.encoder, enc_fmt, NULL, NULL, AMEDIACODEC_CONFIGURE_FLAG_ENCODE) !=
+            AMEDIA_OK) {
+        pipe.fail = json_err("encoder setup failed", "video/avc");
+        goto done;
+    }
+    if (AMediaCodec_createInputSurface(pipe.encoder, &pipe.enc_surface) != AMEDIA_OK ||
+        AMediaCodec_start(pipe.encoder) != AMEDIA_OK) {
+        pipe.fail = json_err("encoder start failed", NULL);
+        goto done;
+    }
+    {
+        char gl_err[192];
+        int tex_2d = main_track->type == WT_TRACK_IMAGE;
+        const char *frag = tex_2d ? WT_FRAG_IDENTITY_2D : WT_FRAG_IDENTITY;
+        gl_err[0] = '\0';
+        if (wt_gl_init(&gl, pipe.enc_surface, frag, NULL, NULL, tex_2d, gl_err,
+                       sizeof(gl_err)) != 0) {
+            pipe.fail = json_err(gl_err[0] != '\0' ? gl_err : "GPU setup failed", NULL);
+            goto done;
+        }
+    }
+
+    /* soundtrack track must exist before the muxer starts (first frame) */
+    if (audio_idx >= 0) {
+        WtSource asrc;
+        audio_first_abs = resolved_or_error(job->spec.tracks[audio_idx].clips[0].path);
+        if (audio_first_abs == NULL) {
+            pipe.fail = json_err("out of memory", NULL);
+            goto done;
+        }
+        if (audio_first_abs[0] != '/') {
+            pipe.fail = audio_first_abs;
+            audio_first_abs = NULL;
+            goto done;
+        }
+        open_err[0] = '\0';
+        if (open_source(audio_first_abs, "audio/", &asrc, open_err, sizeof(open_err)) == 0) {
+            AMediaFormat *afmt = source_track_format(asrc.ex, asrc.track);
+            pipe.audio_mux_track = AMediaMuxer_addTrack(pipe.muxer, afmt);
+            AMediaFormat_delete(afmt);
+            close_source(&asrc);
+            if (pipe.audio_mux_track < 0) {
+                pipe.fail = json_err("muxer track add failed", "audio");
+                goto done;
+            }
+        } else {
+            pipe.fail = json_err(open_err, job->spec.tracks[audio_idx].clips[0].path);
+            goto done;
+        }
+    }
+
+    if (main_track->type == WT_TRACK_VIDEO) {
+        int64_t main_written_us = 0;
+        for (c = 0; c < main_track->nclips && pipe.fail == NULL && !pipe.cancelled; c++) {
+            WtV2Clip *clip = &main_track->clips[c];
+            char *abs = resolved_or_error(clip->path);
+            WtSource vsrc;
+            AMediaCodec *decoder = NULL;
+            AImageReader *reader = NULL;
+            ANativeWindow *dec_window = NULL;
+            int64_t start_us = clip->in_ms * 1000;
+            int64_t end_us = clip->has_out ? clip->out_ms * 1000 : (int64_t)1 << 62;
+            int64_t base_us = clip->start_ms * 1000;
+            int64_t last_rel = 0;
+            int wrote_any = 0;
+            int input_eos = 0;
+            int decode_eos = 0;
+            int enc_eos_dummy;
+            if (abs == NULL) {
+                pipe.fail = json_err("out of memory", NULL);
+                goto clip_done;
+            }
+            if (abs[0] != '/') {
+                pipe.fail = abs;
+                abs = NULL;
+                goto clip_done;
+            }
+            open_err[0] = '\0';
+            if (open_source(abs, "video/", &vsrc, open_err, sizeof(open_err)) != 0) {
+                pipe.fail = json_err(open_err, clip->path);
+                goto clip_done;
+            }
+            if (vsrc.duration_us > 0 && end_us > vsrc.duration_us) {
+                end_us = vsrc.duration_us;
+            }
+            if (AImageReader_newWithUsage(vsrc.width, vsrc.height, AIMAGE_FORMAT_PRIVATE,
+                                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE, 3,
+                                          &reader) != AMEDIA_OK ||
+                reader == NULL || AImageReader_getWindow(reader, &dec_window) != AMEDIA_OK ||
+                dec_window == NULL) {
+                pipe.fail = json_err("image reader setup failed", clip->path);
+                close_source(&vsrc);
+                goto clip_done;
+            }
+            {
+                AMediaFormat *dec_fmt = source_track_format(vsrc.ex, vsrc.track);
+                decoder = AMediaCodec_createDecoderByType(vsrc.mime);
+                if (decoder == NULL || dec_fmt == NULL ||
+                    AMediaCodec_configure(decoder, dec_fmt, dec_window, NULL, 0) != AMEDIA_OK) {
+                    AMediaFormat_delete(dec_fmt);
+                    pipe.fail = json_err("decoder setup failed", vsrc.mime);
+                    close_source(&vsrc);
+                    goto clip_done;
+                }
+                AMediaFormat_delete(dec_fmt);
+            }
+            if (AMediaCodec_start(decoder) != AMEDIA_OK) {
+                pipe.fail = json_err("decoder start failed", NULL);
+                close_source(&vsrc);
+                goto clip_done;
+            }
+            if (start_us > 0) {
+                AMediaExtractor_seekTo(vsrc.ex, (uint64_t)start_us,
+                                       AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
+            }
+            while (pipe.fail == NULL && !pipe.cancelled && !decode_eos) {
+                ssize_t in_idx = AMediaCodec_dequeueInputBuffer(decoder, 0);
+                if (in_idx >= 0 && !input_eos) {
+                    ssize_t sample = AMediaExtractor_readSampleData(vsrc.ex, pipe.buf, WT_SAMPLE_BUF);
+                    int64_t tt = AMediaExtractor_getSampleTime(vsrc.ex);
+                    if (sample < 0 || tt < 0 || tt > end_us) {
+                        AMediaCodec_queueInputBuffer(decoder, (size_t)in_idx, 0, 0, 0,
+                                                     AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM);
+                        input_eos = 1;
+                    } else {
+                        size_t cap = 0;
+                        uint8_t *dst = AMediaCodec_getInputBuffer(decoder, (size_t)in_idx, &cap);
+                        if (dst == NULL || (size_t)sample > cap) {
+                            pipe.fail = json_err("decoder input failed", NULL);
+                            break;
+                        }
+                        memcpy(dst, pipe.buf, (size_t)sample);
+                        AMediaCodec_queueInputBuffer(decoder, (size_t)in_idx, 0, (size_t)sample,
+                                                     tt, 0);
+                        AMediaExtractor_advance(vsrc.ex);
+                    }
+                }
+                {
+                    AMediaCodecBufferInfo info;
+                    ssize_t out_idx = AMediaCodec_dequeueOutputBuffer(decoder, &info, 10 * 1000);
+                    if (out_idx == AMEDIA_ERROR_UNKNOWN) {
+                        pipe.fail = json_err("decoder failed", NULL);
+                        break;
+                    }
+                    if (out_idx >= 0) {
+                        if ((info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, false);
+                            decode_eos = 1;
+                        } else {
+                            int64_t tt = info.presentationTimeUs;
+                            if (tt > end_us) {
+                                AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, false);
+                                decode_eos = 1;
+                            } else if (tt < start_us) {
+                                AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, false);
+                            } else {
+                                int64_t rel = tt - start_us;
+                                AMediaCodec_releaseOutputBuffer(decoder, (size_t)out_idx, true);
+                                g_tx_frames++;
+                                for (;;) {
+                                    AImage *img = NULL;
+                                    AHardwareBuffer *ahb = NULL;
+                                    media_status_t st =
+                                        AImageReader_acquireNextImage(reader, &img);
+                                    if (st != AMEDIA_OK || img == NULL) {
+                                        if (st != AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) {
+                                            wt_logf("acquire st=%d after frame pts=%lld", (int)st,
+                                                    (long long)tt);
+                                        }
+                                        break;
+                                    }
+                                    g_tx_acquired++;
+                                    if (AImage_getHardwareBuffer(img, &ahb) == AMEDIA_OK &&
+                                        ahb != NULL) {
+                                        wt_gl_draw(&gl, ahb, (base_us + rel) * 1000, enc_w, enc_h,
+                                                   1.0f, 1);
+                                        wt_v2_draw_overlays(overlays, noverlays, &gl,
+                                                            clip->start_ms + rel / 1000, enc_w,
+                                                            enc_h, &pipe);
+                                        /* finish before returning the buffer to the reader */
+                                        wt_gl_present(&gl, (base_us + rel) * 1000, 1);
+                                    } else {
+                                        wt_logf("no hardware buffer on image");
+                                    }
+                                    AImage_delete(img);
+                                }
+                                last_rel = rel;
+                                wrote_any = 1;
+                                progress_tick++;
+                                if ((progress_tick % 15) == 0 && g_host.cb_invoke_str != NULL &&
+                                    g_host.engine != NULL) {
+                                    int64_t span = end_us - start_us;
+                                    int pct = span > 0 ? (int)((rel * 100) / span) : 100;
+                                    int overall =
+                                        (int)((((double)c + (pct > 100 ? 100 : pct) / 100.0) /
+                                               main_track->nclips) * 90.0);
+                                    snprintf(progress, sizeof(progress),
+                                             "{\"clip\":%d,\"clipPercent\":%d,\"percent\":%d}", c,
+                                             pct > 100 ? 100 : pct, overall);
+                                    g_host.cb_invoke_str(g_host.engine, on_progress, progress);
+                                }
+                            }
+                        }
+                    }
+                }
+                enc_eos_dummy = 0;
+                wt_drain_encoder(&pipe, 0, &enc_eos_dummy);
+                if (g_host.cancel_poll != NULL && g_host.engine != NULL &&
+                    g_host.cancel_poll(g_host.engine)) {
+                    pipe.cancelled = 1;
+                }
+            }
+            close_source(&vsrc);
+            if (wrote_any) {
+                main_written_us = clip->start_ms * 1000 + last_rel + WT_LAST_FRAME_GAP_US;
+            }
+        clip_done:
+            if (decoder != NULL) {
+                AMediaCodec_stop(decoder);
+                AMediaCodec_delete(decoder);
+            }
+            if (reader != NULL) {
+                AImageReader_delete(reader);
+            }
+            free(abs);
+        }
+        pipe.timeline_us = main_written_us;
+    } else {
+        /* image main track: slideshow frames with overlays */
+        int s;
+        for (s = 0; s < main_track->nclips && pipe.fail == NULL && !pipe.cancelled; s++) {
+            WtV2Clip *clip = &main_track->clips[s];
+            char *abs = resolved_or_error(clip->path);
+            uint8_t *rgba;
+            int32_t iw = 0;
+            int32_t ih = 0;
+            char serr[192];
+            int64_t dur_us = clip->duration_ms * 1000;
+            int nframes;
+            int f;
+            if (abs == NULL) {
+                pipe.fail = json_err("out of memory", NULL);
+                goto slide_done2;
+            }
+            if (abs[0] != '/') {
+                pipe.fail = abs;
+                abs = NULL;
+                goto slide_done2;
+            }
+            serr[0] = '\0';
+            rgba = wt_decode_image(abs, enc_w, enc_h, &iw, &ih, serr, sizeof(serr));
+            if (rgba == NULL) {
+                pipe.fail = json_err(serr[0] != '\0' ? serr : "image decode failed", clip->path);
+                goto slide_done2;
+            }
+            gl.img_w = iw;
+            gl.img_h = ih;
+            glBindTexture(GL_TEXTURE_2D, gl.tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, iw, ih, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            free(rgba);
+            if (glGetError() != GL_NO_ERROR) {
+                pipe.fail = json_err("unsupported: slide (texture upload failed)", clip->path);
+                goto slide_done2;
+            }
+            nframes = (int)((dur_us * enc_fps + 999999) / 1000000);
+            for (f = 0; f < nframes && pipe.fail == NULL && !pipe.cancelled; f++) {
+                int64_t rel = (int64_t)(((double)f * 1000000.0) / (double)enc_fps);
+                int enc_eos_dummy = 0;
+                wt_gl_draw_slide(&gl, (clip->start_ms * 1000 + rel) * 1000, enc_w, enc_h, 1.0f, 1);
+                wt_v2_draw_overlays(overlays, noverlays, &gl, clip->start_ms + rel / 1000, enc_w,
+                                    enc_h, &pipe);
+                wt_gl_present(&gl, (clip->start_ms * 1000 + rel) * 1000, 0);
+                g_tx_frames++;
+                wt_drain_encoder(&pipe, 0, &enc_eos_dummy);
+                progress_tick++;
+                if ((progress_tick % 15) == 0 && g_host.cb_invoke_str != NULL &&
+                    g_host.engine != NULL) {
+                    int pct = dur_us > 0 ? (int)((rel * 100) / dur_us) : 100;
+                    int overall =
+                        (int)((((double)s + (pct > 100 ? 100 : pct) / 100.0) /
+                               main_track->nclips) * 90.0);
+                    snprintf(progress, sizeof(progress),
+                             "{\"clip\":%d,\"clipPercent\":%d,\"percent\":%d}", s,
+                             pct > 100 ? 100 : pct, overall);
+                    g_host.cb_invoke_str(g_host.engine, on_progress, progress);
+                }
+                if (g_host.cancel_poll != NULL && g_host.engine != NULL &&
+                    g_host.cancel_poll(g_host.engine)) {
+                    pipe.cancelled = 1;
+                }
+            }
+        slide_done2:
+            free(abs);
+        }
+        {
+            WtV2Clip *last = &main_track->clips[main_track->nclips - 1];
+            pipe.timeline_us = (last->start_ms + last->duration_ms) * 1000;
+        }
+    }
+
+    if (pipe.fail == NULL && !pipe.cancelled) {
+        int encoder_eos = 0;
+        AMediaCodec_signalEndOfInputStream(pipe.encoder);
+        while (!encoder_eos && pipe.fail == NULL) {
+            wt_drain_encoder(&pipe, 100 * 1000, &encoder_eos);
+        }
+        /* soundtrack after the frames: the muxer has started, writes go direct */
+        if (audio_idx >= 0) {
+            WtTrack *atrack = &job->spec.tracks[audio_idx];
+            int a;
+            for (a = 0; a < atrack->nclips && pipe.fail == NULL; a++) {
+                WtV2Clip *aclip = &atrack->clips[a];
+                char *a_abs = resolved_or_error(aclip->path);
+                WtSource asrc;
+                if (a_abs == NULL) {
+                    pipe.fail = json_err("out of memory", NULL);
+                    break;
+                }
+                if (a_abs[0] != '/') {
+                    pipe.fail = a_abs;
+                    a_abs = NULL;
+                    break;
+                }
+                open_err[0] = '\0';
+                if (open_source(a_abs, "audio/", &asrc, open_err, sizeof(open_err)) == 0) {
+                    int64_t start_us = aclip->in_ms * 1000;
+                    int64_t end_us =
+                        aclip->has_out ? aclip->out_ms * 1000 : (int64_t)1 << 62;
+                    int64_t tl;
+                    if (start_us > 0) {
+                        AMediaExtractor_seekTo(asrc.ex, (uint64_t)start_us,
+                                               AMEDIAEXTRACTOR_SEEK_PREVIOUS_SYNC);
+                    }
+                    tl = pipe.timeline_us;
+                    pipe.timeline_us = aclip->start_ms * 1000;
+                    wt_pass_audio(&pipe, asrc.ex, start_us, end_us);
+                    pipe.timeline_us = tl;
+                    close_source(&asrc);
+                } else {
+                    pipe.fail = json_err(open_err, aclip->path);
+                }
+                free(a_abs);
+            }
+        }
+        wt_logf("v2 job done: frames=%d acquired=%d draws=%d muxer_started=%d timeline_ms=%lld",
+                g_tx_frames, g_tx_acquired, g_tx_draws, pipe.muxer_started,
+                (long long)(pipe.timeline_us / 1000));
+    }
+
+done:
+    for (t = 0; t < noverlays; t++) {
+        wt_overlay_release(&overlays[t]);
+    }
+    if (gl.dpy != EGL_NO_DISPLAY) {
+        wt_gl_destroy(&gl);
+    }
+    if (pipe.encoder != NULL) {
+        AMediaCodec_stop(pipe.encoder);
+        AMediaCodec_delete(pipe.encoder);
+    }
+    if (pipe.enc_surface != NULL) {
+        ANativeWindow_release(pipe.enc_surface);
+    }
+    if (enc_fmt != NULL) {
+        AMediaFormat_delete(enc_fmt);
+    }
+    if (pipe.muxer_started) {
+        AMediaMuxer_stop(pipe.muxer);
+    }
+    if (pipe.muxer != NULL) {
+        AMediaMuxer_delete(pipe.muxer);
+    }
+    if (pipe.out_fd >= 0) {
+        close(pipe.out_fd);
+    }
+    free(pipe.buf);
+    free(audio_first_abs);
+    wt_pending_free(&pipe);
+    if (pipe.cancelled) {
+        unlink(pipe.out_abs);
+        result = (char *)malloc(64);
+        if (result != NULL) {
+            strcpy(result, "{\"cancelled\":true}");
+        }
+    } else if (pipe.fail != NULL) {
+        result = pipe.fail;
+    } else {
+        result = (char *)malloc(strlen(pipe.out_abs) + 192);
+        if (result != NULL) {
+            snprintf(result, strlen(pipe.out_abs) + 192,
+                     "{\"ok\":true,\"output\":\"%s\",\"tracks\":%d,\"durationMs\":%lld,"
+                     "\"width\":%d,\"height\":%d}",
+                     pipe.out_abs, job->spec.ntracks, (long long)(pipe.timeline_us / 1000), enc_w,
+                     enc_h);
+        }
+    }
+    free(pipe.out_abs);
+    return result;
+}
+
 WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_progress) {
     WtJob *job = find_job(job_id);
+    if (job != NULL && job->spec.v2) {
+        return wt_run_v2(job, on_progress);
+    }
     WtPipeline pipe;
     AMediaFormat *enc_fmt = NULL;
     char *result = NULL;
@@ -1362,7 +2232,7 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                 int64_t rel = (int64_t)(((double)f * 1000000.0) / (double)enc_fps);
                 int enc_eos_dummy = 0;
                 wt_gl_draw_slide(&gl, (pipe.timeline_us + rel) * 1000, enc_w, enc_h,
-                                 wt_fade_factor(rel, dur_us, fade_in_us, fade_out_us));
+                                 wt_fade_factor(rel, dur_us, fade_in_us, fade_out_us), 0);
                 g_tx_frames++;
                 wt_drain_encoder(&pipe, 0, &enc_eos_dummy);
                 progress_tick++;
@@ -1545,7 +2415,8 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                                                    enc_h,
                                                    wt_fade_factor(rel, clip_dur_us,
                                                                   clip->fade_in_ms * 1000,
-                                                                  clip->fade_out_ms * 1000));
+                                                                  clip->fade_out_ms * 1000),
+                                                   0);
                                     } else {
                                         wt_logf("no hardware buffer on image");
                                     }

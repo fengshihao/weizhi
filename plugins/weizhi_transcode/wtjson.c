@@ -119,6 +119,17 @@ static const char *parse_num_member(const char *p, const char *key, int64_t *out
     return p;
 }
 
+/* Parse one f64 member value; used for v2 transform properties. */
+static const char *parse_f64_member(const char *p, const char *key, double *out, char *err,
+                                    size_t err_len) {
+    p = skip_ws(p);
+    p = parse_f64(p, out);
+    if (p == NULL) {
+        snprintf(err, err_len, "bad argument: job json (bad number for %s)", key);
+    }
+    return p;
+}
+
 int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
     const char *p;
     char key[64];
@@ -308,6 +319,213 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
             p = skip_ws(p + 1);
         } else if (strcmp(key, "audio") == 0) {
             p = parse_str(p, spec->audio, sizeof(spec->audio));
+        } else if (strcmp(key, "v2") == 0) {
+            int64_t v = 0;
+            p = parse_num_member(p, key, &v, err, err_len);
+            if (p != NULL && v == 1) {
+                spec->v2 = 1;
+            }
+        } else if (strcmp(key, "tracks") == 0) {
+            if (*p != '[') {
+                snprintf(err, err_len, "bad argument: job json (tracks must be an array)");
+                return -1;
+            }
+            p = skip_ws(p + 1);
+            while (*p != ']') {
+                WtTrack *track;
+                if (*p == ',') {
+                    p = skip_ws(p + 1);
+                    continue;
+                }
+                if (*p != '{' || spec->ntracks >= WT_MAX_TRACKS) {
+                    snprintf(err, err_len, "bad argument: job json (bad track or too many tracks)");
+                    return -1;
+                }
+                track = &spec->tracks[spec->ntracks];
+                memset(track, 0, sizeof(*track));
+                track->type = -1;
+                p = skip_ws(p + 1);
+                while (*p != '}') {
+                    if (*p == ',') {
+                        p = skip_ws(p + 1);
+                        continue;
+                    }
+                    p = parse_str(p, key, sizeof(key));
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad track key)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
+                    if (*p != ':') {
+                        snprintf(err, err_len, "bad argument: job json (expected ':')");
+                        return -1;
+                    }
+                    p = skip_ws(p + 1);
+                    if (strcmp(key, "type") == 0) {
+                        char tname[16];
+                        p = parse_str(p, tname, sizeof(tname));
+                        if (p == NULL) {
+                            snprintf(err, err_len, "bad argument: job json (bad track type)");
+                            return -1;
+                        }
+                        if (strcmp(tname, "video") == 0) {
+                            track->type = WT_TRACK_VIDEO;
+                        } else if (strcmp(tname, "image") == 0) {
+                            track->type = WT_TRACK_IMAGE;
+                        } else if (strcmp(tname, "text") == 0) {
+                            track->type = WT_TRACK_TEXT;
+                        } else if (strcmp(tname, "audio") == 0) {
+                            track->type = WT_TRACK_AUDIO;
+                        } else {
+                            snprintf(err, err_len,
+                                     "bad argument: job json (unknown track type %s)", tname);
+                            return -1;
+                        }
+                    } else if (strcmp(key, "clips") == 0) {
+                        if (*p != '[') {
+                            snprintf(err, err_len,
+                                     "bad argument: job json (track clips must be an array)");
+                            return -1;
+                        }
+                        p = skip_ws(p + 1);
+                        while (*p != ']') {
+                            WtV2Clip *clip;
+                            if (*p == ',') {
+                                p = skip_ws(p + 1);
+                                continue;
+                            }
+                            if (*p != '{' || track->nclips >= WT_MAX_TRACK_CLIPS) {
+                                snprintf(err, err_len,
+                                         "bad argument: job json (bad clip or too many track clips)");
+                                return -1;
+                            }
+                            clip = &track->clips[track->nclips];
+                            memset(clip, 0, sizeof(*clip));
+                            clip->transform.scale = 1.0;
+                            clip->transform.opacity = 1.0;
+                            p = skip_ws(p + 1);
+                            while (*p != '}') {
+                                if (*p == ',') {
+                                    p = skip_ws(p + 1);
+                                    continue;
+                                }
+                                p = parse_str(p, key, sizeof(key));
+                                if (p == NULL) {
+                                    snprintf(err, err_len,
+                                             "bad argument: job json (bad v2 clip key)");
+                                    return -1;
+                                }
+                                p = skip_ws(p);
+                                if (*p != ':') {
+                                    snprintf(err, err_len,
+                                             "bad argument: job json (expected ':')");
+                                    return -1;
+                                }
+                                p = skip_ws(p + 1);
+                                if (strcmp(key, "path") == 0) {
+                                    p = parse_str(p, clip->path, sizeof(clip->path));
+                                } else if (strcmp(key, "text") == 0) {
+                                    p = parse_str(p, clip->text, sizeof(clip->text));
+                                } else if (strcmp(key, "startMs") == 0 ||
+                                           strcmp(key, "inMs") == 0 || strcmp(key, "outMs") == 0 ||
+                                           strcmp(key, "durationMs") == 0) {
+                                    int64_t v = 0;
+                                    p = parse_num_member(p, key, &v, err, err_len);
+                                    if (p == NULL) {
+                                        return -1;
+                                    }
+                                    if (strcmp(key, "startMs") == 0) {
+                                        clip->start_ms = v;
+                                    } else if (strcmp(key, "inMs") == 0) {
+                                        clip->in_ms = v;
+                                    } else if (strcmp(key, "outMs") == 0) {
+                                        clip->out_ms = v;
+                                        clip->has_out = 1;
+                                    } else {
+                                        clip->duration_ms = v;
+                                        clip->has_duration = 1;
+                                    }
+                                } else if (strcmp(key, "transform") == 0) {
+                                    if (*p != '{') {
+                                        snprintf(err, err_len,
+                                                 "bad argument: job json (transform must be an object)");
+                                        return -1;
+                                    }
+                                    p = skip_ws(p + 1);
+                                    while (*p != '}') {
+                                        double tv;
+                                        if (*p == ',') {
+                                            p = skip_ws(p + 1);
+                                            continue;
+                                        }
+                                        p = parse_str(p, key, sizeof(key));
+                                        if (p == NULL) {
+                                            snprintf(err, err_len,
+                                                     "bad argument: job json (bad transform key)");
+                                            return -1;
+                                        }
+                                        p = skip_ws(p);
+                                        if (*p != ':') {
+                                            snprintf(err, err_len,
+                                                     "bad argument: job json (expected ':')");
+                                            return -1;
+                                        }
+                                        p = skip_ws(p + 1);
+                                        p = parse_f64_member(p, key, &tv, err, err_len);
+                                        if (p == NULL) {
+                                            return -1;
+                                        }
+                                        if (strcmp(key, "x") == 0) {
+                                            clip->transform.x = tv;
+                                        } else if (strcmp(key, "y") == 0) {
+                                            clip->transform.y = tv;
+                                        } else if (strcmp(key, "scale") == 0) {
+                                            clip->transform.scale = tv;
+                                        } else if (strcmp(key, "rotation") == 0) {
+                                            clip->transform.rotation = tv;
+                                        } else if (strcmp(key, "opacity") == 0) {
+                                            clip->transform.opacity = tv;
+                                        }
+                                        p = skip_ws(p);
+                                    }
+                                    p = skip_ws(p + 1);
+                                } else {
+                                    if (strcmp(key, "kf") == 0) {
+                                        clip->has_kf = 1;
+                                    } else if (strcmp(key, "filters") == 0 ||
+                                               strcmp(key, "effects") == 0) {
+                                        clip->has_filters = 1;
+                                    }
+                                    p = skip_value(p);
+                                }
+                                if (p == NULL) {
+                                    snprintf(err, err_len,
+                                             "bad argument: job json (bad v2 clip value)");
+                                    return -1;
+                                }
+                                p = skip_ws(p);
+                            }
+                            p = skip_ws(p + 1);
+                            track->nclips++;
+                        }
+                        p = skip_ws(p + 1);
+                    } else {
+                        p = skip_value(p);
+                    }
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad track value)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
+                }
+                p = skip_ws(p + 1);
+                if (track->type < 0) {
+                    snprintf(err, err_len, "bad argument: job json (track type is required)");
+                    return -1;
+                }
+                spec->ntracks++;
+            }
+            p = skip_ws(p + 1);
         } else if (strcmp(key, "slides") == 0) {
             if (*p != '[') {
                 snprintf(err, err_len, "bad argument: job json (slides must be an array)");
@@ -445,6 +663,13 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
             snprintf(err, err_len, "bad argument: job json (bad value)");
             return -1;
         }
+    }
+    if (spec->v2) {
+        if (spec->ntracks == 0 || spec->output[0] == '\0') {
+            snprintf(err, err_len, "bad argument: job json (needs tracks[] and output)");
+            return -1;
+        }
+        return 0;
     }
     if ((spec->nclips == 0 && spec->nslides == 0) || spec->output[0] == '\0') {
         snprintf(err, err_len, "bad argument: job json (needs clips[] or slides[] and output)");

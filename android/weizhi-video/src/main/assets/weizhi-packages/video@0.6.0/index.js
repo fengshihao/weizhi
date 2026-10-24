@@ -523,10 +523,6 @@ function buildV2Job(spec) {
  */
 export async function exportVideo(spec) {
   const job = buildJob(spec);
-  if (job.v2) {
-    /* P5a: the compiler is final, the native renderer arrives with P5b. */
-    throw new Error('unsupported: v2 tracks export (native renderer lands in P5b)');
-  }
   const p = await host.ensureNative(job.plugin);
   const id = p.open_job(job.optionsJson);
   if (!id) {
