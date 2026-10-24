@@ -287,7 +287,7 @@ public final class WeizhiTranscodeInstrumentedTest {
     }
 
     /** Average the Y plane of the first decoded frame at or after targetUs. */
-    private static int yMeanAtPts(File mp4, long targetUs) throws Exception {
+    static int yMeanAtPts(File mp4, long targetUs) throws Exception {
         android.media.MediaExtractor ex = new android.media.MediaExtractor();
         ex.setDataSource(mp4.getAbsolutePath());
         int track = -1;

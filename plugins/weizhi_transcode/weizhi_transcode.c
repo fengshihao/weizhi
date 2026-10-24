@@ -10,6 +10,11 @@
  * P3 (EGL): all clips must share one resolution here. Long loops poll
  * host->cancel_poll. AMediaExtractor_getTrackFormat / AMediaCodec_getOutputFormat
  * results are caller-owned and deleted after use.
+ *
+ * Slides (P3d): photo jobs decode each image with AImageDecoder (RGBA) and draw
+ * it letterboxed into the encoder surface through the same shader path, just on
+ * a plain 2D texture (uVideo is sampler2D there, samplerExternalOES on video).
+ * The optional soundtrack ("audio") is muxed in passthrough.
  */
 #include "weizhi_transcode_api.h"
 #include "weizhi_transcode_manifest.h"
@@ -32,7 +37,9 @@
 #include <android/log.h>
 #include <android/native_window.h>
 
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,6 +125,15 @@ static const char *WT_FRAG_IDENTITY =
     "uniform samplerExternalOES uVideo;\n"
     "void main() { gl_FragColor = texture2D(uVideo, vUV); }\n";
 
+/* Slides decode to RGBA and live on a plain 2D texture: same preset bodies,
+   different uVideo declaration (the weizhi:video package swaps the header). */
+static const char *WT_FRAG_HEADER_2D = "precision mediump float;\n";
+
+static const char *WT_FRAG_IDENTITY_2D =
+    "varying vec2 vUV;\n"
+    "uniform sampler2D uVideo;\n"
+    "void main() { gl_FragColor = texture2D(uVideo, vUV); }\n";
+
 typedef struct WtGL {
     EGLDisplay dpy;
     EGLContext ctx;
@@ -125,9 +141,12 @@ typedef struct WtGL {
     ANativeWindow *target; /* encoder input window (for buffer timestamps) */
     GLuint prog;
     GLuint vbo;
-    GLuint tex;    /* unit 0: decoder OES texture */
+    GLuint tex;    /* unit 0: decoder OES texture (video) or RGBA 2D texture (slides) */
     GLuint lut_tex; /* unit 1: 3D LUT baked into an N x N^2 2D texture */
     int lut_size;
+    int tex_2d;    /* slide mode: tex is GL_TEXTURE_2D, no OES import */
+    int img_w;     /* current slide image size (letterbox math) */
+    int img_h;
     EGLImageKHR image;
     GLint a_pos;
     GLint a_uv;
@@ -137,6 +156,139 @@ typedef struct WtGL {
     } uniforms[WT_MAX_UNIFORMS];
     int nuniforms;
 } WtGL;
+
+/* ---- AImageDecoder (slide source, P3d) ----
+ * API 30+ in libjnigraphics. Resolved via dlopen/dlsym with hand-declared ABI
+ * prototypes so the plugin keeps loading (and can report a clean English
+ * error) on API 26-29, with no link- or build-system change. */
+typedef struct AImageDecoder AImageDecoder;
+typedef struct AImageDecoderHeaderInfo AImageDecoderHeaderInfo;
+#define WT_BITMAP_FORMAT_RGBA_8888 1
+
+typedef struct {
+    void *lib;
+    int (*create_from_fd)(int fd, AImageDecoder **out);
+    void (*delete_decoder)(AImageDecoder *dec);
+    const AImageDecoderHeaderInfo *(*get_header)(const AImageDecoder *dec);
+    int32_t (*header_width)(const AImageDecoderHeaderInfo *info);
+    int32_t (*header_height)(const AImageDecoderHeaderInfo *info);
+    int (*set_format)(AImageDecoder *dec, int32_t format);
+    int (*set_target_size)(AImageDecoder *dec, int32_t width, int32_t height);
+    size_t (*min_stride)(AImageDecoder *dec);
+    int (*decode_image)(AImageDecoder *dec, void *pixels, size_t stride, size_t size);
+} WtImgDecoder;
+
+static WtImgDecoder g_imgdec;
+
+static int wt_imgdec_load(char *err, size_t err_len) {
+    if (g_imgdec.create_from_fd != NULL) {
+        return 0;
+    }
+    g_imgdec.lib = dlopen("libjnigraphics.so", RTLD_NOW);
+    if (g_imgdec.lib == NULL) {
+        snprintf(err, err_len, "unsupported: image decode (requires Android 11)");
+        return -1;
+    }
+#define WT_SYM(field, name)                                                                        \
+    do {                                                                                           \
+        *(void **)(&g_imgdec.field) = dlsym(g_imgdec.lib, name);                                   \
+        if (g_imgdec.field == NULL) {                                                              \
+            snprintf(err, err_len, "unsupported: image decode (requires Android 11)");             \
+            return -1;                                                                             \
+        }                                                                                          \
+    } while (0)
+    WT_SYM(create_from_fd, "AImageDecoder_createFromFd");
+    WT_SYM(delete_decoder, "AImageDecoder_delete");
+    WT_SYM(get_header, "AImageDecoder_getHeaderInfo");
+    WT_SYM(header_width, "AImageDecoderHeaderInfo_getWidth");
+    WT_SYM(header_height, "AImageDecoderHeaderInfo_getHeight");
+    WT_SYM(set_format, "AImageDecoder_setAndroidBitmapFormat");
+    WT_SYM(set_target_size, "AImageDecoder_setTargetSize");
+    WT_SYM(min_stride, "AImageDecoder_getMinimumStride");
+    WT_SYM(decode_image, "AImageDecoder_decodeImage");
+#undef WT_SYM
+    return 0;
+}
+
+/* Decode abs image into RGBA (aspect-preserved downscale to fit max_w x max_h;
+   full size when it already fits). Caller frees. NULL + err on failure. */
+static uint8_t *wt_decode_image(const char *abs, int32_t max_w, int32_t max_h, int32_t *w_out,
+                                int32_t *h_out, char *err, size_t err_len) {
+    int fd = -1;
+    AImageDecoder *dec = NULL;
+    const AImageDecoderHeaderInfo *info;
+    uint8_t *rgba = NULL;
+    int32_t w;
+    int32_t h;
+    size_t stride;
+    if (wt_imgdec_load(err, err_len) != 0) {
+        return NULL;
+    }
+    fd = open(abs, O_RDONLY);
+    if (fd < 0) {
+        snprintf(err, err_len, "file not found");
+        return NULL;
+    }
+    if (g_imgdec.create_from_fd(fd, &dec) != 0 || dec == NULL) {
+        close(fd);
+        snprintf(err, err_len, "image decode failed (unsupported format)");
+        return NULL;
+    }
+    close(fd);
+    info = g_imgdec.get_header(dec);
+    w = g_imgdec.header_width(info);
+    h = g_imgdec.header_height(info);
+    if (w <= 0 || h <= 0) {
+        g_imgdec.delete_decoder(dec);
+        snprintf(err, err_len, "image decode failed (bad dimensions)");
+        return NULL;
+    }
+    if (w > max_w || h > max_h) {
+        /* decode-time downscale (aspect kept) instead of a GPU-time minify */
+        double scale = 1.0;
+        if (w > max_w) {
+            scale = (double)max_w / (double)w;
+        }
+        if (h * scale > max_h) {
+            scale = (double)max_h / (double)h;
+        }
+        {
+            int32_t tw = w > max_w ? (int32_t)(w * scale) : w;
+            int32_t th = (int32_t)(h * scale);
+            if (tw < 1) tw = 1;
+            if (th < 1) th = 1;
+            if (g_imgdec.set_target_size(dec, tw, th) != 0) {
+                g_imgdec.delete_decoder(dec);
+                snprintf(err, err_len, "image decode failed (downscale)");
+                return NULL;
+            }
+            w = tw;
+            h = th;
+        }
+    }
+    if (g_imgdec.set_format(dec, WT_BITMAP_FORMAT_RGBA_8888) != 0) {
+        g_imgdec.delete_decoder(dec);
+        snprintf(err, err_len, "image decode failed (rgba)");
+        return NULL;
+    }
+    stride = g_imgdec.min_stride(dec);
+    rgba = (uint8_t *)malloc(stride * (size_t)h);
+    if (rgba == NULL) {
+        g_imgdec.delete_decoder(dec);
+        snprintf(err, err_len, "out of memory");
+        return NULL;
+    }
+    if (g_imgdec.decode_image(dec, rgba, stride, stride * (size_t)h) != 0) {
+        free(rgba);
+        g_imgdec.delete_decoder(dec);
+        snprintf(err, err_len, "image decode failed");
+        return NULL;
+    }
+    g_imgdec.delete_decoder(dec);
+    *w_out = w;
+    *h_out = h;
+    return rgba;
+}
 
 /* Parse an Adobe/IRIDAS .cube 3D LUT (LUT_3D_SIZE n + n^3 rgb triples, red
    fastest). Returns a row-major n x (n*n) RGB byte image whose texel order
@@ -254,7 +406,8 @@ static GLuint wt_gl_shader(GLenum kind, const char *src, char *err, size_t err_l
    the uLut sampler / uLutSize uniforms bound, so shader bodies can sample the
    table without knowing how it was loaded. */
 static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
-                      const WtFilter *filter, const char *lut_abs, char *err, size_t err_len) {
+                      const WtFilter *filter, const char *lut_abs, int tex_2d, char *err,
+                      size_t err_len) {
     const char *exts;
     EGLConfig config;
     EGLint num = 0;
@@ -266,13 +419,15 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
     GLuint vs = 0;
     GLuint fs = 0;
     GLint ok = 0;
-    char *full = (char *)malloc(strlen(WT_FRAG_HEADER) + strlen(frag_src) + 1);
+    const char *header = tex_2d ? WT_FRAG_HEADER_2D : WT_FRAG_HEADER;
+    char *full = (char *)malloc(strlen(header) + strlen(frag_src) + 1);
     memset(gl, 0, sizeof(*gl));
+    gl->tex_2d = tex_2d;
     if (full == NULL) {
         snprintf(err, err_len, "out of memory");
         return -1;
     }
-    strcpy(full, WT_FRAG_HEADER);
+    strcpy(full, header);
     strcat(full, frag_src);
 
     gl->dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -282,10 +437,11 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
         return -1;
     }
     exts = eglQueryString(gl->dpy, EGL_EXTENSIONS);
-    if (exts == NULL || strstr(exts, "EGL_ANDROID_image_native_buffer") == NULL ||
-        strstr(exts, "EGL_KHR_image_base") == NULL ||
-        strstr(exts, "EGL_ANDROID_get_native_client_buffer") == NULL ||
-        strstr(exts, "EGL_ANDROID_presentation_time") == NULL) {
+    if (exts == NULL || strstr(exts, "EGL_ANDROID_presentation_time") == NULL ||
+        (!tex_2d &&
+         (strstr(exts, "EGL_ANDROID_image_native_buffer") == NULL ||
+          strstr(exts, "EGL_KHR_image_base") == NULL ||
+          strstr(exts, "EGL_ANDROID_get_native_client_buffer") == NULL))) {
         free(full);
         snprintf(err, err_len, "unsupported: filter (device lacks EGL extensions)");
         return -1;
@@ -359,11 +515,19 @@ static int wt_gl_init(WtGL *gl, ANativeWindow *target, const char *frag_src,
     }
 
     glGenTextures(1, &gl->tex);
-    glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl->tex);
-    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (tex_2d) {
+        glBindTexture(GL_TEXTURE_2D, gl->tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, gl->tex);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
 
     if (lut_abs != NULL && lut_abs[0] != '\0') {
         int n = 0;
@@ -511,6 +675,78 @@ static void wt_gl_draw(WtGL *gl, AHardwareBuffer *ahb, int64_t pts_ns, int32_t o
        buffer the GPU is still sampling. SurfaceTexture gets this for free via
        BufferQueue fences; the raw EGLImage import path does not. */
     glFinish();
+    g_tx_draws++;
+}
+
+/* Draw one slide frame (texture already uploaded to gl->tex as RGBA 2D).
+   The photo is letterboxed (contain fit) on a black background; aspect math
+   shrinks the quad, so the image itself is never stretched. Same fade
+   blending and pts path as the video draw, but no fence: the texture is
+   owned here, not borrowed from a decoder buffer. */
+static void wt_gl_draw_slide(WtGL *gl, int64_t pts_ns, int32_t out_w, int32_t out_h, float fade) {
+    int i;
+    float x0 = -1.0f;
+    float x1 = 1.0f;
+    float y0 = -1.0f;
+    float y1 = 1.0f;
+    if (gl->img_w > 0 && gl->img_h > 0) {
+        double img_ar = (double)gl->img_w / (double)gl->img_h;
+        double out_ar = (double)out_w / (double)out_h;
+        if (img_ar > out_ar) {
+            double frac = out_ar / img_ar; /* fraction of the output height */
+            y0 = -(float)frac;
+            y1 = (float)frac;
+        } else if (img_ar < out_ar) {
+            double frac = img_ar / out_ar;
+            x0 = -(float)frac;
+            x1 = (float)frac;
+        }
+    }
+    {
+        /* same pos(2)+uv(2) strip as init; RGBA uploads keep the top row at
+           v=0, matching this quad's V convention (no OES flip needed) */
+        const float quad[] = {
+            x0, y0, 0.0f, 1.0f, x1, y0, 1.0f, 1.0f, x0, y1, 0.0f, 0.0f, x1, y1, 1.0f, 0.0f,
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, gl->vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+        if (gl->a_pos >= 0) {
+            glVertexAttribPointer((GLuint)gl->a_pos, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+        }
+        if (gl->a_uv >= 0) {
+            glVertexAttribPointer((GLuint)gl->a_uv, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+        }
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gl->tex);
+    {
+        GLint loc = glGetUniformLocation(gl->prog, "uVideo");
+        if (loc >= 0) {
+            glUniform1i(loc, 0);
+        }
+    }
+    for (i = 0; i < gl->nuniforms; i++) {
+        GLint loc = glGetUniformLocation(gl->prog, gl->uniforms[i].name);
+        if (loc >= 0) {
+            glUniform1f(loc, gl->uniforms[i].value);
+        }
+    }
+    if (fade < 1.0f) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_CONSTANT_COLOR, GL_ZERO);
+        glBlendColor(fade, fade, fade, 1.0f);
+    } else {
+        glDisable(GL_BLEND);
+    }
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glViewport(0, 0, out_w, out_h);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    eglPresentationTimeANDROID(gl->dpy, gl->surf, pts_ns);
+    if (!eglSwapBuffers(gl->dpy, gl->surf)) {
+        wt_logf("slide swapBuffers error 0x%x at pts %lld", (unsigned)eglGetError(),
+                (long long)pts_ns);
+    }
     g_tx_draws++;
 }
 
@@ -919,11 +1155,13 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         g_tx_draws = 0;
         g_tx_acquired = 0;
         g_tx_frames = 0;
-        wt_logf("job start: clips=%d filters=%d", job->spec.nclips, job->spec.nfilters);
+        wt_logf("job start: clips=%d slides=%d filters=%d", job->spec.nclips, job->spec.nslides,
+                job->spec.nfilters);
     }
 
-    /* Encoder config defaults to the first clip's video track. */
-    {
+    /* Encoder config defaults to the first clip's video track; slide jobs have
+       no source and default to 720p30 unless the spec sets width/height/fps. */
+    if (job->spec.nclips > 0) {
         char *abs = resolved_or_error(job->spec.clips[0].path);
         WtSource src;
         if (abs == NULL) {
@@ -947,6 +1185,10 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
         enc_fps = src.fps > 0 ? src.fps : 30;
         close_source(&src);
         free(abs);
+    } else {
+        enc_w = 1280;
+        enc_h = 720;
+        enc_fps = 30;
     }
     if (job->spec.video.width > 0 && job->spec.video.height > 0) {
         enc_w = (int32_t)job->spec.video.width;
@@ -966,9 +1208,16 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
             has_fades = 1;
         }
     }
+    for (c = 0; c < job->spec.nslides; c++) {
+        if (job->spec.slides[c].fade_in_ms > 0 || job->spec.slides[c].fade_out_ms > 0) {
+            has_fades = 1;
+        }
+    }
     /* GPU path when a filter or transition is set, or the target size differs
-       from the source (fades need per-frame constant-color blending). */
-    use_gl = job->spec.nfilters == 1 || has_fades || enc_w != src_w || enc_h != src_h;
+       from the source (fades need per-frame constant-color blending). Slides
+       always run the GPU path (2D texture draw). */
+    use_gl = job->spec.nslides > 0 || job->spec.nfilters == 1 || has_fades || enc_w != src_w ||
+             enc_h != src_h;
 
     enc_fmt = AMediaFormat_new();
     AMediaFormat_setString(enc_fmt, AMEDIAFORMAT_KEY_MIME, "video/avc");
@@ -995,8 +1244,10 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
     }
     if (use_gl) {
         char gl_err[192];
-        const char *frag =
-            job->spec.nfilters == 1 ? job->spec.filters[0].shader : WT_FRAG_IDENTITY;
+        int tex_2d = job->spec.nslides > 0;
+        const char *frag = job->spec.nfilters == 1
+                               ? job->spec.filters[0].shader
+                               : (tex_2d ? WT_FRAG_IDENTITY_2D : WT_FRAG_IDENTITY);
         const WtFilter *filt = job->spec.nfilters == 1 ? &job->spec.filters[0] : NULL;
         gl_err[0] = '\0';
         if (filt != NULL && filt->lut_path[0] != '\0') {
@@ -1011,12 +1262,141 @@ WEIZHI_PLUGIN_EXPORT char *weizhi_transcode_run_job(int64_t job_id, uint32_t on_
                 goto done;
             }
         }
-        if (wt_gl_init(&gl, pipe.enc_surface, frag, filt, lut_abs, gl_err, sizeof(gl_err)) != 0) {
+        if (wt_gl_init(&gl, pipe.enc_surface, frag, filt, lut_abs, tex_2d, gl_err,
+                       sizeof(gl_err)) != 0) {
             pipe.fail = json_err(gl_err[0] != '\0' ? gl_err : "GPU setup failed", NULL);
             goto done;
         }
-        wt_logf("gl init ok (target %dx%d, filter=%d fades=%d lut=%d)", enc_w, enc_h,
-                job->spec.nfilters, has_fades, lut_abs != NULL);
+        wt_logf("gl init ok (target %dx%d, filter=%d fades=%d lut=%d tex2d=%d)", enc_w, enc_h,
+                job->spec.nfilters, has_fades, lut_abs != NULL, tex_2d);
+    }
+
+    if (job->spec.nslides > 0) {
+        int s;
+        WtSource asrc;
+        int have_audio = 0;
+        memset(&asrc, 0, sizeof(asrc));
+        /* Soundtrack: the muxer track must exist before the muxer starts (the
+           first encoded frame starts it); samples are copied after the frames,
+           when writes can go straight to the muxer. */
+        if (job->spec.audio[0] != '\0') {
+            char *a_abs = resolved_or_error(job->spec.audio);
+            if (a_abs == NULL) {
+                pipe.fail = json_err("out of memory", NULL);
+                goto done;
+            }
+            if (a_abs[0] != '/') {
+                pipe.fail = a_abs;
+                goto done;
+            }
+            open_err[0] = '\0';
+            if (open_source(a_abs, "audio/", &asrc, open_err, sizeof(open_err)) == 0) {
+                AMediaFormat *afmt = source_track_format(asrc.ex, asrc.track);
+                pipe.audio_mux_track = AMediaMuxer_addTrack(pipe.muxer, afmt);
+                AMediaFormat_delete(afmt);
+                if (pipe.audio_mux_track < 0) {
+                    pipe.fail = json_err("muxer track add failed", "audio");
+                } else {
+                    have_audio = 1;
+                }
+            } else {
+                pipe.fail = json_err(open_err, job->spec.audio);
+            }
+            free(a_abs);
+            if (pipe.fail != NULL) {
+                if (asrc.ex != NULL) {
+                    close_source(&asrc);
+                }
+                goto done;
+            }
+        }
+        for (s = 0; s < job->spec.nslides && pipe.fail == NULL && !pipe.cancelled; s++) {
+            WtSlide *slide = &job->spec.slides[s];
+            char *abs = resolved_or_error(slide->path);
+            uint8_t *rgba;
+            int32_t iw = 0;
+            int32_t ih = 0;
+            int64_t dur_us = slide->duration_ms * 1000;
+            int64_t fade_in_us = slide->fade_in_ms * 1000;
+            int64_t fade_out_us = slide->fade_out_ms * 1000;
+            int nframes;
+            int f;
+            char serr[192];
+            if (abs == NULL) {
+                pipe.fail = json_err("out of memory", NULL);
+                goto slide_done;
+            }
+            if (abs[0] != '/') {
+                pipe.fail = abs;
+                abs = NULL;
+                goto slide_done;
+            }
+            if (dur_us <= 0) {
+                pipe.fail = json_err("bad argument: slide durationMs", slide->path);
+                goto slide_done;
+            }
+            if ((fade_in_us > 0 || fade_out_us > 0) && fade_in_us + fade_out_us >= dur_us) {
+                pipe.fail = json_err("unsupported: transition longer than slide", slide->path);
+                goto slide_done;
+            }
+            serr[0] = '\0';
+            rgba = wt_decode_image(abs, enc_w, enc_h, &iw, &ih, serr, sizeof(serr));
+            if (rgba == NULL) {
+                pipe.fail = json_err(serr[0] != '\0' ? serr : "image decode failed", slide->path);
+                goto slide_done;
+            }
+            gl.img_w = iw;
+            gl.img_h = ih;
+            glBindTexture(GL_TEXTURE_2D, gl.tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, iw, ih, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+            free(rgba);
+            if (glGetError() != GL_NO_ERROR) {
+                pipe.fail = json_err("unsupported: slide (texture upload failed)", slide->path);
+                goto slide_done;
+            }
+            wt_logf("slide %d: %dx%d for %lldms (in=%lld out=%lld)", s, iw, ih,
+                    (long long)slide->duration_ms, (long long)slide->fade_in_ms,
+                    (long long)slide->fade_out_ms);
+            nframes = (int)((dur_us * enc_fps + 999999) / 1000000);
+            for (f = 0; f < nframes && pipe.fail == NULL && !pipe.cancelled; f++) {
+                int64_t rel = (int64_t)(((double)f * 1000000.0) / (double)enc_fps);
+                int enc_eos_dummy = 0;
+                wt_gl_draw_slide(&gl, (pipe.timeline_us + rel) * 1000, enc_w, enc_h,
+                                 wt_fade_factor(rel, dur_us, fade_in_us, fade_out_us));
+                g_tx_frames++;
+                wt_drain_encoder(&pipe, 0, &enc_eos_dummy);
+                progress_tick++;
+                if ((progress_tick % 15) == 0 && g_host.cb_invoke_str != NULL &&
+                    g_host.engine != NULL) {
+                    int pct = dur_us > 0 ? (int)((rel * 100) / dur_us) : 100;
+                    int overall = (int)((((double)s + (pct > 100 ? 100 : pct) / 100.0) /
+                                         job->spec.nslides) * 90.0);
+                    snprintf(progress, sizeof(progress),
+                             "{\"slide\":%d,\"slidePercent\":%d,\"percent\":%d}", s,
+                             pct > 100 ? 100 : pct, overall);
+                    g_host.cb_invoke_str(g_host.engine, on_progress, progress);
+                }
+                if (g_host.cancel_poll != NULL && g_host.engine != NULL &&
+                    g_host.cancel_poll(g_host.engine)) {
+                    pipe.cancelled = 1;
+                }
+            }
+            pipe.timeline_us += dur_us;
+        slide_done:
+            free(abs);
+        }
+        /* Soundtrack samples after the frames: the muxer has started, so the
+           writes go straight to it. wt_pass_audio bases pts on timeline_us, so
+           run it with the timeline pinned to zero (music from t=0). */
+        if (have_audio && pipe.fail == NULL && !pipe.cancelled) {
+            int64_t tl = pipe.timeline_us;
+            pipe.timeline_us = 0;
+            wt_pass_audio(&pipe, asrc.ex, 0, tl);
+            pipe.timeline_us = tl;
+        }
+        if (asrc.ex != NULL) {
+            close_source(&asrc);
+        }
     }
 
     for (c = 0; c < job->spec.nclips && pipe.fail == NULL && !pipe.cancelled; c++) {
@@ -1293,11 +1673,11 @@ done:
     } else {
         result = (char *)malloc(strlen(pipe.out_abs) + 160);
         if (result != NULL) {
-            snprintf(result, strlen(pipe.out_abs) + 160,
-                     "{\"ok\":true,\"output\":\"%s\",\"clips\":%d,\"durationMs\":%lld,"
+            snprintf(result, strlen(pipe.out_abs) + 192,
+                     "{\"ok\":true,\"output\":\"%s\",\"clips\":%d,\"slides\":%d,\"durationMs\":%lld,"
                      "\"width\":%d,\"height\":%d}",
-                     pipe.out_abs, job->spec.nclips, (long long)(pipe.timeline_us / 1000), enc_w,
-                     enc_h);
+                     pipe.out_abs, job->spec.nclips, job->spec.nslides,
+                     (long long)(pipe.timeline_us / 1000), enc_w, enc_h);
         }
     }
     free(pipe.out_abs);

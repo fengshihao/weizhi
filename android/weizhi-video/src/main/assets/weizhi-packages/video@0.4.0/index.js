@@ -202,23 +202,35 @@ function compileTransitions(spec, items, kind) {
  *   { clips: [{path, startMs?, endMs?}], output,
  *     bitrate?, width?, height?, fps?, reencode?, filters?,
  *     transitions?: {type:'fade', durationMs} | [{type:'fade', durationMs}] }
+ * or a photo slideshow (clips and slides are mutually exclusive):
+ *   { slides: [{image, durationMs}], output,
+ *     width?, height? (default 1280x720), fps? (default 30), bitrate?,
+ *     filters?, transitions?, audio? }
  * Returns { plugin: "video"|"transcode", options, optionsJson }.
  */
 export function buildJob(spec) {
   if (!spec || typeof spec !== 'object') {
     throw new Error('bad argument: buildJob: spec must be an object');
   }
-  if (!Array.isArray(spec.clips) || spec.clips.length === 0) {
-    throw new Error('bad argument: buildJob: clips must be a non-empty array');
+  const hasClips = Array.isArray(spec.clips) && spec.clips.length > 0;
+  const hasSlides = Array.isArray(spec.slides) && spec.slides.length > 0;
+  if (!hasClips && !hasSlides) {
+    throw new Error('bad argument: buildJob: clips or slides must be a non-empty array');
+  }
+  if (hasClips && hasSlides) {
+    throw new Error('bad argument: buildJob: clips and slides cannot be mixed in one job');
   }
   if (typeof spec.output !== 'string' || spec.output === '') {
     throw new Error('bad argument: buildJob: output (string) is required');
   }
+  if (hasSlides) {
+    return buildSlideJob(spec);
+  }
   const clips = spec.clips.map(normalizeClip);
-  const hasTransitions = compileTransitions(spec, clips);
+  const hasTransitions = compileTransitions(spec, clips, 'clips');
   let filters = [];
   if (Array.isArray(spec.filters)) {
-    filters = spec.filters.map(compileFilter);
+    filters = spec.filters.map((entry, i) => compileFilter(entry, i, HEADER));
   }
   const bitrate = num(spec.bitrate, 'bitrate');
   const width = num(spec.width, 'width');
@@ -246,6 +258,38 @@ export function buildJob(spec) {
     return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
   }
   return {plugin: 'video', options, optionsJson: JSON.stringify(options)};
+}
+
+/** Slideshow jobs always re-encode (plugin "transcode", 2D-texture GL path). */
+function buildSlideJob(spec) {
+  const slides = spec.slides.map(normalizeSlide);
+  compileTransitions(spec, slides, 'slides');
+  let filters = [];
+  if (Array.isArray(spec.filters)) {
+    filters = spec.filters.map((entry, i) => compileFilter(entry, i, HEADER_2D));
+  }
+  const width = num(spec.width, 'width');
+  const height = num(spec.height, 'height');
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error('bad argument: buildJob: width and height must be set together');
+  }
+  const fps = num(spec.fps, 'fps');
+  const bitrate = num(spec.bitrate, 'bitrate');
+  if (spec.reencode === false) {
+    throw new Error('bad argument: buildJob: slides always re-encode (reencode cannot be false)');
+  }
+  const video = {width: width === undefined ? 1280 : width, height: height === undefined ? 720 : height};
+  if (fps !== undefined) video.fps = fps;
+  if (bitrate !== undefined) video.bitrate = bitrate;
+  const options = {slides, output: spec.output, video};
+  if (filters.length > 0) options.filters = filters;
+  if (spec.audio !== undefined && spec.audio !== null) {
+    if (typeof spec.audio !== 'string' || spec.audio === '') {
+      throw new Error('bad argument: buildJob: audio must be a path (string)');
+    }
+    options.audio = spec.audio;
+  }
+  return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
 }
 
 /**
