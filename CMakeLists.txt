@@ -47,13 +47,13 @@ configure_file(src/mcp_client_js.h.in "${CMAKE_BINARY_DIR}/mcp_client_js.h" @ONL
 
 # Embed the weizhi:video package source for tests (single source of truth:
 # shipped inside the :weizhi-video AAR assets so hosts get SO + JS atomically).
-file(READ "${CMAKE_SOURCE_DIR}/android/weizhi-video/src/main/assets/weizhi-packages/video@0.4.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
+file(READ "${CMAKE_SOURCE_DIR}/android/weizhi-video/src/main/assets/weizhi-packages/video@0.5.0/index.js" WEIZHI_VIDEO_PKG_JS_RAW)
 string(REPLACE "\\" "\\\\" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS_RAW}")
 string(REPLACE "\"" "\\\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
 string(REPLACE "\n" "\\n\"\n\"" WEIZHI_VIDEO_PKG_JS "${WEIZHI_VIDEO_PKG_JS}")
 set(WEIZHI_VIDEO_PKG_JS "\"${WEIZHI_VIDEO_PKG_JS}\"")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/android/weizhi-video/src/main/assets/weizhi-packages/video@0.4.0/index.js")
+    "${CMAKE_SOURCE_DIR}/android/weizhi-video/src/main/assets/weizhi-packages/video@0.5.0/index.js")
 configure_file(src/weizhi_video_pkg_js.h.in "${CMAKE_BINARY_DIR}/weizhi_video_pkg_js.h" @ONLY)
 
 add_library(weizhi src/engine.c src/node_api.c src/package.c src/plugin_loader.c src/zip_api.c src/sha256.c)
