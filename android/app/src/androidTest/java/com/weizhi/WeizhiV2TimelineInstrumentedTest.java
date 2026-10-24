@@ -20,10 +20,9 @@ import java.nio.ByteBuffer;
 import static org.junit.Assert.assertTrue;
 
 /**
- * On-device P5b gate: timeline v2 executes on the native renderer — main
- * video/image track compositing with transformed image overlays (region-level
- * Y assertions) and the v2 soundtrack path. Later-phase features are guarded
- * with English errors.
+ * On-device P5b–P5c gate: timeline v2 native renderer — layer compositing,
+ * per-property keyframes, image-track crossfade, video-main transform; ROI /
+ * full-frame Y assertions. P5d/P5e features guarded with English errors.
  */
 @RunWith(AndroidJUnit4.class)
 public final class WeizhiV2TimelineInstrumentedTest {
@@ -196,6 +195,150 @@ public final class WeizhiV2TimelineInstrumentedTest {
         }
     }
 
+    /** P5c: per-property keyframes animate on the main track (kenBurns-style
+     * scale); transform constants apply to the video main track too. */
+    @Test
+    public void v2KeyframeAnimation() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-v2k-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        SlideFixtures.jpeg(ws, "w.jpg", 320, 240, 235);
+        AvcFixtures.encode(ws, "v.mp4", 1000, 60);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            /* image main, scale 1 -> 0.5 over the clip: full-screen white on the
+             * first frame (t=0, luma ~217 in limited range), quarter area
+             * (letterboxed) at t=900 */
+            String out = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const r = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'image', clips: [{src: 'w.jpg', durationMs: 1000,\n"
+                            + "    transform: {scale: [{t: 0, v: 1}, {t: 800, v: 0.5}]}}]}],\n"
+                            + "  output: 'k.mp4'});\n"
+                            + "export default r.ok;\n",
+                    30_000, "v2k.js");
+            assertTrue(out, out.contains("true"));
+            File mp4 = new File(ws, "k.mp4");
+            int y0 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 0);
+            int y1 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 900_000);
+            assertTrue("start not full: " + y0, y0 > 200);
+            assertTrue("end not shrunk: " + y1, y1 > 40 && y1 < 120);
+        }
+    }
+
+    /** P5c: transform constants apply to the video main track — scale 0.5
+     * letterboxes to quarter area on black, opacity 0.5 halves the frame. */
+    @Test
+    public void v2MainTrackVideoTransform() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-v2t-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "wv.mp4", 1000, 235);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            String out = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const r1 = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'video', clips: [{src: 'wv.mp4',\n"
+                            + "    transform: {scale: 0.5}}]}],\n"
+                            + "  output: 's.mp4'});\n"
+                            + "const r2 = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'video', clips: [{src: 'wv.mp4',\n"
+                            + "    transform: {opacity: 0.5}}]}],\n"
+                            + "  output: 'o.mp4'});\n"
+                            + "export default r1.ok && r2.ok;\n",
+                    30_000, "v2t.js");
+            assertTrue(out, out.contains("true"));
+            /* scale 0.5: quarter of the frame white (~70), rest black (~16) */
+            File scaled = new File(ws, "s.mp4");
+            int ys = WeizhiTranscodeInstrumentedTest.yMeanAtPts(scaled, 500_000);
+            assertTrue("video main scale not letterboxed: " + ys, ys > 40 && ys < 120);
+            /* opacity 0.5 over black clear: ~ (16 + 235) / 2 */
+            File faded = new File(ws, "o.mp4");
+            int yo = WeizhiTranscodeInstrumentedTest.yMeanAtPts(faded, 500_000);
+            assertTrue("video main opacity not applied: " + yo, yo > 100 && yo < 160);
+        }
+    }
+
+    /** P5c: video main track scale keyframes (same kenBurns curve as image main). */
+    @Test
+    public void v2VideoMainTrackScaleKeyframe() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-v2vk-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        AvcFixtures.encode(ws, "wv.mp4", 1000, 235);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            String out = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const r = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'video', clips: [{src: 'wv.mp4',\n"
+                            + "    transform: {scale: [{t: 0, v: 1}, {t: 800, v: 0.5}]}}]}],\n"
+                            + "  output: 'vk.mp4'});\n"
+                            + "export default r.ok;\n",
+                    30_000, "v2vk.js");
+            assertTrue(out, out.contains("true"));
+            File mp4 = new File(ws, "vk.mp4");
+            int y0 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 0);
+            int y1 = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 900_000);
+            assertTrue("video kf start not full: " + y0, y0 > 200);
+            assertTrue("video kf end not shrunk: " + y1, y1 > 40 && y1 < 120);
+        }
+    }
+
+    /** P5c: crossfade between two image clips — the boundary midpoint sits
+     * between the two fixture grays, both sides outside stay pure. */
+    @Test
+    public void v2CrossfadeBetweenSlides() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File ws = new File(context.getCacheDir(), "weizhi-v2x-" + System.currentTimeMillis());
+        assertTrue(ws.mkdirs());
+        SlideFixtures.jpeg(ws, "g.jpg", 320, 240, 60);
+        SlideFixtures.jpeg(ws, "w.jpg", 320, 240, 235);
+        String pkgRoot = WeizhiPackages.syncBundled(context);
+
+        try (WeizhiEngine engine = new WeizhiEngine()) {
+            engine.setFsRoot(ws.getAbsolutePath());
+            engine.setPackageRoot(pkgRoot);
+            WeizhiVideo.install(engine);
+            String out = engine.runJs(
+                    "import { exportVideo } from 'weizhi:video';\n"
+                            + "const r = await exportVideo({\n"
+                            + "  width: 320, height: 240,\n"
+                            + "  tracks: [{type: 'image', clips: [\n"
+                            + "    {src: 'g.jpg', durationMs: 800},\n"
+                            + "    {src: 'w.jpg', startMs: 500, durationMs: 800,\n"
+                            + "     transition: {type: 'crossfade', durationMs: 300}}]}],\n"
+                            + "  output: 'x.mp4'});\n"
+                            + "export default r.ok;\n",
+                    30_000, "v2x.js");
+            assertTrue(out, out.contains("true"));
+            File mp4 = new File(ws, "x.mp4");
+            int gray = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 250_000);
+            int mid = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 650_000);
+            int white = WeizhiTranscodeInstrumentedTest.yMeanAtPts(mp4, 1_200_000);
+            assertTrue("pre-fade not gray: " + gray, gray > 30 && gray < 95);
+            assertTrue("mid not blended: " + mid, mid > 100 && mid < 195);
+            assertTrue("post-fade not white: " + white, white > 200);
+        }
+    }
+
     /** Later-phase features report English errors instead of half-running. */
     @Test
     public void v2PhaseGuards() throws Exception {
@@ -203,6 +346,7 @@ public final class WeizhiV2TimelineInstrumentedTest {
         File ws = new File(context.getCacheDir(), "weizhi-v2g-" + System.currentTimeMillis());
         assertTrue(ws.mkdirs());
         SlideFixtures.jpeg(ws, "p.jpg", 320, 240, 110);
+        AvcFixtures.encode(ws, "v.mp4", 1000, 110);
         String pkgRoot = WeizhiPackages.syncBundled(context);
 
         try (WeizhiEngine engine = new WeizhiEngine()) {
@@ -213,8 +357,8 @@ public final class WeizhiV2TimelineInstrumentedTest {
                     "import { exportVideo } from 'weizhi:video';\n"
                             + "let m1 = '';\n"
                             + "try { await exportVideo({tracks: [\n"
-                            + "  {type: 'image', clips: [{src: 'p.jpg', durationMs: 500,\n"
-                            + "    transform: {scale: [{t: 0, v: 0.2}, {t: 400, v: 0.5}]}}]}],\n"
+                            + "  {type: 'audio', clips: [{src: 'p.jpg',\n"
+                            + "    gain: [{t: 0, v: 1}, {t: 400, v: 0}]}]}],\n"
                             + "  output: 'g.mp4'}); } catch (e) { m1 = e.message; }\n"
                             + "let m2 = '';\n"
                             + "try { await exportVideo({tracks: [\n"
@@ -227,15 +371,15 @@ public final class WeizhiV2TimelineInstrumentedTest {
                             + "  output: 'g.mp4'}); } catch (e) { m3 = e.message; }\n"
                             + "let m4 = '';\n"
                             + "try { await exportVideo({tracks: [\n"
-                            + "  {type: 'image', clips: [{src: 'p.jpg', durationMs: 500,\n"
-                            + "    transform: {scale: 0.5}}]}],\n"
+                            + "  {type: 'video', clips: [{src: 'v.mp4', outMs: 800,\n"
+                            + "    transition: {type: 'crossfade', durationMs: 200}}]}],\n"
                             + "  output: 'g.mp4'}); } catch (e) { m4 = e.message; }\n"
                             + "export default [m1, m2, m3, m4];\n",
                     30_000, "v2g.js");
-            assertTrue(out, out.contains("v2 keyframes (P5c)"));
+            assertTrue(out, out.contains("v2 audio keyframes (P5d)"));
             assertTrue(out, out.contains("v2 text track (P5d)"));
-            assertTrue(out, out.contains("v2 timeline gaps (P5c)"));
-            assertTrue(out, out.contains("v2 main-track transform (P5c)"));
+            assertTrue(out, out.contains("v2 timeline gaps (P5e)"));
+            assertTrue(out, out.contains("transition on video tracks (P5e)"));
         }
     }
 }

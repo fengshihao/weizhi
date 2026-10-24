@@ -489,11 +489,132 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                                         p = skip_ws(p);
                                     }
                                     p = skip_ws(p + 1);
+                                } else if (strcmp(key, "kf") == 0) {
+                                    if (*p != '{') {
+                                        snprintf(err, err_len,
+                                                 "bad argument: job json (kf must be an object)");
+                                        return -1;
+                                    }
+                                    p = skip_ws(p + 1);
+                                    while (*p != '}') {
+                                        char prop[24];
+                                        int prop_id = -1;
+                                        if (*p == ',') {
+                                            p = skip_ws(p + 1);
+                                            continue;
+                                        }
+                                        p = parse_str(p, prop, sizeof(prop));
+                                        if (p == NULL) {
+                                            snprintf(err, err_len,
+                                                     "bad argument: job json (bad kf property)");
+                                            return -1;
+                                        }
+                                        p = skip_ws(p);
+                                        if (*p != ':') {
+                                            snprintf(err, err_len,
+                                                     "bad argument: job json (expected ':')");
+                                            return -1;
+                                        }
+                                        p = skip_ws(p + 1);
+                                        if (strcmp(prop, "x") == 0) {
+                                            prop_id = WT_KF_X;
+                                        } else if (strcmp(prop, "y") == 0) {
+                                            prop_id = WT_KF_Y;
+                                        } else if (strcmp(prop, "scale") == 0) {
+                                            prop_id = WT_KF_SCALE;
+                                        } else if (strcmp(prop, "rotation") == 0) {
+                                            prop_id = WT_KF_ROTATION;
+                                        } else if (strcmp(prop, "opacity") == 0) {
+                                            prop_id = WT_KF_OPACITY;
+                                        } else if (strcmp(prop, "gain") == 0) {
+                                            clip->has_gain_kf = 1;
+                                        }
+                                        if (*p != '[') {
+                                            snprintf(err, err_len,
+                                                     "bad argument: job json (kf must be an array)");
+                                            return -1;
+                                        }
+                                        p = skip_ws(p + 1);
+                                        while (*p != ']') {
+                                            if (*p == ',') {
+                                                p = skip_ws(p + 1);
+                                                continue;
+                                            }
+                                            if (prop_id >= 0) {
+                                                if (clip->nkfs >= WT_MAX_KFS) {
+                                                    snprintf(err, err_len,
+                                                             "unsupported: too many keyframes per "
+                                                             "clip (max %d)",
+                                                             WT_MAX_KFS);
+                                                    return -1;
+                                                }
+                                                WtKfEntry *kf =
+                                                    &clip->kfs[clip->nkfs];
+                                                int done = 0;
+                                                memset(kf, 0, sizeof(*kf));
+                                                kf->prop = prop_id;
+                                                p = skip_ws(p + 1);
+                                                while (*p != '}') {
+                                                    if (*p == ',') {
+                                                        p = skip_ws(p + 1);
+                                                        continue;
+                                                    }
+                                                    p = parse_str(p, key, sizeof(key));
+                                                    if (p == NULL) {
+                                                        snprintf(err, err_len,
+                                                                 "bad argument: job json (bad kf key)");
+                                                        return -1;
+                                                    }
+                                                    p = skip_ws(p);
+                                                    if (*p != ':') {
+                                                        snprintf(err, err_len,
+                                                                 "bad argument: job json (expected ':')");
+                                                        return -1;
+                                                    }
+                                                    p = skip_ws(p + 1);
+                                                    if (strcmp(key, "t") == 0) {
+                                                        p = parse_num_member(p, key, &kf->t_ms,
+                                                                             err, err_len);
+                                                    } else if (strcmp(key, "v") == 0) {
+                                                        p = parse_f64_member(p, key, &kf->v, err,
+                                                                             err_len);
+                                                    } else if (strcmp(key, "ip") == 0) {
+                                                        char ip[8];
+                                                        p = parse_str(p, ip, sizeof(ip));
+                                                        if (p != NULL && strcmp(ip, "ease") == 0) {
+                                                            kf->ease = 1;
+                                                        }
+                                                    } else {
+                                                        p = skip_value(p);
+                                                    }
+                                                    if (p == NULL) {
+                                                        snprintf(err, err_len,
+                                                                 "bad argument: job json (bad kf value)");
+                                                        return -1;
+                                                    }
+                                                    p = skip_ws(p);
+                                                    done = 1;
+                                                    (void)done;
+                                                }
+                                                p = skip_ws(p + 1);
+                                                clip->nkfs++;
+                                                continue;
+                                            }
+                                            /* unknown property or full: skip the object */
+                                            p = skip_value(p);
+                                            if (p == NULL) {
+                                                snprintf(err, err_len,
+                                                         "bad argument: job json (bad kf entry)");
+                                                return -1;
+                                            }
+                                            p = skip_ws(p);
+                                        }
+                                        p = skip_ws(p + 1);
+                                    }
+                                    p = skip_ws(p + 1);
                                 } else {
-                                    if (strcmp(key, "kf") == 0) {
-                                        clip->has_kf = 1;
-                                    } else if (strcmp(key, "filters") == 0 ||
-                                               strcmp(key, "effects") == 0) {
+                                    if (strcmp(key, "filters") == 0 ||
+                                        strcmp(key, "effects") == 0) {
                                         clip->has_filters = 1;
                                     }
                                     p = skip_value(p);

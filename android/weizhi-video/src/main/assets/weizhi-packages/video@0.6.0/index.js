@@ -334,6 +334,9 @@ function buildSlideJob(spec) {
 const TRANSFORM_PROPS = ['x', 'y', 'scale', 'rotation', 'opacity'];
 const TRANSFORM_DEFAULTS = {x: 0, y: 0, scale: 1, rotation: 0, opacity: 1};
 const INTERP_KINDS = ['linear', 'ease'];
+/* native wtjson.h WT_MAX_KFS: entries beyond this are dropped, so the
+ * compiler must reject instead of silently truncating an animation */
+const MAX_KFS_PER_CLIP = 32;
 
 function normalizeKeyframes(list, where) {
   if (!Array.isArray(list) || list.length === 0) {
@@ -405,7 +408,21 @@ function normalizeTransform(raw, where) {
   if (out.scale <= 0 && kf.scale === undefined) {
     throw new Error('bad argument: buildJob: ' + where + '.scale must be positive');
   }
+  if (kf.scale) {
+    for (const k of kf.scale) {
+      if (k.v <= 0) {
+        throw new Error('bad argument: buildJob: ' + where +
+            '.scale keyframes must be positive');
+      }
+    }
+  }
   return {transform: out, kf};
+}
+
+function countKfs(kf) {
+  let n = 0;
+  for (const prop in kf) n += kf[prop].length;
+  return n;
 }
 
 const TRACK_TYPES = ['video', 'image', 'text', 'audio'];
@@ -416,6 +433,22 @@ function normalizeV2Clip(clip, type, index) {
     throw new Error('bad argument: buildJob: ' + at + ' must be an object');
   }
   const out = {startMs: 0};
+  if (clip.transition !== undefined && clip.transition !== null) {
+    if (type !== 'image') {
+      throw new Error('unsupported: v2 transition on ' + type + ' tracks (P5e)');
+    }
+    const tr = clip.transition;
+    if (!tr || typeof tr !== 'object' || tr.type !== 'crossfade') {
+      throw new Error('unsupported: transition type "' +
+          (tr && tr.type) + '" (only crossfade)');
+    }
+    const d = num(tr.durationMs, at + '.transition.durationMs');
+    if (d === undefined || d <= 0) {
+      throw new Error('bad argument: buildJob: ' + at +
+          '.transition.durationMs must be a positive number');
+    }
+    out.transitionMs = d;
+  }
   if (type === 'text') {
     if (typeof clip.text !== 'string' || clip.text === '') {
       throw new Error('bad argument: buildJob: ' + at + '.text (string) is required');
@@ -464,6 +497,10 @@ function normalizeV2Clip(clip, type, index) {
   } else if (Array.isArray(clip.gain)) {
     out.kf = {gain: normalizeKeyframes(clip.gain, at + '.gain')};
   }
+  if (out.kf && countKfs(out.kf) > MAX_KFS_PER_CLIP) {
+    throw new Error('unsupported: too many keyframes per clip (max ' +
+        MAX_KFS_PER_CLIP + ')');
+  }
   return out;
 }
 
@@ -482,9 +519,38 @@ function normalizeTrack(track, index) {
   clips.sort((a, b) => a.startMs - b.startMs);
   for (let i = 1; i < clips.length; i++) {
     const prevEnd = clipEndMs(clips[i - 1], track.type);
-    if (clips[i].startMs < prevEnd) {
-      throw new Error('bad argument: buildJob: overlapping clips in ' + at +
-          ' (use separate tracks to composite)');
+    const d = clips[i].transitionMs;
+    if (d === undefined) {
+      delete clips[i].transitionMs;
+      if (clips[i].startMs < prevEnd) {
+        throw new Error('bad argument: buildJob: overlapping clips in ' + at +
+            ' (use separate tracks to composite)');
+      }
+      continue;
+    }
+    /* crossfade (P5c): exact overlap of durationMs with the previous clip,
+       compiled into an opacity keyframe pair on both clips */
+    delete clips[i].transitionMs;
+    if (clips[i].startMs + d !== prevEnd) {
+      throw new Error('bad argument: buildJob: ' + at + '.clips[' + i +
+          '] transition overlap must equal durationMs (start it at prevEnd - D)');
+    }
+    if ((clips[i].kf && clips[i].kf.opacity) || (clips[i - 1].kf && clips[i - 1].kf.opacity)) {
+      throw new Error('bad argument: buildJob: ' + at + ' transition cannot combine' +
+          ' with opacity keyframes');
+    }
+    const prevDur = clips[i - 1].durationMs;
+    if (d >= prevDur || d >= clips[i].durationMs) {
+      throw new Error('unsupported: transition longer than clip');
+    }
+    clips[i].kf = clips[i].kf || {};
+    clips[i].kf.opacity = [{t: 0, v: 0}, {t: d, v: 1}];
+    clips[i - 1].kf = clips[i - 1].kf || {};
+    clips[i - 1].kf.opacity = [{t: prevDur - d, v: 1}, {t: prevDur, v: 0}];
+    if (countKfs(clips[i].kf) > MAX_KFS_PER_CLIP ||
+        countKfs(clips[i - 1].kf) > MAX_KFS_PER_CLIP) {
+      throw new Error('unsupported: too many keyframes per clip (max ' +
+          MAX_KFS_PER_CLIP + ')');
     }
   }
   return {type: track.type, clips};

@@ -1,7 +1,6 @@
 # 时间线 schema v2 设计（P5 提案，多轨 + 关键帧）
 
-日期：2026-10-24。状态：**设计定稿，分期推进**（本文是 [video-architecture.md](video-architecture.md)
-的 P5 延伸；v1 = 该文档 P1–P3d 已落地形态）。
+日期：2026-10-24。状态：**P5a–P5c 已合入**（[#47](https://github.com/fengshihao/weizhi/pull/47)–[#49](https://github.com/fengshihao/weizhi/pull/49)）；P5d/P5e 待做。本文是 [video-architecture.md](video-architecture.md) 的 P5 延伸；v1 = 该文档 P1–P3d 已落地形态。
 
 ## 1. 动机
 
@@ -64,6 +63,7 @@ await exportVideo({
 - **同轨 clip 不许重叠**（报 `bad argument: overlapping clips in track`）；
   **不同轨重叠 = 叠加合成**（这正是叠加的意义）。
 - 第一条 video 轨为主轨（决定输出时长基准），其余 video 轨超出主轨范围的部分裁掉。
+- **时间轴零点**：主轨首 clip 的 `startMs` 应为 `0`；clip 之间不许留空隙（报 `unsupported: v2 timeline gaps (P5e)`）。首 clip 若 `startMs > 0`，image 主轨在空隙段可能不送帧（勿依赖）。
 
 ### 3.3 关键帧模型（OpenShot 式）
 
@@ -90,20 +90,20 @@ v2 转场发生在**同轨相邻 clip 的重叠区**（`transition: {type:'cross
 v1 的边界黑场 fade 保留为 `fade`（在无重叠时使用）。语义校验沿用英文错误
 （`unsupported: transition longer than clip`）。
 
-### 3.5 文本轨（P5c 决策后落地）
+### 3.5 文本轨（P5d 落地）
 
 `{ type: 'text', clips: [{text, startMs, durationMs, style: {size, color, weight}, transform}] }`。
 **引擎不带字体**（体积与授权），文本位图化归属两个候选：
 A. JS 层调 caps 宿主渲染成 PNG 传给 image 轨（零 native 改动，宿主有 Bitmap/Canvas）；
 B. 宿主在 `WeizhiVideo.install` 侧预置一张字体图集 SO 资源。
-倾向 A（分层正确），P5c 拍板。
+倾向 A（分层正确），随 P5d 拍板实现。
 
 ### 3.6 兼容层（向后兼容是硬要求）
 
 v1 的 `clips` / `slides` / `filters` / `transitions` / `audio` 输入**原样可用**：
 `buildJob` 内部先把 v1 形态编译成 v2 轨道（clips→单 video 轨 + 边界 fade；
 slides→image 主轨；audio→audio 轨），再下发生成 job。已有调用方（含 Agent1 冒烟）
-零改动。`weizhi:video` 升 `video@0.5.0`。
+零改动。v2 tracks 能力随 `video@0.6.0`（`:weizhi-video` AAR assets + transcode SO 同步升级）。
 
 ## 4. native 执行模型（不动架构）
 
@@ -118,15 +118,15 @@ slides→image 主轨；audio→audio 轨），再下发生成 job。已有调�
 
 | 期 | 内容 | 验收（自动化断言） |
 |---|---|---|
-| **P5a** | v2 编译器（JS，`video@0.5.0`）：tracks 校验（重叠/排序/关键帧合法性/轨类型）、关键帧模型、v1→v2 兼容编译；native 未变 | 桌面：编译精确断言 + ≥10 类英文校验错误；真机：现有 31 用例回归全绿（证明兼容层无损） |
-| **P5b** | native 图层合成：image 叠加轨执行（transform 五元 + 常量属性）；主轨 video/image | 真机：水印用例——角落 ROI 采样 helper（全帧 yMean 扩展为区域采样）：有水印区域 Y 与无水印区域差异断言；transform 位移/缩放断言 |
-| **P5c** | 关键帧动画 + crossfade 转场（native 求值） | 真机：scale 关键帧首末帧 ROI 断言（小→大）；crossfade 边界帧 Y 介于两夹具灰值之间（v1 黑场断言对照） |
+| **P5a** ✅ | v2 编译器（JS）：tracks 校验、关键帧模型、v1→v2 兼容编译 | 桌面精确断言 + 真机 31 回归 |
+| **P5b** ✅ | native 图层合成：image 叠加轨 + 主轨 video/image（常量 transform） | 真机水印 ROI、`WeizhiV2TimelineInstrumentedTest` |
+| **P5c** ✅ | 关键帧动画 + image 轨 crossfade（native 求值）；video 主轨 transform 常量/关键帧 | 真机 `v2KeyframeAnimation` / `v2CrossfadeBetweenSlides` / `v2MainTrackVideoTransform`；桌面 crossfade 编译断言 |
 | **P5d** | 文本轨（按 §3.5 拍板实现）+ 音频多轨（混音 vs 多轨直通的决策随期拍板） | 真机：文本叠加 ROI 断言；音频轨数/时长断言 |
 | P5e（可选） | OTIO 子集导入（交换互操作） | 桌面：样例 OTIO→v2 编译断言 |
 
 ## 6. 开放问题（随期拍板，记录于本文）
 
-- Q1 文本位图化归属（§3.5 A/B，P5c 前定）
+- Q1 文本位图化归属（§3.5 A/B，**P5d 前定**）
 - Q2 音频多轨：MediaCodec 无混音器——候选 = 多音轨直通（muxer 多 track）或软混 PCM 后
   重编码 AAC（体积小增量）；P5d 前定
 - Q3 关键帧插值是否需要 `hold`（阶梯）与 `bezier`：先不做，`interp` 留扩展位
