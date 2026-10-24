@@ -21,6 +21,12 @@
 // width/height/fps are set; transitions fade between slides; audio: '<path>'
 // muxes a passthrough soundtrack from t=0. Slide shaders sample a plain 2D
 // texture, so uVideo is declared sampler2D here (video jobs use OES).
+// Timeline v2 (P5, docs/video-timeline-v2.md): a spec may carry tracks:
+// [{type: 'video'|'image'|'text'|'audio', clips: [...]}] instead of clips/
+// slides — multi-track compositing with per-property keyframes on transform
+// (x, y, scale, rotation, opacity) and audio gain. Compilation + validation
+// land in P5a; native execution phases in P5b+ (exportVideo reports
+// "unsupported: v2 tracks export" until then).
 // NOTE: tests/test_engine.c embeds this file via CMake; keep that in sync.
 
 const PRESETS = ['brightness', 'contrast', 'saturation', 'grayscale', 'lut'];
@@ -71,6 +77,16 @@ function num(value, name) {
   const n = Number(value);
   if (!isFinite(n) || n < 0) {
     throw new Error('bad argument: buildJob: ' + name + ' must be a non-negative number');
+  }
+  return n;
+}
+
+/* Transform coordinates / rotation are signed (x, y span [-1, 1]). */
+function signedNum(value, name) {
+  if (value === undefined || value === null) return undefined;
+  const n = Number(value);
+  if (!isFinite(n)) {
+    throw new Error('bad argument: buildJob: ' + name + ' must be a number');
   }
   return n;
 }
@@ -212,10 +228,23 @@ export function buildJob(spec) {
   if (!spec || typeof spec !== 'object') {
     throw new Error('bad argument: buildJob: spec must be an object');
   }
+  const hasTracks = Array.isArray(spec.tracks);
   const hasClips = Array.isArray(spec.clips) && spec.clips.length > 0;
   const hasSlides = Array.isArray(spec.slides) && spec.slides.length > 0;
+  if (hasTracks && (hasClips || hasSlides)) {
+    throw new Error('bad argument: buildJob: tracks cannot be mixed with clips/slides (v1 vs v2)');
+  }
+  if (hasTracks) {
+    if (spec.tracks.length === 0) {
+      throw new Error('bad argument: buildJob: tracks must be a non-empty array');
+    }
+    if (typeof spec.output !== 'string' || spec.output === '') {
+      throw new Error('bad argument: buildJob: output (string) is required');
+    }
+    return buildV2Job(spec);
+  }
   if (!hasClips && !hasSlides) {
-    throw new Error('bad argument: buildJob: clips or slides must be a non-empty array');
+    throw new Error('bad argument: buildJob: clips, slides or tracks must be a non-empty array');
   }
   if (hasClips && hasSlides) {
     throw new Error('bad argument: buildJob: clips and slides cannot be mixed in one job');
@@ -292,6 +321,201 @@ function buildSlideJob(spec) {
   return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
 }
 
+/* ---- timeline v2 (P5, docs/video-timeline-v2.md): tracks + keyframes ----
+ * User DSL compiles to an internal job whose shape is frozen here:
+ *   {"v2":1,"output":...,"video":{width,height,fps?,bitrate?},
+ *    "tracks":[{"type":"video|image|text|audio","clips":[
+ *       {"path"|"text", inMs/outMs or durationMs, startMs,
+ *        "transform":{x,y,scale,rotation,opacity} (constants, defaults filled),
+ *        "kf":{prop:[{t,v,ip?}]},          // keyframes override the constant
+ *        "filters":[...]}]}]}
+ * v1 specs (clips/slides) keep the v1 job shape unchanged. */
+
+const TRANSFORM_PROPS = ['x', 'y', 'scale', 'rotation', 'opacity'];
+const TRANSFORM_DEFAULTS = {x: 0, y: 0, scale: 1, rotation: 0, opacity: 1};
+const INTERP_KINDS = ['linear', 'ease'];
+
+function normalizeKeyframes(list, where) {
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error('bad argument: buildJob: ' + where + ' must be a non-empty keyframe array');
+  }
+  let lastT = -1;
+  return list.map((kf, i) => {
+    const at = where + '[' + i + ']';
+    if (!kf || typeof kf !== 'object') {
+      throw new Error('bad argument: buildJob: ' + at + ' must be {t, v, interp?}');
+    }
+    const t = num(kf.t, at + '.t');
+    if (t === undefined) {
+      throw new Error('bad argument: buildJob: ' + at + '.t (ms) is required');
+    }
+    const v = signedNum(kf.v, at + '.v');
+    if (v === undefined) {
+      throw new Error('bad argument: buildJob: ' + at + '.v is required');
+    }
+    let ip = 'linear';
+    if (kf.interp !== undefined) {
+      if (typeof kf.interp !== 'string' || INTERP_KINDS.indexOf(kf.interp) < 0) {
+        throw new Error('bad argument: buildJob: ' + at + '.interp must be linear|ease');
+      }
+      ip = kf.interp;
+    }
+    if (t <= lastT) {
+      throw new Error('bad argument: buildJob: ' + where + ' must be sorted by t (ascending)');
+    }
+    lastT = t;
+    const out = {t, v};
+    if (ip !== 'linear') out.ip = ip;
+    return out;
+  });
+}
+
+function normalizeTransform(raw, where) {
+  const out = {x: TRANSFORM_DEFAULTS.x, y: TRANSFORM_DEFAULTS.y,
+    scale: TRANSFORM_DEFAULTS.scale, rotation: TRANSFORM_DEFAULTS.rotation,
+    opacity: TRANSFORM_DEFAULTS.opacity};
+  const kf = {};
+  if (raw === undefined || raw === null) return {transform: out, kf};
+  if (typeof raw !== 'object') {
+    throw new Error('bad argument: buildJob: ' + where + ' must be an object');
+  }
+  for (const prop of TRANSFORM_PROPS) {
+    const val = raw[prop];
+    if (val === undefined) continue;
+    if (Array.isArray(val)) {
+      kf[prop] = normalizeKeyframes(val, where + '.' + prop);
+    } else {
+      const n = signedNum(val, where + '.' + prop);
+      if (n === undefined) {
+        throw new Error('bad argument: buildJob: ' + where + '.' + prop + ' must be a number');
+      }
+      out[prop] = n;
+    }
+  }
+  if ((out.opacity < 0 || out.opacity > 1) && kf.opacity === undefined) {
+    throw new Error('bad argument: buildJob: ' + where + '.opacity must be within [0, 1]');
+  }
+  if (kf.opacity) {
+    for (const k of kf.opacity) {
+      if (k.v < 0 || k.v > 1) {
+        throw new Error('bad argument: buildJob: ' + where + '.opacity keyframes must be within [0, 1]');
+      }
+    }
+  }
+  if (out.scale <= 0 && kf.scale === undefined) {
+    throw new Error('bad argument: buildJob: ' + where + '.scale must be positive');
+  }
+  return {transform: out, kf};
+}
+
+const TRACK_TYPES = ['video', 'image', 'text', 'audio'];
+
+function normalizeV2Clip(clip, type, index) {
+  const at = 'clips[' + index + ']';
+  if (!clip || typeof clip !== 'object') {
+    throw new Error('bad argument: buildJob: ' + at + ' must be an object');
+  }
+  const out = {startMs: 0};
+  if (type === 'text') {
+    if (typeof clip.text !== 'string' || clip.text === '') {
+      throw new Error('bad argument: buildJob: ' + at + '.text (string) is required');
+    }
+    out.text = clip.text;
+    if (clip.style !== undefined && clip.style !== null) {
+      if (typeof clip.style !== 'object') {
+        throw new Error('bad argument: buildJob: ' + at + '.style must be an object');
+      }
+      out.style = clip.style;
+    }
+  } else {
+    if (typeof clip.src !== 'string' || clip.src === '') {
+      throw new Error('bad argument: buildJob: ' + at + '.src (string) is required');
+    }
+    out.path = clip.src;
+  }
+  const start = num(clip.startMs, at + '.startMs');
+  if (start !== undefined) out.startMs = start;
+  if (type === 'video' || type === 'audio') {
+    const inMs = num(clip.inMs, at + '.inMs');
+    const outMs = num(clip.outMs, at + '.outMs');
+    if (inMs !== undefined) out.inMs = inMs;
+    if (outMs !== undefined) out.outMs = outMs;
+  } else {
+    const dur = num(clip.durationMs, at + '.durationMs');
+    if (dur === undefined || dur <= 0) {
+      throw new Error('bad argument: buildJob: ' + at + '.durationMs must be a positive number');
+    }
+    out.durationMs = dur;
+  }
+  if (type !== 'audio') {
+    const t = normalizeTransform(clip.transform, at + '.transform');
+    out.transform = t.transform;
+    if (Object.keys(t.kf).length > 0) out.kf = t.kf;
+    if (Array.isArray(clip.effects)) {
+      const header = type === 'video' ? HEADER : HEADER_2D;
+      out.filters = clip.effects.map((entry, i) => compileFilter(entry, i, header));
+    }
+  } else if (clip.gain !== undefined && clip.gain !== null && !Array.isArray(clip.gain)) {
+    const g = num(clip.gain, at + '.gain');
+    if (g === undefined || g < 0) {
+      throw new Error('bad argument: buildJob: ' + at + '.gain must be a non-negative number');
+    }
+    out.gain = g;
+  } else if (Array.isArray(clip.gain)) {
+    out.kf = {gain: normalizeKeyframes(clip.gain, at + '.gain')};
+  }
+  return out;
+}
+
+function normalizeTrack(track, index) {
+  const at = 'tracks[' + index + ']';
+  if (!track || typeof track !== 'object') {
+    throw new Error('bad argument: buildJob: ' + at + ' must be an object');
+  }
+  if (TRACK_TYPES.indexOf(track.type) < 0) {
+    throw new Error('bad argument: buildJob: ' + at + '.type must be one of ' + TRACK_TYPES.join('|'));
+  }
+  if (!Array.isArray(track.clips) || track.clips.length === 0) {
+    throw new Error('bad argument: buildJob: ' + at + '.clips must be a non-empty array');
+  }
+  const clips = track.clips.map((clip, i) => normalizeV2Clip(clip, track.type, i));
+  clips.sort((a, b) => a.startMs - b.startMs);
+  for (let i = 1; i < clips.length; i++) {
+    const prevEnd = clipEndMs(clips[i - 1], track.type);
+    if (clips[i].startMs < prevEnd) {
+      throw new Error('bad argument: buildJob: overlapping clips in ' + at +
+          ' (use separate tracks to composite)');
+    }
+  }
+  return {type: track.type, clips};
+}
+
+/** End of a clip on the timeline (Infinity for open-ended video/audio). */
+function clipEndMs(clip, type) {
+  if (type === 'video' || type === 'audio') {
+    return clip.outMs !== undefined ? clip.startMs + (clip.outMs - (clip.inMs || 0))
+                                    : Number.POSITIVE_INFINITY;
+  }
+  return clip.startMs + clip.durationMs;
+}
+
+function buildV2Job(spec) {
+  const tracks = spec.tracks.map(normalizeTrack);
+  const width = num(spec.width, 'width');
+  const height = num(spec.height, 'height');
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error('bad argument: buildJob: width and height must be set together');
+  }
+  const video = {width: width === undefined ? 1280 : width,
+    height: height === undefined ? 720 : height};
+  const fps = num(spec.fps, 'fps');
+  const bitrate = num(spec.bitrate, 'bitrate');
+  if (fps !== undefined) video.fps = fps;
+  if (bitrate !== undefined) video.bitrate = bitrate;
+  const options = {v2: 1, tracks, output: spec.output, video};
+  return {plugin: 'transcode', v2: true, options, optionsJson: JSON.stringify(options)};
+}
+
 /**
  * Build and run the job end-to-end. onProgress(event) receives
  * {clip, clipPercent, percent} during the run. Resolves with the job result
@@ -299,6 +523,10 @@ function buildSlideJob(spec) {
  */
 export async function exportVideo(spec) {
   const job = buildJob(spec);
+  if (job.v2) {
+    /* P5a: the compiler is final, the native renderer arrives with P5b. */
+    throw new Error('unsupported: v2 tracks export (native renderer lands in P5b)');
+  }
   const p = await host.ensureNative(job.plugin);
   const id = p.open_job(job.optionsJson);
   if (!id) {

@@ -1545,7 +1545,7 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.4.0", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.5.0", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
@@ -1653,6 +1653,76 @@ static void test_weizhi_video_package(void) {
                               "run.js");
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL && strstr(result.output_text, "unsupported: native") != NULL);
+    weizhi_result_free(&result);
+
+    /* timeline v2 (P5a): tracks + keyframes compile; execution guarded. */
+    result = weizhi_run_js_ex(engine,
+                              "import { buildJob, exportVideo } from 'weizhi:video';\n"
+                              "const t = buildJob({\n"
+                              "  tracks: [\n"
+                              "    {type: 'video', clips: [{src: 'v.mp4', inMs: 0, outMs: 3000, startMs: 0}]},\n"
+                              "    {type: 'image', clips: [{src: 'logo.png', startMs: 500, durationMs: 2000,\n"
+                              "      transform: {x: 0.8, y: -0.8, opacity: 0.9,\n"
+                              "        scale: [{t: 0, v: 0.2}, {t: 1000, v: 0.4, interp: 'ease'}]}}]},\n"
+                              "    {type: 'audio', clips: [{src: 'm.m4a', startMs: 0,\n"
+                              "      gain: [{t: 0, v: 1}, {t: 2000, v: 0}]}]},\n"
+                              "  ],\n"
+                              "  output: 'o.mp4'});\n"
+                              "const o = JSON.parse(t.optionsJson);\n"
+                              "const txt = buildJob({tracks: [{type: 'text',\n"
+                              "  clips: [{text: 'hi', startMs: 0, durationMs: 1000}]}], output: 't.mp4'});\n"
+                              "const to = JSON.parse(txt.optionsJson);\n"
+                              "let f1 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [\n"
+                              "  {src: 'a.png', startMs: 0, durationMs: 1000},\n"
+                              "  {src: 'b.png', startMs: 500, durationMs: 1000}]}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f1 = e.message; }\n"
+                              "let f2 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.png', durationMs: 100,\n"
+                              "  transform: {scale: [{t: 100, v: 1}, {t: 0, v: 2}]}}]}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f2 = e.message; }\n"
+                              "let f3 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.png', durationMs: 100,\n"
+                              "  transform: {opacity: [{t: 0, v: 1, interp: 'smooth'}]}}]}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f3 = e.message; }\n"
+                              "let f4 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.png', durationMs: 100,\n"
+                              "  transform: {opacity: 1.5}}]}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f4 = e.message; }\n"
+                              "let f5 = '';\n"
+                              "try { buildJob({tracks: [{type: 'sticker', clips: [{src: 'a.png'}]}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f5 = e.message; }\n"
+                              "let f6 = '';\n"
+                              "try { buildJob({tracks: [{type: 'video', clips: [{src: 'v.mp4'}]}],\n"
+                              "  clips: [{path: 'a.mp4'}], output: 'o.mp4'}); }\n"
+                              "catch (e) { f6 = e.message; }\n"
+                              "let f7 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.png', durationMs: 0}]}],\n"
+                              "  output: 'o.mp4'}); }\n"
+                              "catch (e) { f7 = e.message; }\n"
+                              "let ex = '';\n"
+                              "try { await exportVideo({tracks: [{type: 'video', clips: [{src: 'v.mp4'}]}],\n"
+                              "  output: 'o.mp4'}); }\n"
+                              "catch (e) { ex = e.message; }\n"
+                              "export default [t.v2 === true, t.plugin, o.v2, o.tracks.length,\n"
+                              "  o.tracks[0].clips[0].path, o.tracks[0].clips[0].startMs, o.tracks[0].clips[0].outMs,\n"
+                              "  o.tracks[1].clips[0].transform.x, o.tracks[1].clips[0].transform.opacity,\n"
+                              "  o.tracks[1].clips[0].transform.scale, o.tracks[1].clips[0].transform.y,\n"
+                              "  o.tracks[1].clips[0].kf.scale.length, o.tracks[1].clips[0].kf.scale[1].ip,\n"
+                              "  o.video.width, o.video.height, o.tracks[2].clips[0].kf.gain.length,\n"
+                              "  to.tracks[0].clips[0].text, txt.v2 === true,\n"
+                              "  f1.includes('overlapping clips'), f2.includes('sorted by t'),\n"
+                              "  f3.includes('linear|ease'), f4.includes('[0, 1]'),\n"
+                              "  f5.includes('video|image|text|audio'), f6.includes('v1 vs v2'),\n"
+                              "  f7.includes('durationMs must be a positive'),\n"
+                              "  ex.includes('unsupported: v2 tracks export')];\n",
+                              3000,
+                              "run.js");
+    EXPECT(result.ok == 1);
+    EXPECT(result.output_text != NULL &&
+           strcmp(result.output_text,
+                  "[true,\"transcode\",1,3,\"v.mp4\",0,3000,0.8,0.9,1,-0.8,2,\"ease\",1280,720,2,"
+                  "\"hi\",true,true,true,true,true,true,true,true,true]") == 0);
     weizhi_result_free(&result);
     weizhi_close(engine);
     free(pkg_home);
