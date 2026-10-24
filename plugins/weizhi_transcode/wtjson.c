@@ -306,6 +306,72 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
                 p = skip_ws(p);
             }
             p = skip_ws(p + 1);
+        } else if (strcmp(key, "audio") == 0) {
+            p = parse_str(p, spec->audio, sizeof(spec->audio));
+        } else if (strcmp(key, "slides") == 0) {
+            if (*p != '[') {
+                snprintf(err, err_len, "bad argument: job json (slides must be an array)");
+                return -1;
+            }
+            p = skip_ws(p + 1);
+            while (*p != ']') {
+                WtSlide *slide;
+                if (*p == ',') {
+                    p = skip_ws(p + 1);
+                    continue;
+                }
+                if (*p != '{' || spec->nslides >= WT_MAX_SLIDES) {
+                    snprintf(err, err_len, "bad argument: job json (bad slide or too many slides)");
+                    return -1;
+                }
+                slide = &spec->slides[spec->nslides];
+                memset(slide, 0, sizeof(*slide));
+                p = skip_ws(p + 1);
+                while (*p != '}') {
+                    if (*p == ',') {
+                        p = skip_ws(p + 1);
+                        continue;
+                    }
+                    p = parse_str(p, key, sizeof(key));
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad slide key)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
+                    if (*p != ':') {
+                        snprintf(err, err_len, "bad argument: job json (expected ':')");
+                        return -1;
+                    }
+                    p = skip_ws(p + 1);
+                    if (strcmp(key, "path") == 0) {
+                        p = parse_str(p, slide->path, sizeof(slide->path));
+                    } else if (strcmp(key, "durationMs") == 0 || strcmp(key, "fadeInMs") == 0 ||
+                               strcmp(key, "fadeOutMs") == 0) {
+                        int64_t v = 0;
+                        p = parse_num_member(p, key, &v, err, err_len);
+                        if (p == NULL) {
+                            return -1;
+                        }
+                        if (strcmp(key, "durationMs") == 0) {
+                            slide->duration_ms = v;
+                        } else if (strcmp(key, "fadeInMs") == 0) {
+                            slide->fade_in_ms = v;
+                        } else {
+                            slide->fade_out_ms = v;
+                        }
+                    } else {
+                        p = skip_value(p);
+                    }
+                    if (p == NULL) {
+                        snprintf(err, err_len, "bad argument: job json (bad slide value)");
+                        return -1;
+                    }
+                    p = skip_ws(p);
+                }
+                p = skip_ws(p + 1);
+                spec->nslides++;
+            }
+            p = skip_ws(p + 1);
         } else if (strcmp(key, "clips") == 0) {
             if (*p != '[') {
                 snprintf(err, err_len, "bad argument: job json (clips must be an array)");
@@ -380,8 +446,12 @@ int wt_parse_job(const char *json, WtJobSpec *spec, char *err, size_t err_len) {
             return -1;
         }
     }
-    if (spec->nclips == 0 || spec->output[0] == '\0') {
-        snprintf(err, err_len, "bad argument: job json (needs clips[] and output)");
+    if ((spec->nclips == 0 && spec->nslides == 0) || spec->output[0] == '\0') {
+        snprintf(err, err_len, "bad argument: job json (needs clips[] or slides[] and output)");
+        return -1;
+    }
+    if (spec->nclips > 0 && spec->nslides > 0) {
+        snprintf(err, err_len, "bad argument: job json (clips[] and slides[] cannot be mixed)");
         return -1;
     }
     return 0;

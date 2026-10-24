@@ -83,15 +83,17 @@
 
 ## 视频剪辑能力（已立项）
 
-- **状态**：P0–P3c 已落地（IDL v2、`weizhi_video` remux / `weizhi_transcode` 重编码插件、
-  GL 滤镜与缩放、LUT 与 fade 转场、`weizhi:video` JS 编排包 `video@0.3.0`），
-  真机 29/29、桌面含 ASan 全绿。架构与阶段记录：[video-architecture.md](video-architecture.md)。
+- **状态**：P0–P3d 已落地（IDL v2、`weizhi_video` remux / `weizhi_transcode` 重编码插件、
+  GL 滤镜与缩放、LUT 与 fade 转场、**照片幻灯片**（P3d：slides + 配乐 + letterbox）、
+  `weizhi:video` JS 编排包 `video@0.4.0`），
+  真机 31/31、桌面含 ASan 全绿。架构与阶段记录：[video-architecture.md](video-architecture.md)。
 - **边界不变**：heavy 代码全部在独立签名插件 SO（`libweizhivideo.so` ≈60KB、
   `libweizhitranscode.so` ≈133KB，预算 ≤512KB）；核心 `libweizhijni.so` 的 1.5MB strip 门禁不动；
   安卓数据面走 NDK 系统媒体栈（`libmediandk`），不自研 FFmpeg。
-- **后续（不阻塞主线）**：多滤镜链（解除「一 job 一滤镜」守卫）、P4 预览协作面
-  （宿主 Surface，需与 Agent1 对齐跨仓协议）。ffmpeg 插件**暂不做**——安卓系统
-  编解码器已覆盖主线需求；仅当出现系统栈覆盖不了的容器/编码诉求再评估。
+- **后续（不阻塞主线）**：多滤镜链（解除「一 job 一滤镜」守卫）、混合时间线
+  （clips 与 slides 同作业混排）、P4 预览协作面（宿主 Surface，需与 Agent1 对齐
+  跨仓协议）。ffmpeg 插件**暂不做**——安卓系统编解码器已覆盖主线需求；仅当出现
+  系统栈覆盖不了的容器/编码诉求再评估。
 
 ## 迭代建议（集成之后）
 

@@ -7,6 +7,10 @@
  * Schema:
  *  {"clips":[{"path":"a.mp4","startMs":0,"endMs":0,
  *             "fadeInMs":0,"fadeOutMs":0}],   // fades from transitions (P3c)
+ *   "slides":[{"path":"p.jpg","durationMs":1500,"fadeInMs":0,"fadeOutMs":0}],
+ *            // photo slideshow source (P3d); clips[] and slides[] are
+ *            // mutually exclusive per job
+ *   "audio":"music.m4a",   // slide jobs only: passthrough soundtrack
  *   "output":"out.mp4",
  *   "video":{"width":0,"height":0,"bitrate":0,"fps":0},   // 0 = keep source
  *   "filters":[{"shader":"...","uniforms":{"k":0.0},"lut":"x.cube"}]}
@@ -16,6 +20,7 @@
 #include <stdint.h>
 
 #define WT_MAX_CLIPS 16
+#define WT_MAX_SLIDES 64
 #define WT_MAX_PATH 1024
 #define WT_MAX_FILTERS 4
 #define WT_MAX_SHADER 4096
@@ -29,6 +34,15 @@ typedef struct WtClip {
     int64_t fade_in_ms;  /* transition from the previous clip (0 = none) */
     int64_t fade_out_ms; /* transition into the next clip (0 = none) */
 } WtClip;
+
+/* One photo slide (P3d): decoded via AImageDecoder, drawn letterboxed for
+   duration_ms at the job fps; fades reuse the clip transition math. */
+typedef struct WtSlide {
+    char path[WT_MAX_PATH];
+    int64_t duration_ms;
+    int64_t fade_in_ms;
+    int64_t fade_out_ms;
+} WtSlide;
 
 typedef struct WtVideoOpts {
     int64_t width;
@@ -57,6 +71,9 @@ typedef struct WtFilter {
 typedef struct WtJobSpec {
     WtClip clips[WT_MAX_CLIPS];
     int nclips;
+    WtSlide slides[WT_MAX_SLIDES];
+    int nslides;
+    char audio[WT_MAX_PATH]; /* slide jobs: soundtrack muxed in passthrough */
     char output[WT_MAX_PATH];
     WtVideoOpts video;
     WtFilter filters[WT_MAX_FILTERS];

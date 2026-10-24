@@ -98,6 +98,8 @@ dependencies {
 assets 自动合并——宿主 `WeizhiPackages.syncBundled(context)` 既有调用会自动安装，
 初始化时调 `com.weizhi.video.WeizhiVideo.install(engine)` 注册插件即可，脚本侧
 `await host.ensureNative("video" / "transcode")` + `import "weizhi:video"`。
+支持视频剪辑/拼接/重编码/滤镜（GL）/LUT/转场，以及**照片幻灯片**
+（`slides: [{image, durationMs}]` + 可选 `audio` 配乐，图片解码需 Android 11+）。
 视频细节见 [video-architecture.md](video-architecture.md)。
 
 桌面冒烟（有 JDK）：`./scripts/test-jni.sh`。真机：`./scripts/test.sh android`。

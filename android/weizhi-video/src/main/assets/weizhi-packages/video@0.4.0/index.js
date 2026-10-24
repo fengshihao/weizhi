@@ -15,11 +15,19 @@
 // API surface: buildJob(spec), exportVideo(spec, opts?), probe(path) — probe
 // returns the input's metadata ({tracks: [{codec, width, height, ...}], durationMs})
 // so callers can validate trim points before exporting.
+// Slides (P3d): a spec may carry slides: [{image, durationMs}] instead of clips
+// (photo slideshow; the two cannot be mixed). Images decode via AImageDecoder
+// (Android 11+) and draw letterboxed; output defaults to 1280x720@30 unless
+// width/height/fps are set; transitions fade between slides; audio: '<path>'
+// muxes a passthrough soundtrack from t=0. Slide shaders sample a plain 2D
+// texture, so uVideo is declared sampler2D here (video jobs use OES).
 // NOTE: tests/test_engine.c embeds this file via CMake; keep that in sync.
 
 const PRESETS = ['brightness', 'contrast', 'saturation', 'grayscale', 'lut'];
 
 const HEADER = 'varying vec2 vUV;\nuniform samplerExternalOES uVideo;\n';
+
+const HEADER_2D = 'varying vec2 vUV;\nuniform sampler2D uVideo;\n';
 
 const PRESET_GLSL = {
   brightness:
@@ -86,8 +94,27 @@ function normalizeClip(clip, index) {
   return out;
 }
 
+function normalizeSlide(slide, index) {
+  if (!slide || typeof slide !== 'object') {
+    throw new Error('bad argument: buildJob: slides[' + index + '] must be an object');
+  }
+  if (typeof slide.image !== 'string' || slide.image === '') {
+    throw new Error('bad argument: buildJob: slides[' + index + '].image (string) is required');
+  }
+  if (slide.fadeInMs !== undefined || slide.fadeOutMs !== undefined) {
+    throw new Error('bad argument: buildJob: slides[' + index +
+        '] fadeInMs/fadeOutMs are compiled from transitions, not settable');
+  }
+  const duration = num(slide.durationMs, 'slides[' + index + '].durationMs');
+  if (duration === undefined || duration <= 0) {
+    throw new Error('bad argument: buildJob: slides[' + index +
+        '].durationMs must be a positive number');
+  }
+  return {path: slide.image, durationMs: duration};
+}
+
 /** Compile one filter entry to {shader, uniforms, lut?}. */
-function compileFilter(entry, index) {
+function compileFilter(entry, index, header) {
   const where = 'filters[' + index + ']';
   let type = null;
   let amount;
@@ -105,7 +132,7 @@ function compileFilter(entry, index) {
         const v = num(src[k], where + '.uniforms.' + k);
         uniforms[k] = v === undefined ? 0 : v;
       }
-      return {shader: HEADER + entry.shader, uniforms};
+      return {shader: header + entry.shader, uniforms};
     }
   }
   if (type === null) {
@@ -123,30 +150,30 @@ function compileFilter(entry, index) {
       throw new Error(
           'bad argument: buildJob: ' + where + ' lut requires params.path (string)');
     }
-    return {shader: HEADER + PRESET_GLSL.lut, uniforms: {uAmount: amount}, lut: path};
+    return {shader: header + PRESET_GLSL.lut, uniforms: {uAmount: amount}, lut: path};
   }
   const uniforms = {};
   if (PRESET_GLSL[type].indexOf('uAmount') >= 0) uniforms.uAmount = amount;
-  return {shader: HEADER + PRESET_GLSL[type], uniforms};
+  return {shader: header + PRESET_GLSL[type], uniforms};
 }
 
 /**
- * Compile spec.transitions into per-clip fadeInMs/fadeOutMs fields; returns
+ * Compile spec.transitions into per-item fadeInMs/fadeOutMs fields; returns
  * true when any fade is active. A single object broadcasts to every boundary;
- * an array must have exactly clips.length - 1 entries (one per boundary).
+ * an array must have exactly items.length - 1 entries (one per boundary).
  */
-function compileTransitions(spec, clips) {
+function compileTransitions(spec, items, kind) {
   if (spec.transitions === undefined || spec.transitions === null) return false;
-  if (clips.length < 2) {
-    throw new Error('bad argument: buildJob: transitions need at least two clips');
+  if (items.length < 2) {
+    throw new Error('bad argument: buildJob: transitions need at least two ' + kind);
   }
   const list = Array.isArray(spec.transitions)
       ? spec.transitions
-      : new Array(clips.length - 1).fill(spec.transitions);
+      : new Array(items.length - 1).fill(spec.transitions);
   if (list.length === 0) return false;
-  if (list.length !== clips.length - 1) {
+  if (list.length !== items.length - 1) {
     throw new Error(
-        'bad argument: buildJob: transitions must have clips.length - 1 entries (got ' +
+        'bad argument: buildJob: transitions must have ' + kind + '.length - 1 entries (got ' +
         list.length + ')');
   }
   for (let i = 0; i < list.length; i++) {
@@ -164,8 +191,8 @@ function compileTransitions(spec, clips) {
           'bad argument: buildJob: transitions[' + i +
           '].durationMs must be a positive number');
     }
-    clips[i].fadeOutMs = d;
-    clips[i + 1].fadeInMs = d;
+    items[i].fadeOutMs = d;
+    items[i + 1].fadeInMs = d;
   }
   return true;
 }
@@ -175,23 +202,35 @@ function compileTransitions(spec, clips) {
  *   { clips: [{path, startMs?, endMs?}], output,
  *     bitrate?, width?, height?, fps?, reencode?, filters?,
  *     transitions?: {type:'fade', durationMs} | [{type:'fade', durationMs}] }
+ * or a photo slideshow (clips and slides are mutually exclusive):
+ *   { slides: [{image, durationMs}], output,
+ *     width?, height? (default 1280x720), fps? (default 30), bitrate?,
+ *     filters?, transitions?, audio? }
  * Returns { plugin: "video"|"transcode", options, optionsJson }.
  */
 export function buildJob(spec) {
   if (!spec || typeof spec !== 'object') {
     throw new Error('bad argument: buildJob: spec must be an object');
   }
-  if (!Array.isArray(spec.clips) || spec.clips.length === 0) {
-    throw new Error('bad argument: buildJob: clips must be a non-empty array');
+  const hasClips = Array.isArray(spec.clips) && spec.clips.length > 0;
+  const hasSlides = Array.isArray(spec.slides) && spec.slides.length > 0;
+  if (!hasClips && !hasSlides) {
+    throw new Error('bad argument: buildJob: clips or slides must be a non-empty array');
+  }
+  if (hasClips && hasSlides) {
+    throw new Error('bad argument: buildJob: clips and slides cannot be mixed in one job');
   }
   if (typeof spec.output !== 'string' || spec.output === '') {
     throw new Error('bad argument: buildJob: output (string) is required');
   }
+  if (hasSlides) {
+    return buildSlideJob(spec);
+  }
   const clips = spec.clips.map(normalizeClip);
-  const hasTransitions = compileTransitions(spec, clips);
+  const hasTransitions = compileTransitions(spec, clips, 'clips');
   let filters = [];
   if (Array.isArray(spec.filters)) {
-    filters = spec.filters.map(compileFilter);
+    filters = spec.filters.map((entry, i) => compileFilter(entry, i, HEADER));
   }
   const bitrate = num(spec.bitrate, 'bitrate');
   const width = num(spec.width, 'width');
@@ -219,6 +258,38 @@ export function buildJob(spec) {
     return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
   }
   return {plugin: 'video', options, optionsJson: JSON.stringify(options)};
+}
+
+/** Slideshow jobs always re-encode (plugin "transcode", 2D-texture GL path). */
+function buildSlideJob(spec) {
+  const slides = spec.slides.map(normalizeSlide);
+  compileTransitions(spec, slides, 'slides');
+  let filters = [];
+  if (Array.isArray(spec.filters)) {
+    filters = spec.filters.map((entry, i) => compileFilter(entry, i, HEADER_2D));
+  }
+  const width = num(spec.width, 'width');
+  const height = num(spec.height, 'height');
+  if ((width === undefined) !== (height === undefined)) {
+    throw new Error('bad argument: buildJob: width and height must be set together');
+  }
+  const fps = num(spec.fps, 'fps');
+  const bitrate = num(spec.bitrate, 'bitrate');
+  if (spec.reencode === false) {
+    throw new Error('bad argument: buildJob: slides always re-encode (reencode cannot be false)');
+  }
+  const video = {width: width === undefined ? 1280 : width, height: height === undefined ? 720 : height};
+  if (fps !== undefined) video.fps = fps;
+  if (bitrate !== undefined) video.bitrate = bitrate;
+  const options = {slides, output: spec.output, video};
+  if (filters.length > 0) options.filters = filters;
+  if (spec.audio !== undefined && spec.audio !== null) {
+    if (typeof spec.audio !== 'string' || spec.audio === '') {
+      throw new Error('bad argument: buildJob: audio must be a path (string)');
+    }
+    options.audio = spec.audio;
+  }
+  return {plugin: 'transcode', options, optionsJson: JSON.stringify(options)};
 }
 
 /**
@@ -261,4 +332,95 @@ export async function probe(path) {
     throw new Error('video: ' + parsed.error);
   }
   return parsed;
+}
+
+/* ---- Host-bridge surface (agent1 $tools; added in video@0.4.0) ----
+   Frame grabs and audio-track extraction run on the agent1 host's native
+   media tools (MediaMetadataRetriever / MediaExtractor+MediaMuxer) through
+   the $tools bridge — not through the remux plugin and never through
+   webview_exec. They need an agent1 host that exposes
+   $tools.media_extract_frame / $tools.media_extract_audio. */
+
+function hostTool(name) {
+  const tools = typeof globalThis !== 'undefined' ? globalThis.$tools : undefined;
+  if (!tools || typeof tools[name] !== 'function') {
+    throw new Error('video: ' + name + ' requires the agent1 host $tools bridge');
+  }
+  return tools[name];
+}
+
+/** Extract one frame as JPEG. ss: seconds ("3.5") or "HH:MM:SS.mmm". */
+export async function extractFrame(spec) {
+  if (!spec || typeof spec !== 'object') {
+    throw new Error('bad argument: extractFrame: spec must be an object');
+  }
+  if (typeof spec.path !== 'string' || spec.path === '') {
+    throw new Error('bad argument: extractFrame: path (string) is required');
+  }
+  if (typeof spec.output !== 'string' || spec.output === '') {
+    throw new Error('bad argument: extractFrame: output (string) is required');
+  }
+  const call = hostTool('media_extract_frame');
+  return await call({
+    path: spec.path,
+    output: spec.output,
+    ss: spec.ss === undefined || spec.ss === null ? '0' : String(spec.ss),
+  });
+}
+
+function formatSs(seconds) {
+  const t = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const s = t % 60;
+  const pad = function (n) {
+    return (n < 10 ? '0' : '') + n;
+  };
+  return pad(h) + ':' + pad(m) + ':' + pad(s) + '.000';
+}
+
+/** Extract one JPEG every everySec seconds into outputDir. */
+export async function extractFrames(spec) {
+  if (!spec || typeof spec !== 'object') {
+    throw new Error('bad argument: extractFrames: spec must be an object');
+  }
+  if (typeof spec.path !== 'string' || spec.path === '') {
+    throw new Error('bad argument: extractFrames: path (string) is required');
+  }
+  const everySec = Number(spec.everySec);
+  if (!isFinite(everySec) || everySec < 1) {
+    throw new Error('bad argument: extractFrames: everySec must be >= 1');
+  }
+  const outputDir = (spec.outputDir || 'out/frames').replace(/\/+$/, '');
+  const namePattern = spec.namePattern || 'frame_{t}s.jpg';
+  const metaCall = hostTool('media_probe');
+  const meta = await metaCall({path: spec.path});
+  const durationMs = meta && meta.durationMs !== undefined ? Number(meta.durationMs) : 0;
+  const maxSec = durationMs > 0 ? Math.floor(durationMs / 1000) : 0;
+  const frames = [];
+  for (let t = 0; t <= maxSec; t += everySec) {
+    const output = outputDir + '/' + namePattern.replace('{t}', String(t));
+    const r = await extractFrame({path: spec.path, output: output, ss: formatSs(t)});
+    frames.push({t: t, output: output, result: r});
+  }
+  return {path: spec.path, everySec: everySec, count: frames.length, frames: frames};
+}
+
+/** Extract the audio track to an m4a file (no re-encode). */
+export async function extractAudio(spec) {
+  if (!spec || typeof spec !== 'object') {
+    throw new Error('bad argument: extractAudio: spec must be an object');
+  }
+  if (typeof spec.path !== 'string' || spec.path === '') {
+    throw new Error('bad argument: extractAudio: path (string) is required');
+  }
+  if (typeof spec.output !== 'string' || spec.output === '') {
+    throw new Error('bad argument: extractAudio: output (string) is required');
+  }
+  const call = hostTool('media_extract_audio');
+  return await call({
+    path: spec.path,
+    output: spec.output,
+    format: spec.format === undefined || spec.format === null ? 'm4a' : String(spec.format),
+  });
 }

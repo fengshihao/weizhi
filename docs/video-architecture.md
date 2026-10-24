@@ -1,6 +1,6 @@
 # 视频剪辑能力：调研与架构提案（feat/video-editing）
 
-日期：2026-10-17。状态：**P0–P3c 已落地并合入主干**（2026-10-19 ROADMAP 立项，见 §6-Q5 与 [ROADMAP.md](ROADMAP.md)）。
+日期：2026-10-17。状态：**P0–P3d 已落地并合入主干**（2026-10-19 ROADMAP 立项，见 §6-Q5 与 [ROADMAP.md](ROADMAP.md)）。
 本文是 `feat/video-editing` 长期分支的第一份产出，后续设计/实现以本文为基线演进。
 
 结论先行：**视频剪辑可以进 Weizhi 生态，但 heavy 代码必须以签名插件 SO 形态存在，JS 只做编排；
@@ -242,6 +242,7 @@ P3b 改动文件：`plugins/weizhi_transcode/weizhi_transcode.c`、
 `android/app/src/androidTest/java/com/weizhi/{WeizhiTranscodeInstrumentedTest,GlEncoderProbeInstrumentedTest}.java`。
 构建：`./scripts/build-android.sh arm64-v8a`；单测：`cd android && ./gradlew :app:connectedDebugAndroidTest`。
 | P3c ✅（2026-10-17） | LUT 与 fade 转场（补 P3b 遗留）：`filters:[{type:'lut',params:{path,amount}}]`——插件按 fs 沙箱解析 Adobe/IRIDAS `.cube` 3D LUT（2..64 格）并上传为 N×N² 2D 纹理（unit 1；native 绑定 `uLut`/`uLutSize`，JS 预设 GLSL 做跨 slice 三线性插值）；`transitions:{type:'fade',durationMs}`（单对象广播到全部边界；数组须恰为 clips.length-1 项）编译为每 clip `fadeInMs/fadeOutMs`，native 用 GL 常量色混合（`GL_CONSTANT_COLOR`）逐帧衰减——与滤镜 shader 完全正交、可任意组合。语义：fade 只发生在 clip 边界（时间线首尾不淡出）、只影响视频（音频直通不变）；时长越界报 `unsupported: transition longer than clip`。包升至 `video@0.3.0` | 桌面 `test_weizhi_video_package`（lut/转场编译精确断言 + 6 类校验错误）与含 ASan 全量绿；真机 `lutPixelMap`（常量白 LUT→Y≈235、恒等 LUT 不变色）、`fadeTransitionBoundary`（两侧边界帧 Y<40、clip 中段与时间线尾 Y∈[45,75]）通过，全量 **29/29** |
+| P3d ✅（2026-10-24） | **照片幻灯片**：`slides:[{image, durationMs}]`（与 `clips` 互斥）——插件用 `AImageDecoder` 解码（RGBA，越界图按比例降采样解码）、按 aspect **letterbox**（黑边不拉伸）绘制到编码器输入表面；输出默认 1280x720@30（`width/height` 须成对设置）；转场复用 fade 编译（边界黑场）；`audio:'m.m4a'` 可选配乐（画帧前 addTrack、帧后直通写 muxer，pts 从 0 起，超出时间线截断）。技术要点：slide 作业的 shader `uVideo` 声明为 `sampler2D`（视频作业仍 `samplerExternalOES`，预设 body 完全共用，JS 包按作业类型换头）；`AImageDecoder` 是 API 30+，经 `dlopen("libjnigraphics.so")+dlsym` 解析（零构建系统改动），API<30 报 `unsupported: image decode (requires Android 11)`；slide 绘制无需 `glFinish` fence（纹理自持，非解码器借还）。包升至 `video@0.4.0` | 桌面 `test_weizhi_video_package`（slides 编译精确断言 + 8 类校验错误：混排/缺 image/durationMs/宽高成对/强制重编码等）与含 ASan 全量绿；真机 `WeizhiSlideshowInstrumentedTest`：幻灯片+fade+配乐（时长 2s、tracks=2、中段灰/白 Y 断言、边界 Y<90、进度回调）、竖图 letterbox（Y∈(40,140) 证明黑边非拉伸）；全量 **31/31** |
 | P4 | 预览协作面（宿主 Surface，与 Agent1 对齐接口）。~~ffmpeg 可选插件~~（2026-10-19 划掉：安卓系统媒体栈已覆盖主线，仅桌面 CLI 按需再评估） | 跨仓协议文档 |
 
 P1 的「无重编码剪辑（remux）」是性价比最高的第一刀：纯 MediaExtractor/MediaMuxer，

@@ -1545,7 +1545,7 @@ static void test_weizhi_video_package(void) {
     char *fs_dir = make_temp_dir();
     WeizhiEngine *engine = weizhi_open(NULL);
     WeizhiResult result;
-    install_test_package(pkg_home, "video", "0.3.1", WEIZHI_VIDEO_PKG_JS);
+    install_test_package(pkg_home, "video", "0.4.0", WEIZHI_VIDEO_PKG_JS);
     EXPECT(weizhi_set_package_root(engine, pkg_home) == 0);
     EXPECT(weizhi_set_fs_root(engine, fs_dir) == 0);
     result = weizhi_run_js_ex(engine,
@@ -1558,6 +1558,10 @@ static void test_weizhi_video_package(void) {
                               "const lut = buildJob({clips: [{path: 'a.mp4'}], output: 'o.mp4', filters: [{type: 'lut', params: {path: 'w.cube'}}]});\n"
                               "const fade = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}], output: 'o.mp4', transitions: [{type: 'fade', durationMs: 200}]});\n"
                               "const cast = buildJob({clips: [{path: 'a.mp4'}, {path: 'b.mp4'}, {path: 'c.mp4'}], output: 'o.mp4', transitions: {type: 'fade', durationMs: 100}});\n"
+                              "const sl = buildJob({slides: [{image: 'p1.jpg', durationMs: 1500}, {image: 'p2.jpg', durationMs: 2000}], output: 's.mp4', transitions: {type: 'fade', durationMs: 300}, audio: 'm.m4a'});\n"
+                              "const slf = buildJob({slides: [{image: 'p1.jpg', durationMs: 1500}], output: 's.mp4', width: 320, height: 240, fps: 15, filters: ['grayscale']});\n"
+                              "const slOpts = JSON.parse(sl.optionsJson);\n"
+                              "const slfOpts = JSON.parse(slf.optionsJson);\n"
                               "let e1 = '';\n"
                               "try { buildJob({clips: [], output: 'o.mp4'}); } catch (e) { e1 = e.message; }\n"
                               "let e2 = '';\n"
@@ -1580,6 +1584,16 @@ static void test_weizhi_video_package(void) {
                               "try { await probe(''); } catch (e) { pe1 = e.message; }\n"
                               "let pe2 = '';\n"
                               "try { await probe('a.mp4'); } catch (e) { pe2 = e.message; }\n"
+                              "let se1 = '';\n"
+                              "try { buildJob({clips: [{path: 'a.mp4'}], slides: [{image: 'p.jpg', durationMs: 500}], output: 'o.mp4'}); } catch (e) { se1 = e.message; }\n"
+                              "let se2 = '';\n"
+                              "try { buildJob({slides: [{durationMs: 500}], output: 'o.mp4'}); } catch (e) { se2 = e.message; }\n"
+                              "let se3 = '';\n"
+                              "try { buildJob({slides: [{image: 'p.jpg', durationMs: 0}], output: 'o.mp4'}); } catch (e) { se3 = e.message; }\n"
+                              "let se4 = '';\n"
+                              "try { buildJob({slides: [{image: 'p.jpg', durationMs: 500}], output: 'o.mp4', width: 320}); } catch (e) { se4 = e.message; }\n"
+                              "let se5 = '';\n"
+                              "try { buildJob({slides: [{image: 'p.jpg', durationMs: 500}], output: 'o.mp4', reencode: false}); } catch (e) { se5 = e.message; }\n"
                               "const encOpts = JSON.parse(enc.optionsJson);\n"
                               "const fltOpts = JSON.parse(flt.optionsJson);\n"
                               "const flt2Opts = JSON.parse(flt2.optionsJson);\n"
@@ -1605,7 +1619,16 @@ static void test_weizhi_video_package(void) {
                               "  e6.includes('remux cannot'), e7.includes('params.path'),\n"
                               "  e8.includes('at least two clips'), e9.includes('compiled from transitions'),\n"
                               "  typeof probe === 'function', pe1.includes('bad argument: probe'),\n"
-                              "  pe2.includes('unsupported: native')];\n",
+                              "  pe2.includes('unsupported: native'),\n"
+                              "  sl.plugin, slOpts.slides.length, slOpts.slides[0].fadeOutMs,\n"
+                              "  slOpts.slides[1].fadeInMs, slOpts.audio,\n"
+                              "  slOpts.video.width, slOpts.video.height,\n"
+                              "  slfOpts.video.width, slfOpts.video.height, slfOpts.video.fps,\n"
+                              "  slfOpts.filters[0].shader.indexOf('sampler2D uVideo') >= 0,\n"
+                              "  slfOpts.filters[0].shader.indexOf('samplerExternalOES') < 0,\n"
+                              "  se1.includes('cannot be mixed'), se2.includes('.image'),\n"
+                              "  se3.includes('durationMs must be a positive'),\n"
+                              "  se4.includes('set together'), se5.includes('always re-encode')];\n",
                               3000,
                               "run.js");
     EXPECT(result.ok == 1);
@@ -1615,7 +1638,9 @@ static void test_weizhi_video_package(void) {
                   "\"{\\\"path\\\":\\\"a.mp4\\\",\\\"startMs\\\":200,\\\"endMs\\\":800}\",true,true,true,"
                   "\"transcode\",\"w.cube\",1,true,\"transcode\",200,200,100,100,100,100,"
                   "true,true,true,true,true,true,"
-                  "true,true,true]") == 0);
+                  "true,true,true,"
+                  "\"transcode\",2,300,300,\"m.m4a\",1280,720,320,240,15,"
+                  "true,true,true,true,true,true,true]") == 0);
     weizhi_result_free(&result);
     /* exportVideo without native plugins fails with the agent-facing hint. */
     result = weizhi_run_js_ex(engine,
