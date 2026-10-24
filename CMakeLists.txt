@@ -132,6 +132,45 @@ if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     )
 endif()
 
+# Optional Python runtime experiment (docs/experiment-python.md). Standalone
+# SO: no link on weizhi/quickjs (same pattern as weizhi_video). Requires the
+# generated MicroPython embed sources — scripts/fetch-deps.sh + scripts/build-python-embed.sh.
+set(WEIZHI_PY_EMBED "${CMAKE_BINARY_DIR}/micropython_embed")
+if(EXISTS "${WEIZHI_PY_EMBED}/port/micropython_embed.h")
+    file(GLOB WEIZHIPY_CORE_SRC CONFIGURE_DEPENDS
+        "${WEIZHI_PY_EMBED}/py/*.c"
+        "${WEIZHI_PY_EMBED}/shared/runtime/*.c"
+        "${WEIZHI_PY_EMBED}/port/*.c"
+    )
+    # Our port shim replaces the stock mphalport.c (stdout -> console log events).
+    list(REMOVE_ITEM WEIZHIPY_CORE_SRC "${WEIZHI_PY_EMBED}/port/mphalport.c")
+    list(APPEND WEIZHIPY_CORE_SRC "${CMAKE_SOURCE_DIR}/src/py/py_mphalport.c")
+
+    add_library(weizhipy_core STATIC ${WEIZHIPY_CORE_SRC})
+    # src/py first so our mpconfigport.h (VM hook, feature set) wins over the
+    # generated port copy.
+    target_include_directories(weizhipy_core PUBLIC
+        "${CMAKE_SOURCE_DIR}/src/py"
+        "${WEIZHI_PY_EMBED}"
+        "${WEIZHI_PY_EMBED}/port"
+    )
+    set_target_properties(weizhipy_core PROPERTIES C_STANDARD 99)
+    target_compile_options(weizhipy_core PRIVATE -fno-common -fvisibility=hidden)
+
+    add_library(weizhipy SHARED src/py/py_engine.c)
+    target_include_directories(weizhipy PRIVATE include src/py "${WEIZHI_PY_EMBED}")
+    target_link_libraries(weizhipy PRIVATE weizhipy_core)
+    target_compile_options(weizhipy PRIVATE -Wall -Wextra -fvisibility=hidden)
+    set_target_properties(weizhipy PROPERTIES OUTPUT_NAME "weizhipy" PREFIX "lib")
+
+    add_executable(weizhi_py_tests tests/test_py.c)
+    target_link_libraries(weizhi_py_tests PRIVATE weizhipy)
+    target_include_directories(weizhi_py_tests PRIVATE include)
+else()
+    message(STATUS "micropython embed sources missing; skip weizhipy experiment "
+                   "(run scripts/build-python-embed.sh)")
+endif()
+
 # Android cross-build artifacts can be adb-pushed to a device; they cannot run on the host.
 add_executable(weizhi_tests tests/test_engine.c)
 target_link_libraries(weizhi_tests PRIVATE weizhi)

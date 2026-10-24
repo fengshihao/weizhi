@@ -33,6 +33,11 @@ esac
 echo "== weizhi_tests =="
 WEIZHI_BUILD_DIR="$root/build" "$root/build/weizhi_tests"
 
+if [ -x "$root/build/weizhi_py_tests" ]; then
+    echo "== weizhi_py_tests (experiment) =="
+    "$root/build/weizhi_py_tests"
+fi
+
 echo "== JNI smoke =="
 "$root/scripts/test-jni.sh"
 

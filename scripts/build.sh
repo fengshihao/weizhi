@@ -2,6 +2,10 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 "$root/scripts/fetch-deps.sh"
+if [ -f "$root/third_party/micropython/ports/embed/embed.mk" ]; then
+    # Optional Python experiment; a no-op once the embed sources are generated.
+    "$root/scripts/build-python-embed.sh"
+fi
 mkdir -p "$root/build"
 cd "$root/build"
 cmake ..
