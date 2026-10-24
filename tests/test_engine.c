@@ -1672,6 +1672,12 @@ static void test_weizhi_video_package(void) {
                               "const txt = buildJob({tracks: [{type: 'text',\n"
                               "  clips: [{text: 'hi', startMs: 0, durationMs: 1000}]}], output: 't.mp4'});\n"
                               "const to = JSON.parse(txt.optionsJson);\n"
+                              "const cf = buildJob({tracks: [{type: 'image', clips: [\n"
+                              "  {src: 'a.jpg', durationMs: 1000},\n"
+                              "  {src: 'b.jpg', startMs: 700, durationMs: 1000,\n"
+                              "   transition: {type: 'crossfade', durationMs: 300}}]}],\n"
+                              "  output: 'c.mp4'});\n"
+                              "const cfOpts = JSON.parse(cf.optionsJson);\n"
                               "let f1 = '';\n"
                               "try { buildJob({tracks: [{type: 'image', clips: [\n"
                               "  {src: 'a.png', startMs: 0, durationMs: 1000},\n"
@@ -1704,6 +1710,34 @@ static void test_weizhi_video_package(void) {
                               "try { await exportVideo({tracks: [{type: 'video', clips: [{src: 'v.mp4'}]}],\n"
                               "  output: 'o.mp4'}); }\n"
                               "catch (e) { ex = e.message; }\n"
+                              "let f8 = '';\n"
+                              "try { buildJob({tracks: [{type: 'video', clips: [\n"
+                              "  {src: 'v.mp4', outMs: 1000, transition: {type: 'crossfade', durationMs: 200}}]}],\n"
+                              "  output: 'c.mp4'}); }\n"
+                              "catch (e) { f8 = e.message; }\n"
+                              "let f9 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [\n"
+                              "  {src: 'a.jpg', durationMs: 1000},\n"
+                              "  {src: 'b.jpg', startMs: 600, durationMs: 1000,\n"
+                              "   transition: {type: 'crossfade', durationMs: 300}}]}], output: 'c.mp4'}); }\n"
+                              "catch (e) { f9 = e.message; }\n"
+                              "let f10 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [\n"
+                              "  {src: 'a.jpg', durationMs: 1000},\n"
+                              "  {src: 'b.jpg', startMs: 700, durationMs: 1000,\n"
+                              "   transform: {opacity: [{t: 0, v: 1}]},\n"
+                              "   transition: {type: 'crossfade', durationMs: 300}}]}], output: 'c.mp4'}); }\n"
+                              "catch (e) { f10 = e.message; }\n"
+                              "let f11 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.jpg', durationMs: 100,\n"
+                              "  transform: {x: Array.from({length: 33}, (_, i) => ({t: i, v: 0}))}}]}],\n"
+                              "  output: 'c.mp4'}); }\n"
+                              "catch (e) { f11 = e.message; }\n"
+                              "let f12 = '';\n"
+                              "try { buildJob({tracks: [{type: 'image', clips: [{src: 'a.jpg', durationMs: 100,\n"
+                              "  transform: {scale: [{t: 0, v: 1}, {t: 100, v: 0}]}}]}],\n"
+                              "  output: 'c.mp4'}); }\n"
+                              "catch (e) { f12 = e.message; }\n"
                               "export default [t.v2 === true, t.plugin, o.v2, o.tracks.length,\n"
                               "  o.tracks[0].clips[0].path, o.tracks[0].clips[0].startMs, o.tracks[0].clips[0].outMs,\n"
                               "  o.tracks[1].clips[0].transform.x, o.tracks[1].clips[0].transform.opacity,\n"
@@ -1715,14 +1749,21 @@ static void test_weizhi_video_package(void) {
                               "  f3.includes('linear|ease'), f4.includes('[0, 1]'),\n"
                               "  f5.includes('video|image|text|audio'), f6.includes('v1 vs v2'),\n"
                               "  f7.includes('durationMs must be a positive'),\n"
-                              "  ex.includes('unsupported: native')];\n",
+                              "  ex.includes('unsupported: native'),\n"
+                              "  cfOpts.tracks[0].clips[1].startMs, cfOpts.tracks[0].clips[0].kf.opacity[0].t,\n"
+                              "  cfOpts.tracks[0].clips[0].kf.opacity[1].v, cfOpts.tracks[0].clips[1].kf.opacity[1].v,\n"
+                              "  f8.includes('video tracks (P5e)'), f9.includes('must equal durationMs'),\n"
+                              "  f10.includes('cannot combine'),\n"
+                              "  f11.includes('too many keyframes per clip (max 32)'),\n"
+                              "  f12.includes('scale keyframes must be positive')];\n",
                               3000,
                               "run.js");
     EXPECT(result.ok == 1);
     EXPECT(result.output_text != NULL &&
            strcmp(result.output_text,
-                  "[true,\"transcode\",1,3,\"v.mp4\",0,3000,0.8,0.9,1,-0.8,2,\"ease\",1280,720,2,"
-                  "\"hi\",true,true,true,true,true,true,true,true,true]") == 0);
+"[true,\"transcode\",1,3,\"v.mp4\",0,3000,0.8,0.9,1,-0.8,2,\"ease\",1280,720,2,"
+                   "\"hi\",true,true,true,true,true,true,true,true,true,"
+                   "700,700,0,1,true,true,true,true,true]") == 0);
     weizhi_result_free(&result);
     weizhi_close(engine);
     free(pkg_home);

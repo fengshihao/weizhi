@@ -80,6 +80,22 @@ typedef struct WtTransform {
     double opacity;  /* [0, 1] */
 } WtTransform;
 
+/* Keyframe entries (P5c): compiler guarantees per-property ascending t. */
+#define WT_MAX_KFS 32
+#define WT_KF_X 0
+#define WT_KF_Y 1
+#define WT_KF_SCALE 2
+#define WT_KF_ROTATION 3
+#define WT_KF_OPACITY 4
+#define WT_KF_GAIN 5
+
+typedef struct WtKfEntry {
+    int prop;
+    int64_t t_ms;
+    double v;
+    int ease; /* 0 = linear, 1 = smoothstep */
+} WtKfEntry;
+
 typedef struct WtV2Clip {
     char path[WT_MAX_PATH];
     char text[256]; /* text track clips: compiled, execution lands in P5d */
@@ -90,7 +106,9 @@ typedef struct WtV2Clip {
     int has_out;
     int has_duration;
     WtTransform transform;
-    int has_kf;      /* any keyframes present (constant-only is P5b) */
+    WtKfEntry kfs[WT_MAX_KFS];
+    int nkfs;
+    int has_gain_kf; /* audio gain keyframes: guarded to P5d */
     int has_filters; /* per-clip effects present (later phase) */
 } WtV2Clip;
 
