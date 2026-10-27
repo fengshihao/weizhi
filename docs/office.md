@@ -24,4 +24,4 @@ Office 脚本依赖这些，并应保持稳定：
 
 引擎门禁只做最小冒烟：空模块加载 + zip 往返（`PackageSmokeTest`）。完整 OOXML 回归在 Agent1。
 
-引擎侧没有 Java `host.office`。xlsx / PDF 未实现。
+引擎侧没有 Java `host.office`。PDF 未实现。xlsx 在 Agent1：`weizhi:xlsx` / `weizhi:xlsx-build`（云端 registry，不进引擎 AAR）。
